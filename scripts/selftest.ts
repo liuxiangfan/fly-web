@@ -13,6 +13,24 @@ import {
   PureGyroEstimator,
 } from "../src/estimators";
 import { DEG, RAD, qAngleBetween, qFromEuler, qId, qIntegrate, qToEuler } from "../src/core/quat";
+import {
+  GIMBAL_DEMO_DURATION,
+  gimbalAxisAlign,
+  gimbalDemo,
+  gimbalDemoPhaseEnd,
+  gimbalInnerQuat,
+  gimbalLocked,
+  toDisplayQ,
+} from "../src/core/gimbal";
+import {
+  estimatorMask,
+  loadMode,
+  resolveScenario,
+  resolveSource,
+  saveMode,
+  type KvStore,
+  type UiMode,
+} from "../src/ui/mode";
 
 const H = 1 / 500;
 let failures = 0;
@@ -183,6 +201,177 @@ const dirty: ImuParams = { gyroBiasDps: 1, gyroNoiseDps: 0.2, accelNoise: 0.15, 
   const steps = Math.round(2 / H); // ωz = π rad/s → 2s 一圈
   for (let i = 0; i < steps; i++) q = qIntegrate(q, [0, 0, Math.PI], H);
   check("四元数积分回位", qAngleBetween(q, qId()) * DEG < 1, `一圈后偏差 ${(qAngleBetween(q, qId()) * DEG).toFixed(3)}°`);
+}
+
+// 7. 万向环不变量：三级环链条组合出的内环姿态 ≡ 主视图使用的 toDisplay(qFromEuler(φ,θ,ψ))
+//    这条守住「万向节锁演示」和「四轴姿态视图」在数学上完全一致，符号错了会立刻失败
+{
+  const rnd = mulberry32(20261011);
+  let maxDiff = 0;
+  for (let i = 0; i < 200; i++) {
+    const roll = (rnd() * 2 - 1) * Math.PI;
+    const pitch = (rnd() * 2 - 1) * (Math.PI / 2);
+    const yaw = (rnd() * 2 - 1) * Math.PI;
+    const a = gimbalInnerQuat({ roll, pitch, yaw });
+    const b = toDisplayQ(qFromEuler(roll, pitch, yaw));
+    // q 与 −q 表示同一旋转，先对齐符号
+    const dot = a.w * b.w + a.x * b.x + a.y * b.y + a.z * b.z;
+    const s = dot < 0 ? -1 : 1;
+    const diff = Math.max(
+      Math.abs(a.w - s * b.w),
+      Math.abs(a.x - s * b.x),
+      Math.abs(a.y - s * b.y),
+      Math.abs(a.z - s * b.z),
+    );
+    if (diff > maxDiff) maxDiff = diff;
+  }
+  check("万向环链条 ≡ 主视图姿态", maxDiff < 1e-9, `200 组随机角度，最大分量偏差 ${maxDiff.toExponential(2)}`);
+}
+
+// 8. 死锁判定：俯仰 ±90° 锁定，80° 不锁定
+{
+  const plus = gimbalLocked(Math.PI / 2);
+  const minus = gimbalLocked(-Math.PI / 2);
+  const near = gimbalLocked(80 * RAD);
+  check("死锁判定 ±90°", plus && minus && !near, `+90°=${plus}，−90°=${minus}，80°=${near}`);
+}
+
+// 9. 两轴重合度量化：|sin(俯仰)|
+{
+  const a90 = gimbalAxisAlign(Math.PI / 2);
+  const a0 = gimbalAxisAlign(0);
+  const a45 = gimbalAxisAlign(45 * RAD);
+  check(
+    "两轴重合度量化",
+    a90 > 0.9999 && a0 < 1e-12 && Math.abs(a45 - Math.SQRT1_2) < 1e-12,
+    `90°→${a90.toFixed(6)}，0°→${a0.toFixed(6)}，45°→${a45.toFixed(6)}（应等于 √2/2）`,
+  );
+}
+
+// 10. 万向节锁完整演示脚本：覆盖全部相位，且必须演到「只剩 2 个自由度」这一步
+{
+  const N = 1200;
+  const phasesSeen = new Set<string>();
+  let maxPitch = -Infinity;
+  let minPitch = Infinity;
+  let lockSamples = 0;
+  let compareRecord = 0;
+  let compareVerify = 0;
+  for (let i = 0; i <= N; i++) {
+    const d = gimbalDemo((i / N) * GIMBAL_DEMO_DURATION);
+    phasesSeen.add(d.phaseId);
+    maxPitch = Math.max(maxPitch, d.pitch);
+    minPitch = Math.min(minPitch, d.pitch);
+    if (gimbalLocked(d.pitch * RAD)) lockSamples++;
+    if (d.compare === "record") compareRecord++;
+    if (d.compare === "verify") compareVerify++;
+  }
+  const start = gimbalDemo(0);
+  const end = gimbalDemo(GIMBAL_DEMO_DURATION);
+  const zeroStart = Math.abs(start.roll) + Math.abs(start.pitch) + Math.abs(start.yaw) < 1e-9;
+  const zeroEnd = Math.abs(end.roll) + Math.abs(end.pitch) + Math.abs(end.yaw) < 1e-9;
+  check(
+    "演示脚本覆盖全相位并进入锁定",
+    zeroStart && zeroEnd && maxPitch >= 90 - 1e-9 && minPitch >= -1e-9 && lockSamples > 100 &&
+      compareRecord > 0 && compareVerify > 0,
+    `相位 ${[...phasesSeen].join("/")}；首尾归零 ${zeroStart}/${zeroEnd}；` +
+      `俯仰峰值 ${maxPitch.toFixed(1)}°；锁定样本 ${lockSamples}；记录/验证相位各 ${compareRecord}/${compareVerify} 个样本`,
+  );
+}
+
+// 10b. 演示的核心结论：俯仰 90° 时，【滚转 60°】与【偏航 −60°】得到完全相同的姿态
+//      这正是「只剩 2 个自由度」的直接证据（两个滑块控制同一个自由度）
+{
+  const P = 90 * RAD;
+  const viaRoll = gimbalInnerQuat({ roll: 60 * RAD, pitch: P, yaw: 0 });
+  const viaYaw = gimbalInnerQuat({ roll: 0, pitch: P, yaw: -60 * RAD });
+  const diff = qAngleBetween(viaRoll, viaYaw) * DEG;
+
+  // 对照组：俯仰 0° 时两者必须明显不同，否则说明这个演示没有区分度
+  const ctrlRoll = gimbalInnerQuat({ roll: 60 * RAD, pitch: 0, yaw: 0 });
+  const ctrlYaw = gimbalInnerQuat({ roll: 0, pitch: 0, yaw: -60 * RAD });
+  const ctrlDiff = qAngleBetween(ctrlRoll, ctrlYaw) * DEG;
+
+  check(
+    "锁定态：滚转与偏航产生同一姿态",
+    diff < 1e-9 && ctrlDiff > 30,
+    `俯仰 90° 时两条路径夹角 ${diff.toExponential(2)}°（须 ≈0）；` +
+      `俯仰 0° 对照组 ${ctrlDiff.toFixed(2)}°（须明显不同，证明演示有区分度）`,
+  );
+}
+
+// 10c. 演示脚本与画面一致性：脚本给出的角度喂给万向环链条，必须等于逐相位手动组合的结果
+{
+  const checks: Array<[string, number]> = [
+    ["remember", gimbalDemoPhaseEnd("remember")],
+    ["verify", gimbalDemoPhaseEnd("verify")],
+  ];
+  let maxDiff = 0;
+  for (const [, t] of checks) {
+    const d = gimbalDemo(t);
+    const fromScript = gimbalInnerQuat({ roll: d.roll * RAD, pitch: d.pitch * RAD, yaw: d.yaw * RAD });
+    const direct = gimbalInnerQuat({ roll: 60 * RAD, pitch: 90 * RAD, yaw: 0 }); // 关键帧均为该姿态
+    const dot =
+      fromScript.w * direct.w + fromScript.x * direct.x + fromScript.y * direct.y + fromScript.z * direct.z;
+    const s = dot < 0 ? -1 : 1;
+    const diff = Math.max(
+      Math.abs(fromScript.w - s * direct.w),
+      Math.abs(fromScript.x - s * direct.x),
+      Math.abs(fromScript.y - s * direct.y),
+      Math.abs(fromScript.z - s * direct.z),
+    );
+    maxDiff = Math.max(maxDiff, diff);
+  }
+  check(
+    "演示关键帧姿态一致",
+    maxDiff < 1e-9,
+    `「记录」与「验证」相位末尾的脚本姿态与目标姿态 (φ=60°,θ=90°,ψ=0) 最大偏差 ${maxDiff.toExponential(2)}`,
+  );
+}
+
+// 11. 精简模式策略：不允许的选项收敛，曲线掩码只留纯积分与 Mahony
+{
+  const ids = ["pure", "comp", "mahony", "madg"];
+  const basicMask = estimatorMask("basic", ids);
+  const fullMask = estimatorMask("full", ids);
+  const srcBasic = resolveSource("madg", "basic");
+  const srcFull = resolveSource("madg", "full");
+  const scBasic = resolveScenario("violent", "basic");
+  const scFull = resolveScenario("violent", "full");
+  const keep = resolveSource("pure", "basic");
+  check(
+    "精简模式收敛选项与掩码",
+    JSON.stringify(basicMask) === JSON.stringify([true, false, true, false]) &&
+      fullMask.every(Boolean) &&
+      srcBasic === "mahony" &&
+      srcFull === "madg" &&
+      scBasic === "hover" &&
+      scFull === "violent" &&
+      keep === "pure",
+    `掩码 basic=${JSON.stringify(basicMask)}；显示源 madg→${srcBasic}(basic)/${srcFull}(full)；机动 violent→${scBasic}(basic)/${scFull}(full)`,
+  );
+}
+
+// 12. 模式持久化：缺失/非法值回落 basic，写入 full 后读回 full
+{
+  const mem = new Map<string, string>();
+  const store: KvStore = {
+    getItem: (k) => mem.get(k) ?? null,
+    setItem: (k, v) => void mem.set(k, v),
+  };
+  const greedy: KvStore = { getItem: () => "垃圾值", setItem: () => {} };
+  const initial = loadMode(store);
+  saveMode("full", store);
+  const afterWrite = loadMode(store);
+  saveMode("basic", store);
+  const afterBasic = loadMode(store);
+  const garbage = loadMode(greedy);
+  const modes: UiMode[] = [initial, afterWrite, afterBasic, garbage];
+  check(
+    "模式持久化与非法值回落",
+    initial === "basic" && afterWrite === "full" && afterBasic === "basic" && garbage === "basic",
+    `空→${modes[0]}，写 full→${modes[1]}，写 basic→${modes[2]}，非法值→${modes[3]}`,
+  );
 }
 
 console.log(failures === 0 ? "\n全部通过 ✅" : `\n${failures} 项失败 ❌`);

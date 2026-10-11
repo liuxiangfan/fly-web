@@ -11,7 +11,21 @@ import {
   PureGyroEstimator,
   type Estimator,
 } from "./estimators";
-import { DEG, qAngleBetween, qToEuler } from "./core/quat";
+import { DEG, qAngleBetween, qToEuler, RAD } from "./core/quat";
+import { gimbalDemo, gimbalInnerQuat } from "./core/gimbal";
+import {
+  applyModeDom,
+  applyViewDom,
+  estimatorMask,
+  loadMode,
+  narrateAttitude,
+  narrateGimbal,
+  resolveScenario,
+  resolveSource,
+  saveMode,
+  type UiMode,
+  type UiView,
+} from "./ui/mode";
 
 const H = 1 / 500; // 仿真/解算步长
 const LOG_DT = 0.04; // 曲线记录间隔
@@ -59,22 +73,21 @@ const state = {
   attVisible: [true, true, true, true, true],
   errVisible: [true, true, true, true],
   lastImu: null as ImuSample | null,
+  /** 界面模式：精简/完整，持久化在 localStorage（默认精简） */
+  mode: loadMode() as UiMode,
+  /** 视图：四轴姿态 / 万向节锁（不持久化，每次从四轴姿态开始） */
+  view: "attitude" as UiView,
 };
 
 // ---------- 场景 ----------
 const sceneHandles = createScene($("viewport"));
 
 // ---------- 图表 ----------
-const seriesDef = [
-  { label: "真实", color: "#e6edf3" },
-  ...ests.map((e) => ({ label: e.label, color: e.color })),
-];
-const attChart = new RollingChart($("att-canvas"), seriesDef, { windowSec: CHART_WINDOW });
-const errChart = new RollingChart(
-  $("err-canvas"),
-  ests.map((e) => ({ label: e.label, color: e.color })),
-  { windowSec: CHART_WINDOW },
-);
+// RollingChart 的曲线系列在构造时固定，精简模式不重建结构，只用可见性掩码隐藏
+const truthSeries = { label: "真实", color: "#e6edf3" };
+const estSeries = ests.map((e) => ({ label: e.label, color: e.color }));
+const attChart = new RollingChart($("att-canvas"), [truthSeries, ...estSeries], { windowSec: CHART_WINDOW });
+const errChart = new RollingChart($("err-canvas"), estSeries, { windowSec: CHART_WINDOW });
 
 // 原始记录（切换通道时不丢历史）
 interface LogRow {
@@ -131,17 +144,31 @@ function rebuildAttChart(): void {
 }
 
 // ---------- 图例 ----------
+interface LegendDef {
+  /** 估计器 id，用于精简模式下由 CSS 隐藏对应图例芯片 */
+  id?: string;
+  label: string;
+  color: string;
+}
+
+interface LegendHandles {
+  vals: Array<HTMLElement | null>;
+  chips: HTMLElement[];
+}
+
 function buildLegend(
   container: HTMLElement,
-  defs: Array<{ label: string; color: string }>,
+  defs: LegendDef[],
   visible: boolean[],
   onToggle: () => void,
-): Array<HTMLElement | null> {
+): LegendHandles {
   const vals: Array<HTMLElement | null> = [];
+  const chips: HTMLElement[] = [];
   container.innerHTML = "";
   defs.forEach((d, i) => {
     const chip = document.createElement("span");
     chip.className = "legend-chip";
+    if (d.id) chip.dataset.est = d.id;
     const dot = document.createElement("span");
     dot.className = "dot";
     dot.style.background = d.color;
@@ -153,37 +180,148 @@ function buildLegend(
     chip.append(dot, name, val);
     chip.addEventListener("click", () => {
       visible[i] = !visible[i];
-      chip.classList.toggle("off", !visible[i]);
       onToggle();
     });
     container.appendChild(chip);
     vals.push(val);
+    chips.push(chip);
   });
-  return vals;
+  return { vals, chips };
 }
-const attValEls = buildLegend($("att-legend"), seriesDef, state.attVisible, () =>
-  attChart.setVisible(state.attVisible),
+
+const EST_IDS = ests.map((e) => e.id);
+
+const attLegend = buildLegend(
+  $("att-legend"),
+  [truthSeries, ...ests.map((e) => ({ id: e.id, label: e.label, color: e.color }))],
+  state.attVisible,
+  () => applyVisibility(),
 );
-const errValEls = buildLegend($("err-legend"), seriesDef.slice(1), state.errVisible, () =>
-  errChart.setVisible(state.errVisible),
+const errLegend = buildLegend(
+  $("err-legend"),
+  ests.map((e) => ({ id: e.id, label: e.label, color: e.color })),
+  state.errVisible,
+  () => applyVisibility(),
 );
+
+/** 用户勾选 × 模式掩码 → 图表实际可见性；同时同步图例芯片的置灰状态 */
+function applyVisibility(): void {
+  const modeMask = estimatorMask(state.mode, EST_IDS);
+  const attMask = [state.attVisible[0], ...EST_IDS.map((_, i) => state.attVisible[i + 1] && modeMask[i])];
+  const errMask = EST_IDS.map((_, i) => state.errVisible[i] && modeMask[i]);
+  attChart.setVisible(attMask);
+  errChart.setVisible(errMask);
+  attLegend.chips.forEach((c, i) => c.classList.toggle("off", !attMask[i]));
+  errLegend.chips.forEach((c, i) => c.classList.toggle("off", !errMask[i]));
+}
 
 // ---------- 控件 ----------
-function bindSlider(id: string, apply: (v: number) => void, fmt: (v: number) => string): void {
-  const input = $<HTMLInputElement>(id);
-  const out = $<HTMLOutputElement>(`${id}-out`);
-  const sync = () => {
-    const v = parseFloat(input.value);
-    apply(v);
-    out.textContent = fmt(v);
-  };
-  input.addEventListener("input", sync);
-  sync();
+/**
+ * 绑定「滑块 + 数值输入框 + 步距输入框」三件套。
+ *
+ * 数值框与步距框都直接可编辑：
+ *  - 数值框回车/失焦即生效（自动夹到 min..max 并按步距对齐）
+ *  - 步距框回车/失焦即改滑块的 step（如 1 → 0.1 后可用方向键微调）
+ * 步距允许范围取 slider 自身 step 的 1/100 ~ (max-min)/2，避免步距为 0 或过大。
+ */
+interface SliderBinding {
+  /** 外部程序化改值（演示脚本用），会同步刷新滑块与数值框 */
+  set(v: number): void;
+  get(): number;
 }
 
-bindSlider("man-roll", (v) => (world.manual.rollDeg = v), (v) => `${v.toFixed(0)}°`);
-bindSlider("man-pitch", (v) => (world.manual.pitchDeg = v), (v) => `${v.toFixed(0)}°`);
-bindSlider("man-yaw", (v) => (world.manual.yawDeg = v), (v) => `${v.toFixed(0)}°`);
+function bindSlider(
+  id: string,
+  apply: (v: number) => void,
+  fmt: (v: number) => string,
+): SliderBinding {
+  const input = $<HTMLInputElement>(id);
+  const num = document.querySelector<HTMLInputElement>(`[data-num="${id}"]`);
+  const stepBox = document.querySelector<HTMLInputElement>(`[data-step="${id}"]`);
+  // 数值输入框同时充当读数显示；若某个滑块没有数值框，退回旧的 <output>
+  const out = document.querySelector<HTMLOutputElement>(`[data-out="${id}"]`) ?? document.getElementById(`${id}-out`);
+
+  const min = parseFloat(input.min);
+  const max = parseFloat(input.max);
+  const baseStep = parseFloat(input.step) || 0.01;
+  const stepMin = baseStep / 100;
+  const stepMax = (max - min) / 2;
+
+  /** 夹到范围并按当前步距对齐，消除浮点毛刺 */
+  const quantize = (raw: number): number => {
+    if (!Number.isFinite(raw)) return parseFloat(input.value);
+    const step = parseFloat(input.step) || baseStep;
+    const clamped = Math.min(max, Math.max(min, raw));
+    const snapped = Math.round((clamped - min) / step) * step + min;
+    return Math.min(max, Math.max(min, parseFloat(snapped.toFixed(6))));
+  };
+
+  /** 把值同步到滑块、数值框与（可选的）output */
+  const render = (v: number): void => {
+    input.value = String(v);
+    if (num) num.value = String(v);
+    if (out) out.textContent = fmt(v);
+  };
+
+  const commit = (raw: number): void => {
+    const v = quantize(raw);
+    apply(v);
+    render(v);
+  };
+
+  input.addEventListener("input", () => commit(parseFloat(input.value)));
+
+  if (num) {
+    const commitNumber = () => commit(parseFloat(num.value));
+    num.addEventListener("change", commitNumber);
+    num.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        commitNumber();
+        num.blur();
+        return;
+      }
+      // 数值只靠直接键入：屏蔽上下方向键的加减行为（否则会按 step 改值）
+      if (e.key === "ArrowUp" || e.key === "ArrowDown") e.preventDefault();
+    });
+  }
+
+  if (stepBox) {
+    stepBox.value = String(baseStep);
+    const commitStep = () => {
+      const raw = parseFloat(stepBox.value);
+      const step = Number.isFinite(raw) ? Math.min(stepMax, Math.max(stepMin, raw)) : baseStep;
+      input.step = String(step);
+      stepBox.value = String(step);
+      // 步距变了之后，把当前值对齐到新网格上
+      commit(parseFloat(input.value));
+    };
+    stepBox.addEventListener("change", commitStep);
+    stepBox.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        commitStep();
+        stepBox.blur();
+        return;
+      }
+      if (e.key === "ArrowUp" || e.key === "ArrowDown") e.preventDefault();
+    });
+  }
+
+  commit(parseFloat(input.value));
+
+  return {
+    set: (v: number) => commit(v),
+    get: () => parseFloat(input.value),
+  };
+}
+
+const manRoll = bindSlider("man-roll", (v) => (world.manual.rollDeg = v), (v) => `${v.toFixed(0)}°`);
+const manPitch = bindSlider("man-pitch", (v) => (world.manual.pitchDeg = v), (v) => `${v.toFixed(0)}°`);
+const manYaw = bindSlider("man-yaw", (v) => (world.manual.yawDeg = v), (v) => `${v.toFixed(0)}°`);
+void manRoll;
+void manPitch;
+void manYaw;
 bindSlider("imu-gyro-bias", (v) => (imuParams.gyroBiasDps = v), (v) => `${v.toFixed(1)}°/s`);
 bindSlider("imu-gyro-noise", (v) => (imuParams.gyroNoiseDps = v), (v) => `${v.toFixed(2)}°/s`);
 bindSlider("imu-accel-noise", (v) => (imuParams.accelNoise = v), (v) => `${v.toFixed(2)}m/s²`);
@@ -194,31 +332,218 @@ bindSlider("mahony-ki", (v) => (mahony.ki = v), (v) => v.toFixed(2));
 bindSlider("madg-beta", (v) => (madg.beta = v), (v) => v.toFixed(2));
 bindSlider("comp-alpha", (v) => (comp.alpha = v), (v) => v.toFixed(2));
 
-const scenarioSelect = $<HTMLSelectElement>("scenario-select");
-scenarioSelect.addEventListener("change", () => {
-  world.setScenario(scenarioSelect.value);
-  $("manual-group").classList.toggle("hidden", scenarioSelect.value !== "manual");
-  resetSim();
+// ---------- 万向节锁演示（独立于主仿真） ----------
+const gimState = { yawDeg: 0, pitchDeg: 0, rollDeg: 0 };
+
+function applyGimbalAngles(): void {
+  sceneHandles.gimbal.setAngles(gimState.rollDeg * RAD, gimState.pitchDeg * RAD, gimState.yawDeg * RAD);
+}
+
+/** 角度文本（消除 "-0°"） */
+const fmtDeg = (v: number, d = 0): string => {
+  const x = Math.abs(v) < 10 ** -d / 2 ? 0 : v;
+  return `${x.toFixed(d)}°`;
+};
+
+function setGimbalAngles(yawDeg: number, pitchDeg: number, rollDeg: number): void {
+  gimState.yawDeg = yawDeg;
+  gimState.pitchDeg = pitchDeg;
+  gimState.rollDeg = rollDeg;
+  gimYaw.set(yawDeg);
+  gimPitch.set(pitchDeg);
+  gimRoll.set(rollDeg);
+  applyGimbalAngles();
+}
+
+const gimYaw = bindSlider("gim-yaw", (v) => { gimState.yawDeg = v; applyGimbalAngles(); }, (v) => fmtDeg(v));
+const gimPitch = bindSlider("gim-pitch", (v) => { gimState.pitchDeg = v; applyGimbalAngles(); }, (v) => fmtDeg(v));
+const gimRoll = bindSlider("gim-roll", (v) => { gimState.rollDeg = v; applyGimbalAngles(); }, (v) => fmtDeg(v));
+
+/** 手动操作即接管演示（滑块输入、数值输入、步距调整都算） */
+for (const id of ["gim-yaw", "gim-pitch", "gim-roll"]) {
+  const el = $<HTMLInputElement>(id);
+  el.addEventListener("input", stopDemo);
+  el.addEventListener("change", stopDemo);
+}
+
+// ---------- 万向节锁完整演示 ----------
+const demoState = {
+  t: -1, // <0 表示未在演示
+  /** 演示到「记住此刻姿态」时记录下来的参照姿态四元数 */
+  recorded: null as { w: number; x: number; y: number; z: number } | null,
+  /** 「验证」相位比对出的夹角（度） */
+  diffDeg: null as number | null,
+};
+
+function stopDemo(): void {
+  if (demoState.t < 0) return;
+  demoState.t = -1;
+  $("btn-gim-demo").textContent = "演示：只剩 2 个自由度";
+  $("gimbal-compare").textContent = "";
+  $("gimbal-compare").classList.remove("warn", "ok");
+}
+
+$("btn-gim-demo").addEventListener("click", () => {
+  if (demoState.t >= 0) {
+    stopDemo();
+    return;
+  }
+  demoState.t = 0;
+  demoState.recorded = null;
+  demoState.diffDeg = null;
+  $("btn-gim-demo").textContent = "停止演示";
 });
 
+$("btn-gim-reset").addEventListener("click", () => {
+  stopDemo();
+  setGimbalAngles(0, 0, 0);
+  $("gimbal-compare").textContent = "";
+  $("gimbal-compare").classList.remove("warn", "ok");
+});
+
+/** 万向环读数、死锁警告、比对结果与高亮（每 0.1s 调一次） */
+function updateGimbalUi(): void {
+  if (state.view !== "gimbal") return;
+  const locked = sceneHandles.gimbal.isLocked();
+  sceneHandles.gimbal.setLockVisual(locked, sceneHandles.gimbal.axisAlign());
+  $("gimbal-readout").innerHTML =
+    `φ ${fmtSigned(gimState.rollDeg)}° &nbsp; θ ${fmtSigned(gimState.pitchDeg)}° &nbsp; ψ ${fmtSigned(gimState.yawDeg)}°`;
+
+  const st = $("gimbal-status");
+  // 演示进行中，解说栏交给演示脚本，让讲解跟着画面走
+  if (demoState.t >= 0) {
+    const d = gimbalDemo(demoState.t);
+    st.textContent = d.message;
+    st.classList.toggle("warn", locked);
+    const bar = $("gimbal-progress");
+    bar.style.width = `${(d.progress * 100).toFixed(1)}%`;
+  } else {
+    st.textContent = narrateGimbal(gimState.pitchDeg, locked);
+    st.classList.toggle("warn", locked);
+    $("gimbal-progress").style.width = "0%";
+  }
+
+  // 比对结果：演示脚本要求记录时存下当前姿态，要求验证时算出与参照姿态的夹角
+  const cmp = $("gimbal-compare");
+  if (demoState.diffDeg !== null) {
+    const same = demoState.diffDeg < 0.05;
+    cmp.textContent = same
+      ? `✔ 两次操作得到的姿态完全相同（夹角 ${demoState.diffDeg.toFixed(3)}°）——滚转与偏航其实是同一个自由度`
+      : `姿态夹角 ${demoState.diffDeg.toFixed(2)}°`;
+    cmp.classList.toggle("ok", same);
+    cmp.classList.toggle("warn", !same);
+  }
+}
+
+/** 演示推进（独立于仿真暂停状态） */
+function stepDemo(dt: number): void {
+  if (demoState.t < 0) return;
+  demoState.t += dt;
+  const d = gimbalDemo(demoState.t);
+
+  // 画面与滑块跟随脚本
+  setGimbalAngles(d.yaw, d.pitch, d.roll);
+
+  // 记录参照姿态
+  if (d.compare === "record" && demoState.recorded === null) {
+    demoState.recorded = { ...gimbalInnerQuat({ roll: d.roll * RAD, pitch: d.pitch * RAD, yaw: d.yaw * RAD }) };
+    demoState.diffDeg = null;
+  }
+  // 与参照姿态比对
+  if (d.compare === "verify" && demoState.recorded) {
+    const now = gimbalInnerQuat({ roll: d.roll * RAD, pitch: d.pitch * RAD, yaw: d.yaw * RAD });
+    demoState.diffDeg = qAngleBetween(now, demoState.recorded) * DEG;
+  }
+
+  if (d.finished) {
+    // 保留最终画面与结论，只把按钮恢复，允许重播
+    demoState.t = -1;
+    $("btn-gim-demo").textContent = "演示：只剩 2 个自由度";
+    $("gimbal-progress").style.width = "0%";
+  }
+}
+
+// ---------- 模式与视图 ----------
+const scenarioSelect = $<HTMLSelectElement>("scenario-select");
 const sourceSelect = $<HTMLSelectElement>("source-select");
+
 function sourceLabel(): string {
   return state.source === "truth" ? "真实姿态" : ests.find((e) => e.id === state.source)!.label;
 }
 function sourceColor(): string {
   return state.source === "truth" ? "#e6edf3" : ests.find((e) => e.id === state.source)!.color;
 }
-sourceSelect.addEventListener("change", () => {
-  state.source = sourceSelect.value as typeof state.source;
+function updateSourceChip(): void {
   const chip = $("readout-source");
   chip.textContent = `模型显示：${sourceLabel()}`;
   chip.style.color = sourceColor();
+}
+
+function syncSeg(containerId: string, dataKey: string, active: string): void {
+  $(containerId)
+    .querySelectorAll<HTMLButtonElement>(".seg-btn")
+    .forEach((b) => b.classList.toggle("active", b.dataset[dataKey] === active));
+}
+
+/** 应用精简/完整模式：写 body 属性、收敛不允许的选择、刷新曲线可见性 */
+function applyMode(mode: UiMode): void {
+  state.mode = mode;
+  saveMode(mode);
+  applyModeDom(mode);
+
+  const src = resolveSource(state.source, mode);
+  if (src !== state.source) {
+    state.source = src as typeof state.source;
+    sourceSelect.value = src;
+    updateSourceChip();
+  }
+
+  const sc = resolveScenario(scenarioSelect.value, mode);
+  if (sc !== scenarioSelect.value) {
+    scenarioSelect.value = sc;
+    world.setScenario(sc);
+    $("manual-group").classList.toggle("hidden", sc !== "manual");
+    resetSim();
+  }
+
+  applyVisibility();
+  syncSeg("mode-seg", "mode", mode);
+}
+
+/** 应用视图：显隐模型与面板、重置相机取景 */
+function applyView(view: UiView): void {
+  state.view = view;
+  applyViewDom(view);
+  sceneHandles.setView(view, ($("ghost-toggle") as HTMLInputElement).checked);
+  syncSeg("view-seg", "view", view);
+  if (view === "gimbal") updateGimbalUi();
+}
+
+$("mode-seg")
+  .querySelectorAll<HTMLButtonElement>(".seg-btn")
+  .forEach((btn) => btn.addEventListener("click", () => applyMode(btn.dataset.mode as UiMode)));
+$("view-seg")
+  .querySelectorAll<HTMLButtonElement>(".seg-btn")
+  .forEach((btn) => btn.addEventListener("click", () => applyView(btn.dataset.view as UiView)));
+
+scenarioSelect.addEventListener("change", () => {
+  const id = resolveScenario(scenarioSelect.value, state.mode);
+  scenarioSelect.value = id;
+  world.setScenario(id);
+  $("manual-group").classList.toggle("hidden", id !== "manual");
+  resetSim();
 });
-$("readout-source").textContent = `模型显示：${sourceLabel()}`;
-$("readout-source").style.color = sourceColor();
+
+sourceSelect.addEventListener("change", () => {
+  const v = resolveSource(sourceSelect.value, state.mode);
+  sourceSelect.value = v;
+  state.source = v as typeof state.source;
+  updateSourceChip();
+});
 
 $("ghost-toggle").addEventListener("change", () => {
-  sceneHandles.ghost.group.visible = ($("ghost-toggle") as HTMLInputElement).checked;
+  // 只同步显隐，不重置相机（否则用户拖好的观察角度会被打断）
+  sceneHandles.syncVisibility(state.view, ($("ghost-toggle") as HTMLInputElement).checked);
 });
 
 $("att-tabs")
@@ -251,7 +576,10 @@ function resetSim(): void {
 }
 
 // ---------- 读数 ----------
-const fmtSigned = (v: number, d = 1): string => (v >= 0 ? "+" : "") + v.toFixed(d);
+const fmtSigned = (v: number, d = 1): string => {
+  const x = Math.abs(v) < 10 ** -d / 2 ? 0 : v; // 消除 "-0.0" 这类显示
+  return (x >= 0 ? "+" : "") + x.toFixed(d);
+};
 const fmtVec = (v: [number, number, number]): string =>
   `[${v.map((a) => fmtSigned(a, 1)).join(", ")}]`;
 
@@ -273,13 +601,20 @@ function updateReadouts(): void {
 
 function updateLegendValues(): void {
   const att = attChart.latest();
-  attValEls.forEach((el, i) => {
+  attLegend.vals.forEach((el, i) => {
     if (el) el.textContent = Number.isFinite(att[i]) ? `${att[i].toFixed(1)}°` : "--";
   });
   const err = errChart.latest();
-  errValEls.forEach((el, i) => {
+  errLegend.vals.forEach((el, i) => {
     if (el) el.textContent = Number.isFinite(err[i]) ? `${err[i].toFixed(2)}°` : "--";
   });
+}
+
+/** 精简模式解说栏：把数字换成一句中文（仅在四轴姿态视图显示） */
+function updateNarrator(): void {
+  if (state.mode !== "basic" || state.view !== "attitude") return;
+  const err = errChart.latest(); // [pure, comp, mahony, madg]
+  $("narrator").textContent = narrateAttitude(err[0], err[2]);
 }
 
 // ---------- 主循环 ----------
@@ -326,6 +661,9 @@ function frame(): void {
     fpsAcc = 0;
   }
 
+  // 万向节锁演示独立于仿真，暂停时也能演示
+  stepDemo(dt);
+
   if (state.playing) {
     simAcc += dt;
     if (simAcc > 0.25) simAcc = 0.25; // 标签页隐藏后恢复时，最多补 0.25s，避免疯狂快进
@@ -333,7 +671,9 @@ function frame(): void {
       stepSim();
       simAcc -= H;
     }
-    quad.props.forEach((p, i) => (p.rotation.y += (i % 2 ? 1 : -1) * 30 * dt));
+    for (const model of [quad, sceneHandles.gimbal.quad]) {
+      model.props.forEach((p, i) => (p.rotation.y += (i % 2 ? 1 : -1) * 30 * dt));
+    }
   }
 
   const q = state.source === "truth" ? world.q : ests.find((e) => e.id === state.source)!.q;
@@ -348,7 +688,15 @@ function frame(): void {
     uiAcc = 0;
     updateReadouts();
     updateLegendValues();
+    updateGimbalUi();
+    updateNarrator();
     attChart.render();
     errChart.render();
   }
 }
+
+// ---------- 初始化 ----------
+updateSourceChip();
+setGimbalAngles(0, 0, 0);
+applyView("attitude"); // 视图不持久化，始终从四轴姿态视图开始
+applyMode(state.mode); // 模式读取自 localStorage（默认精简）

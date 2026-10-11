@@ -1,8 +1,14 @@
 import * as THREE from "three";
+import { makeTextSprite } from "./labels";
 
 export interface QuadModel {
   group: THREE.Group;
   props: THREE.Group[]; // 螺旋桨组，用于旋转动画
+}
+
+export interface QuadOptions {
+  /** 是否添加机体轴箭头与 x/y/z 字母标签，默认 true（万向环内嵌的小四轴用 false） */
+  axes?: boolean;
 }
 
 function armDirs(): Array<[number, number]> {
@@ -18,7 +24,8 @@ function armDirs(): Array<[number, number]> {
  * 程序化四轴模型。显示坐标系：机头 +X，机体右 +Z，上 +Y。
  * ghost = true 时用线框材质做「真实姿态幻影」。
  */
-export function buildQuad(ghost: boolean): QuadModel {
+export function buildQuad(ghost: boolean, opts: QuadOptions = {}): QuadModel {
+  const withAxes = opts.axes !== false;
   const group = new THREE.Group();
   const props: THREE.Group[] = [];
 
@@ -92,10 +99,20 @@ export function buildQuad(ghost: boolean): QuadModel {
   }
 
   // 机体轴指示（仅实体模型）：前 红、右 绿、下 蓝
-  if (!ghost) {
+  if (!ghost && withAxes) {
     group.add(new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 0, 0), 0.52, 0xff5f56, 0.08, 0.05));
     group.add(new THREE.ArrowHelper(new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 0, 0), 0.52, 0x7ee787, 0.08, 0.05));
     group.add(new THREE.ArrowHelper(new THREE.Vector3(0, -1, 0), new THREE.Vector3(0, 0, 0), 0.52, 0x58a6ff, 0.08, 0.05));
+
+    // 轴字母标签：作为 group 子节点，随机体一起转动（NED：x 前、y 右、z 下）
+    const axisLabel = (text: string, color: string, pos: [number, number, number]) => {
+      const label = makeTextSprite(text, color, { size: 0.12, bold: false });
+      label.position.set(pos[0], pos[1], pos[2]);
+      group.add(label);
+    };
+    axisLabel("x", "#ff8a80", [0.66, 0.04, 0]);
+    axisLabel("y", "#8fe39a", [0, 0.04, 0.66]);
+    axisLabel("z", "#7cbcff", [0, -0.66, 0]);
   }
 
   return { group, props };

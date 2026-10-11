@@ -1,6 +1,11 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { buildQuad, type QuadModel } from "./quad";
+import { buildGimbal, type GimbalRig } from "./gimbal";
+import { makeTextSprite } from "./labels";
+import { toDisplayQ } from "../core/gimbal";
+import type { Quat } from "../core/quat";
+import type { UiView } from "../ui/mode";
 
 export interface SceneHandles {
   renderer: THREE.WebGLRenderer;
@@ -9,25 +14,20 @@ export interface SceneHandles {
   controls: OrbitControls;
   quad: QuadModel;
   ghost: QuadModel;
-  /** NED 姿态四元数 → Three.js 显示四元数（基变换 S·q·S⁻¹） */
-  toDisplay: (qNed: { w: number; x: number; y: number; z: number }) => THREE.Quaternion;
+  gimbal: GimbalRig;
+  /** NED 姿态四元数 → Three.js 显示四元数（S·q·S⁻¹），与万向环演示同源 */
+  toDisplay: (qNed: Quat) => THREE.Quaternion;
+  /** 切换视图：显隐对应模型并重置相机取景。ghostEnabled 为幻影复选框当前状态 */
+  setView: (view: UiView, ghostEnabled: boolean) => void;
+  /** 只同步模型显隐，不动相机（用于幻影开关等不该打断观察角度的场景） */
+  syncVisibility: (view: UiView, ghostEnabled: boolean) => void;
 }
 
-function makeTextSprite(text: string, color: string): THREE.Sprite {
-  const c = document.createElement("canvas");
-  c.width = c.height = 128;
-  const g = c.getContext("2d")!;
-  g.font = "bold 76px 'PingFang SC', 'Microsoft YaHei', sans-serif";
-  g.textAlign = "center";
-  g.textBaseline = "middle";
-  g.fillStyle = color;
-  g.fillText(text, 64, 70);
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
-  s.scale.set(0.42, 0.42, 1);
-  return s;
-}
+/** 两个视图各自的取景 */
+const VIEW_FRAMING: Record<UiView, { target: [number, number, number]; pos: [number, number, number] }> = {
+  attitude: { target: [0, 0.9, 0], pos: [1.9, 1.35, 2.4] },
+  gimbal: { target: [0, 1.15, 0], pos: [2.3, 1.75, 2.5] },
+};
 
 export function createScene(container: HTMLElement): SceneHandles {
   const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -93,6 +93,12 @@ export function createScene(container: HTMLElement): SceneHandles {
   ghost.group.position.y = 1.0;
   scene.add(ghost.group);
 
+  // 万向节锁演示装置（默认隐藏，由 setView 控制）
+  const gimbal = buildGimbal();
+  gimbal.group.position.y = 1.15;
+  gimbal.group.visible = false;
+  scene.add(gimbal.group);
+
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.target.set(0, 0.9, 0);
   controls.enableDamping = true;
@@ -101,12 +107,27 @@ export function createScene(container: HTMLElement): SceneHandles {
   controls.maxDistance = 10;
   controls.maxPolarAngle = 1.65;
 
-  // NED(北东下) → Three(X=北, Y=上, Z=东)：R_t = S·R_n·Sᵀ，S = 绕 X 轴 +90°
-  const S = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2);
-  const SInv = S.clone().invert();
-  const tmp = new THREE.Quaternion();
-  const toDisplay = (qNed: { w: number; x: number; y: number; z: number }): THREE.Quaternion =>
-    tmp.copy(S).multiply(new THREE.Quaternion(qNed.x, qNed.y, qNed.z, qNed.w)).multiply(SInv);
+  // 基变换统一由 core/gimbal 提供，保证主视图与万向环演示严格同源
+  const tmpOut = new THREE.Quaternion();
+  const toDisplay = (qNed: Quat): THREE.Quaternion => {
+    const r = toDisplayQ(qNed);
+    return tmpOut.set(r.x, r.y, r.z, r.w);
+  };
+
+  const syncVisibility = (view: UiView, ghostEnabled: boolean): void => {
+    const isGimbal = view === "gimbal";
+    quad.group.visible = !isGimbal;
+    ghost.group.visible = !isGimbal && ghostEnabled;
+    gimbal.group.visible = isGimbal;
+  };
+
+  const setView = (view: UiView, ghostEnabled: boolean): void => {
+    syncVisibility(view, ghostEnabled);
+    const f = VIEW_FRAMING[view];
+    controls.target.set(f.target[0], f.target[1], f.target[2]);
+    camera.position.set(f.pos[0], f.pos[1], f.pos[2]);
+    controls.update();
+  };
 
   const resize = () => {
     const w = container.clientWidth;
@@ -119,5 +140,5 @@ export function createScene(container: HTMLElement): SceneHandles {
   resize();
   new ResizeObserver(resize).observe(container);
 
-  return { renderer, scene, camera, controls, quad, ghost, toDisplay };
+  return { renderer, scene, camera, controls, quad, ghost, gimbal, toDisplay, setView, syncVisibility };
 }

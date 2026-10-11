@@ -264,6 +264,171 @@ details b { color: var(--text); }
   background: var(--bg-panel);
 }
 
+/* ---------- segmented control ---------- */
+.seg { display: flex; gap: 4px; }
+.seg-btn {
+  padding: 4px 12px;
+  font-size: 12.5px;
+  font-family: inherit;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.seg-btn:hover { color: var(--text); }
+.seg-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #08131f;
+  font-weight: 600;
+}
+
+/* ---------- view switch（视口右上角） ---------- */
+#view-seg-wrap {
+  top: 12px;
+  right: 12px;
+  pointer-events: auto;
+}
+#view-seg-wrap .seg {
+  background: rgba(13, 17, 23, 0.72);
+  border-radius: 8px;
+  padding: 3px;
+}
+
+/* ---------- 解说栏与轴约定 ---------- */
+#narrator {
+  max-width: 470px;
+  line-height: 1.6;
+  border-left: 3px solid var(--accent);
+}
+#readout-axes { border-left: 3px solid #3a4a5f; line-height: 1.5; }
+
+/* ---------- 万向节锁 ---------- */
+#gimbal-overlay {
+  top: 12px;
+  left: 12px;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 430px;
+}
+#gimbal-status { line-height: 1.6; }
+#gimbal-status.warn {
+  color: #ffb8b3;
+  border-color: var(--c-pure);
+  background: rgba(248, 81, 73, 0.16);
+}
+.btn-row { gap: 8px; }
+.btn-row .btn { flex: 1; padding: 6px 10px; }
+
+/* 三件套：标签 + 滑块 + 数值输入 + 步距输入（无微调箭头，纯键入） */
+.slider-row.with-inputs {
+  grid-template-columns: 76px minmax(52px, 1fr) 62px 48px;
+  gap: 5px;
+}
+.slider-row .num-input,
+.slider-row .step-input {
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 11.5px;
+  text-align: right;
+  padding: 3px 5px;
+  background: #0f1520;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  min-width: 0;
+  /* 数值只靠直接键入（配合滑杆），去掉上下微调箭头 */
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+.slider-row .num-input:focus,
+.slider-row .step-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.slider-row .step-input {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+.slider-row .step-input:hover { color: var(--text); }
+.slider-row .num-input::-webkit-outer-spin-button,
+.slider-row .num-input::-webkit-inner-spin-button,
+.slider-row .step-input::-webkit-outer-spin-button,
+.slider-row .step-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  appearance: none;
+  margin: 0;
+}
+
+/* 演示进度条 */
+.progress-track {
+  height: 3px;
+  border-radius: 2px;
+  background: #1f2a38;
+  margin: 8px 0 6px;
+  overflow: hidden;
+}
+.progress-bar {
+  height: 100%;
+  width: 0%;
+  background: var(--accent);
+  transition: width 0.1s linear;
+}
+
+/* 演示比对结论 */
+#gimbal-compare {
+  display: none;
+  line-height: 1.6;
+  margin-bottom: 4px;
+}
+#gimbal-compare.ok,
+#gimbal-compare.warn { display: block; }
+#gimbal-compare.ok {
+  color: #9ae6a8;
+  border-color: var(--c-madg);
+  background: rgba(126, 231, 135, 0.12);
+}
+#gimbal-compare.warn {
+  color: #ffb8b3;
+  border-color: var(--c-pure);
+  background: rgba(248, 81, 73, 0.16);
+}
+
+/* 滑块行在窄屏下收紧，避免输入框被压得过窄 */
+@media (max-width: 1100px) {
+  .slider-row.with-inputs { grid-template-columns: 70px minmax(44px, 1fr) 66px 48px; }
+}
+
+/* ---------- 模式 / 视图 可见性 ---------- */
+#gimbal-overlay,
+.section-gimbal,
+#narrator { display: none; }
+
+body[data-mode="basic"] .section-imu,
+body[data-mode="basic"] .section-algo,
+body[data-mode="basic"] .ov-chip.quat,
+body[data-mode="basic"] .ov-chip.imu,
+body[data-mode="basic"] .ov-chip.axes,
+body[data-mode="basic"] .chart-block.att,
+body[data-mode="basic"] details.adv,
+body[data-mode="basic"] .legend-chip[data-est="comp"],
+body[data-mode="basic"] .legend-chip[data-est="madg"],
+body[data-mode="basic"] option.opt-adv { display: none; }
+
+body[data-mode="basic"] #charts { grid-template-columns: 1fr; }
+body[data-mode="basic"] #narrator { display: block; }
+
+body[data-view="gimbal"] #readout-overlay,
+body[data-view="gimbal"] #charts,
+body[data-view="gimbal"] .section-scenario,
+body[data-view="gimbal"] .section-view,
+body[data-view="gimbal"] .section-imu,
+body[data-view="gimbal"] .section-algo,
+body[data-view="gimbal"] .section-principles { display: none; }
+
+body[data-view="gimbal"] .section-gimbal { display: block; }
+body[data-view="gimbal"] #gimbal-overlay { display: flex; }
+
 /* ---------- responsive ---------- */
 @media (max-width: 960px) {
   body { overflow: auto; grid-template-rows: auto auto auto auto auto; height: auto; min-height: 100vh; }

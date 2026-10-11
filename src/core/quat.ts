@@ -56,6 +56,13 @@ export function qFromEuler(roll: number, pitch: number, yaw: number): Quat {
   };
 }
 
+/** 绕单位轴 axis 旋转 angle（弧度）的四元数。axis 必须已归一化 */
+export function qFromAxisAngle(axis: V3, angle: number): Quat {
+  const h = angle / 2;
+  const s = Math.sin(h);
+  return { w: Math.cos(h), x: axis[0] * s, y: axis[1] * s, z: axis[2] * s };
+}
+
 export interface Euler {
   roll: number;
   pitch: number;
