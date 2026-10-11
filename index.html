@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>四元数姿态解算 · 学习演示装置</title>
+</head>
+<body>
+  <header id="app-header">
+    <div class="title-block">
+      <h1>四元数姿态解算<span>学习演示装置</span></h1>
+      <p class="subtitle">模拟 IMU · 四种解算算法实时对比 · 纯浏览器运行</p>
+    </div>
+    <div class="header-controls">
+      <span class="mono dim" id="clock">t = 0.0 s</span>
+      <button id="btn-pause" class="btn primary">暂停</button>
+      <button id="btn-reset" class="btn">重置</button>
+    </div>
+  </header>
+
+  <main id="app-main">
+    <div id="viewport">
+      <div class="overlay" id="readout-overlay">
+        <div class="ov-chip" id="readout-source">模型显示：Mahony</div>
+        <div class="ov-chip mono" id="readout-quat">q = [1.0000, 0.0000, 0.0000, 0.0000]</div>
+        <div class="ov-chip mono" id="readout-euler">φ +0.0° &nbsp; θ +0.0° &nbsp; ψ +0.0°</div>
+        <div class="ov-chip mono dim" id="readout-true">真实 φ +0.0° θ +0.0° ψ +0.0°</div>
+        <div class="ov-chip mono dim" id="readout-imu">陀螺 [ +0.0, +0.0, +0.0 ] °/s<br />加计 [ +0.0, +0.0, +0.0 ] m/s²</div>
+      </div>
+      <div class="overlay" id="viewport-hint">拖拽旋转视角 · 滚轮缩放</div>
+    </div>
+
+    <aside id="panel">
+      <section class="panel-section">
+        <h2>数据源与机动</h2>
+        <div class="row">
+          <label for="scenario-select">机动模式</label>
+          <select id="scenario-select">
+            <option value="hover" selected>悬停微扰</option>
+            <option value="manual">手动控制</option>
+            <option value="roll360">横滚 360°</option>
+            <option value="pitch">俯仰摆动</option>
+            <option value="composite">复合机动</option>
+            <option value="violent">剧烈机动</option>
+          </select>
+        </div>
+        <div id="manual-group" class="sub-group hidden">
+          <div class="slider-row">
+            <label>滚转 φ</label>
+            <input type="range" id="man-roll" min="-180" max="180" step="1" value="0" />
+            <output id="man-roll-out">0°</output>
+          </div>
+          <div class="slider-row">
+            <label>俯仰 θ</label>
+            <input type="range" id="man-pitch" min="-180" max="180" step="1" value="0" />
+            <output id="man-pitch-out">0°</output>
+          </div>
+          <div class="slider-row">
+            <label>偏航 ψ</label>
+            <input type="range" id="man-yaw" min="-180" max="180" step="1" value="0" />
+            <output id="man-yaw-out">0°</output>
+          </div>
+          <p class="hint">拖动滑块设定目标姿态，机体以受限角速度跟踪（下方三轴可试 ±90° 附近）。</p>
+        </div>
+      </section>
+
+      <section class="panel-section">
+        <h2>IMU 传感器模拟</h2>
+        <div class="slider-row">
+          <label>陀螺零偏</label>
+          <input type="range" id="imu-gyro-bias" min="0" max="5" step="0.1" value="1" />
+          <output id="imu-gyro-bias-out">1.0°/s</output>
+        </div>
+        <div class="slider-row">
+          <label>陀螺噪声</label>
+          <input type="range" id="imu-gyro-noise" min="0" max="2" step="0.05" value="0.2" />
+          <output id="imu-gyro-noise-out">0.20°/s</output>
+        </div>
+        <div class="slider-row">
+          <label>加计噪声</label>
+          <input type="range" id="imu-accel-noise" min="0" max="1" step="0.05" value="0.1" />
+          <output id="imu-accel-noise-out">0.10m/s²</output>
+        </div>
+        <div class="slider-row">
+          <label>机动线加速度</label>
+          <input type="range" id="imu-lin-accel" min="0" max="5" step="0.1" value="1" />
+          <output id="imu-lin-accel-out">1.0m/s²</output>
+        </div>
+        <div class="slider-row">
+          <label>电机振动</label>
+          <input type="range" id="imu-vibration" min="0" max="1" step="0.05" value="0.3" />
+          <output id="imu-vibration-out">0.30</output>
+        </div>
+      </section>
+
+      <section class="panel-section">
+        <h2>解算算法</h2>
+        <div class="slider-row">
+          <label>Mahony Kp</label>
+          <input type="range" id="mahony-kp" min="0.05" max="5" step="0.05" value="1" />
+          <output id="mahony-kp-out">1.00</output>
+        </div>
+        <div class="slider-row">
+          <label>Mahony Ki</label>
+          <input type="range" id="mahony-ki" min="0" max="0.5" step="0.01" value="0.05" />
+          <output id="mahony-ki-out">0.05</output>
+        </div>
+        <div class="slider-row">
+          <label>Madgwick β</label>
+          <input type="range" id="madg-beta" min="0.01" max="1" step="0.01" value="0.1" />
+          <output id="madg-beta-out">0.10</output>
+        </div>
+        <div class="slider-row">
+          <label>互补 α</label>
+          <input type="range" id="comp-alpha" min="0.05" max="5" step="0.05" value="1" />
+          <output id="comp-alpha-out">1.00</output>
+        </div>
+        <p class="hint">纯积分只用陀螺仪，其姿态不受任何滑块影响——这正是演示漂移的关键。</p>
+      </section>
+
+      <section class="panel-section">
+        <h2>3D 显示</h2>
+        <div class="row">
+          <label for="source-select">模型姿态来源</label>
+          <select id="source-select">
+            <option value="truth">真实姿态</option>
+            <option value="pure">纯陀螺积分</option>
+            <option value="comp">互补滤波</option>
+            <option value="mahony" selected>Mahony</option>
+            <option value="madg">Madgwick</option>
+          </select>
+        </div>
+        <div class="row check-row">
+          <label><input type="checkbox" id="ghost-toggle" checked /> 显示真实姿态幻影（线框）</label>
+        </div>
+      </section>
+
+      <section class="panel-section">
+        <h2>原理速览</h2>
+        <details open>
+          <summary>为什么要用四元数？</summary>
+          <p>欧拉角（滚转 φ、俯仰 θ、偏航 ψ）直观，但按固定顺序旋转、只有三个自由度：当俯仰接近 ±90° 时第二次旋转轴与第一次重合，丢失一个自由度——即「万向节锁」。四元数 q = w + xi + yj + zk 用四个数表示旋转，任何姿态下都平滑无奇异，插值（Slerp）路径自然，是姿态表示的标准选择。</p>
+        </details>
+        <details>
+          <summary>陀螺仪为什么积分会漂移？</summary>
+          <p>陀螺仪输出角速度，姿态由 q̇ = ½ q ⊗ ω 逐步积分得到。真实陀螺存在恒定零偏（bias）与噪声：零偏每秒都被积分进姿态，误差随时间线性累积。本页把「纯陀螺积分」算法的模型姿态切成显示源，即可看到它相对幻影缓缓转偏。</p>
+        </details>
+        <details>
+          <summary>加速度计能帮什么忙？</summary>
+          <p>静止或匀速时，加速度计测量重力方向在机体系的投影，可独立解算滚转与俯仰（但看不出偏航，且机动时被线加速度污染）。融合的思路：高频信陀螺（动态好、会漂移），低频信加计（静态准、动态差），各取所长。</p>
+        </details>
+        <details>
+          <summary>三种融合算法的直觉</summary>
+          <p><b>互补滤波</b>：陀螺积分结果与加计姿态角按比例混合，α 控制加计权重。<b>Mahony</b>：把加计方向与预测重力方向的叉积作为误差，经 P/I 反馈修正角速度，是飞控最常用的方案。<b>Madgwick</b>：把姿态估计视为优化问题，沿目标函数梯度下降修正，单参数 β 权衡跟随速度与噪声抑制。</p>
+        </details>
+        <details>
+          <summary>本页约定</summary>
+          <p>世界系 NED（x 北、y 东、z 下），机体系前右下。四元数 q 为机体系→世界系。模拟加速度计静止时输出 +g 沿机体「下」方向。解算频率 500 Hz，曲线每 40 ms 记录一点。</p>
+        </details>
+      </section>
+    </aside>
+  </main>
+
+  <section id="charts">
+    <div class="chart-block">
+      <div class="chart-header">
+        <div class="chart-tabs" id="att-tabs">
+          <button data-ch="0" class="tab active">滚转 φ</button>
+          <button data-ch="1" class="tab">俯仰 θ</button>
+          <button data-ch="2" class="tab">偏航 ψ</button>
+        </div>
+        <div class="chart-legend" id="att-legend"></div>
+      </div>
+      <canvas id="att-canvas"></canvas>
+    </div>
+    <div class="chart-block">
+      <div class="chart-header">
+        <div class="chart-title">姿态总误差（解算 vs 真实）</div>
+        <div class="chart-legend" id="err-legend"></div>
+      </div>
+      <canvas id="err-canvas"></canvas>
+    </div>
+  </section>
+
+  <footer id="app-footer">
+    <span>NED 世界系 · q：机体系→世界系 · 解算 500 Hz</span>
+    <span class="mono dim" id="fps">-- fps</span>
+  </footer>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
