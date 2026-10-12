@@ -115,9 +115,10 @@ export class RollingChart {
     const yOf = (v: number) => padT + plotH - ((v - ymin) / (ymax - ymin)) * plotH;
 
     // 网格与坐标
-    ctx.font = "10.5px 'Cascadia Code', Consolas, monospace";
-    ctx.strokeStyle = "#222e3e";
-    ctx.fillStyle = "#66788f";
+    // 网格与坐标：与 CSS 设计令牌 --border / --text-faint 对齐
+    ctx.font = `10.5px "Fira Code", "Cascadia Code", Consolas, monospace`;
+    ctx.strokeStyle = "#1a2540";
+    ctx.fillStyle = "#7b8aa3";
     ctx.lineWidth = 1;
     const gridN = 4;
     for (let i = 0; i <= gridN; i++) {
@@ -142,7 +143,7 @@ export class RollingChart {
 
     // 零线加亮
     if (ymin < 0 && ymax > 0) {
-      ctx.strokeStyle = "#31415a";
+      ctx.strokeStyle = "#2d3c5e";
       ctx.beginPath();
       const y0 = Math.round(yOf(0)) + 0.5;
       ctx.moveTo(padL, y0);

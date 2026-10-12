@@ -88,11 +88,11 @@ const rig = buildGimbal();
   // 平衡环架排布：三环面两两垂直，每环的旋转轴都是自身环面的一条直径
   //   外环（偏航，轴 Y）环面 YZ → 孔轴 ±X
   //   中环（俯仰，轴 Z）环面 XZ → 孔轴 ±Y
-  //   内环（滚转，轴 X）环面 XY → 孔轴 ±Z
+  //   内环（横滚，轴 X）环面 XY → 孔轴 ±Z
   const cases: Array<[string, THREE.Mesh, THREE.Vector3, THREE.Vector3]> = [
     ["外环（偏航）", rig.parts.yawRing, new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 1, 0)],
     ["中环（俯仰）", rig.parts.pitchRing, new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, 1)],
-    ["内环（滚转）", rig.parts.rollRing, new THREE.Vector3(0, 0, 1), new THREE.Vector3(1, 0, 0)],
+    ["内环（横滚）", rig.parts.rollRing, new THREE.Vector3(0, 0, 1), new THREE.Vector3(1, 0, 0)],
   ];
   const bad: string[] = [];
   const detail: string[] = [];
@@ -168,14 +168,14 @@ const rig = buildGimbal();
   rig.setAngles(0, 0, 0);
 }
 
-// ============ 4. 内嵌小四轴：直接挂在滚转环下且无额外旋转 ============
+// ============ 4. 内嵌小四轴：直接挂在横滚环下且无额外旋转 ============
 {
   const q = rig.quad.group.quaternion;
   const isIdentity = Math.abs(q.w - 1) < 1e-12 && Math.abs(q.x) < 1e-12 && Math.abs(q.y) < 1e-12 && Math.abs(q.z) < 1e-12;
   check(
-    "内嵌四轴挂在滚转环下且自身无额外旋转",
+    "内嵌四轴挂在横滚环下且自身无额外旋转",
     rig.quad.group.parent === rig.parts.rollGroup && isIdentity,
-    `父节点=${rig.quad.group.parent === rig.parts.rollGroup ? "滚转环" : "异常"}，自身四元数=(${q.x}, ${q.y}, ${q.z}, ${q.w})`,
+    `父节点=${rig.quad.group.parent === rig.parts.rollGroup ? "横滚环" : "异常"}，自身四元数=(${q.x}, ${q.y}, ${q.z}, ${q.w})`,
   );
 }
 
@@ -236,6 +236,78 @@ const rig = buildGimbal();
     sprites.length === 3 && matched.size === 3,
     `找到 ${sprites.length} 个标签，方向 ${dirs.map(fmt).join(" ")}，与 3 条机体轴一一对应=${matched.size === 3}`,
   );
+}
+
+// ============ 4c. 环标签必须挂在各自的环下并随环转动 ============
+{
+  const labelUnder = (parent: THREE.Object3D): THREE.Sprite | null => {
+    const found = parent.children.find(
+      (c) => (c as THREE.Sprite).isSprite === true,
+    ) as THREE.Sprite | undefined;
+    return found ?? null;
+  };
+  const yawLabel = labelUnder(rig.parts.yawGroup);
+  const pitchLabel = labelUnder(rig.parts.pitchGroup);
+  const rollLabel = labelUnder(rig.parts.rollGroup);
+  const allPresent = !!(yawLabel && pitchLabel && rollLabel);
+
+  const posOf = (obj: THREE.Object3D) => {
+    const p = new THREE.Vector3();
+    obj.getWorldPosition(p);
+    return p;
+  };
+
+  // 1) 只转外环（偏航）：三个标签都应跟着转（外环是最外层父节点）
+  rig.setAngles(0, 0, 0);
+  rig.group.updateWorldMatrix(true, true);
+  const yawBefore = allPresent ? posOf(yawLabel!) : null;
+  const pitchBeforeYaw = allPresent ? posOf(pitchLabel!) : null;
+  rig.setAngles(0, 0, 60 * (Math.PI / 180));
+  rig.group.updateWorldMatrix(true, true);
+  const yawMoved = yawBefore && allPresent ? yawBefore.distanceTo(posOf(yawLabel!)) : 0;
+  const pitchMovedByYaw = pitchBeforeYaw && allPresent ? pitchBeforeYaw.distanceTo(posOf(pitchLabel!)) : 0;
+
+  // 2) 只转中环（俯仰）：中环标签移动，而外环标签（父层级，未动）不动
+  rig.setAngles(0, 0, 0);
+  rig.group.updateWorldMatrix(true, true);
+  const yawBeforePitch = allPresent ? posOf(yawLabel!) : null;
+  const pitchBeforePitch = allPresent ? posOf(pitchLabel!) : null;
+  rig.setAngles(0, 40 * (Math.PI / 180), 0);
+  rig.group.updateWorldMatrix(true, true);
+  const pitchMoved = pitchBeforePitch && allPresent ? pitchBeforePitch.distanceTo(posOf(pitchLabel!)) : 0;
+  const yawStill = yawBeforePitch && allPresent ? yawBeforePitch.distanceTo(posOf(yawLabel!)) : 0;
+
+  // 3) 只转内环（横滚）：内环标签移动，外环标签不动
+  rig.setAngles(0, 0, 0);
+  rig.group.updateWorldMatrix(true, true);
+  const rollBefore = allPresent ? posOf(rollLabel!) : null;
+  const yawBeforeRoll = allPresent ? posOf(yawLabel!) : null;
+  rig.setAngles(50 * (Math.PI / 180), 0, 0);
+  rig.group.updateWorldMatrix(true, true);
+  const rollMoved = rollBefore && allPresent ? rollBefore.distanceTo(posOf(rollLabel!)) : 0;
+  const yawStillRoll = yawBeforeRoll && allPresent ? yawBeforeRoll.distanceTo(posOf(yawLabel!)) : 0;
+
+  // 4) 标签位置须落在所属环之外（半径 > 环半径），确保不埋进环体
+  rig.setAngles(0, 0, 0);
+  rig.group.updateWorldMatrix(true, true);
+  const radiusOf = (s: THREE.Sprite) => Math.hypot(...posOf(s).toArray());
+
+  check(
+    "环标签挂在各自环下并随环转动",
+    allPresent &&
+      yawMoved > 0.1 && pitchMovedByYaw > 0.1 &&
+      pitchMoved > 0.1 && yawStill < 1e-9 &&
+      rollMoved > 0.1 && yawStillRoll < 1e-9 &&
+      radiusOf(yawLabel!) > GIMBAL_GEOM.R_OUTER &&
+      radiusOf(pitchLabel!) > GIMBAL_GEOM.R_MID &&
+      radiusOf(rollLabel!) > GIMBAL_GEOM.R_INNER,
+    `三个标签均在位=${allPresent}；` +
+      `转外环 60°：偏航标签移动 ${yawMoved.toFixed(2)}、俯仰标签随动 ${pitchMovedByYaw.toFixed(2)}（均须 >0.1）；` +
+      `转中环 40°：俯仰标签移动 ${pitchMoved.toFixed(2)}（须 >0.1）、偏航标签静止 ${yawStill.toExponential(1)}（须 ≈0）；` +
+      `转内环 50°：横滚标签移动 ${rollMoved.toFixed(2)}（须 >0.1）、偏航标签静止 ${yawStillRoll.toExponential(1)}（须 ≈0）；` +
+      `标签半径 偏航 ${radiusOf(yawLabel!).toFixed(2)}>${GIMBAL_GEOM.R_OUTER}、俯仰 ${radiusOf(pitchLabel!).toFixed(2)}>${GIMBAL_GEOM.R_MID}、横滚 ${radiusOf(rollLabel!).toFixed(2)}>${GIMBAL_GEOM.R_INNER}`,
+  );
+  rig.setAngles(0, 0, 0);
 }
 
 console.log(failures === 0 ? "\n场景图校验全部通过 ✅" : `\n${failures} 项失败 ❌`);

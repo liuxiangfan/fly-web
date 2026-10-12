@@ -34,14 +34,15 @@ export function createScene(container: HTMLElement): SceneHandles {
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.05;
+  renderer.toneMappingExposure = 1.08;
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   container.appendChild(renderer.domElement);
 
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x0d1117);
-  scene.fog = new THREE.FogExp2(0x0d1117, 0.03);
+  // 与 CSS 设计令牌 --bg (#030712) 保持一致，让 3D 视口与页面无缝衔接
+  scene.background = new THREE.Color(0x030712);
+  scene.fog = new THREE.FogExp2(0x030712, 0.032);
 
   const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
   camera.position.set(1.9, 1.35, 2.4);
@@ -64,12 +65,12 @@ export function createScene(container: HTMLElement): SceneHandles {
   // 地面 + 网格
   const ground = new THREE.Mesh(
     new THREE.CircleGeometry(9, 64),
-    new THREE.MeshStandardMaterial({ color: 0x141a24, roughness: 1 }),
+    new THREE.MeshStandardMaterial({ color: 0x0a1020, roughness: 1 }),
   );
   ground.rotation.x = -Math.PI / 2;
   ground.receiveShadow = true;
   scene.add(ground);
-  const grid = new THREE.GridHelper(12, 24, 0x2f3b4d, 0x1c2532);
+  const grid = new THREE.GridHelper(12, 24, 0x2d3c5e, 0x16203a);
   grid.position.y = 0.002;
   scene.add(grid);
 

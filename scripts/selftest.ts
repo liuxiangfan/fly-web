@@ -279,7 +279,7 @@ const dirty: ImuParams = { gyroBiasDps: 1, gyroNoiseDps: 0.2, accelNoise: 0.15, 
   );
 }
 
-// 10b. 演示的核心结论：俯仰 90° 时，【滚转 60°】与【偏航 −60°】得到完全相同的姿态
+// 10b. 演示的核心结论：俯仰 90° 时，【横滚 60°】与【偏航 −60°】得到完全相同的姿态
 //      这正是「只剩 2 个自由度」的直接证据（两个滑块控制同一个自由度）
 {
   const P = 90 * RAD;
@@ -293,7 +293,7 @@ const dirty: ImuParams = { gyroBiasDps: 1, gyroNoiseDps: 0.2, accelNoise: 0.15, 
   const ctrlDiff = qAngleBetween(ctrlRoll, ctrlYaw) * DEG;
 
   check(
-    "锁定态：滚转与偏航产生同一姿态",
+    "锁定态：横滚与偏航产生同一姿态",
     diff < 1e-9 && ctrlDiff > 30,
     `俯仰 90° 时两条路径夹角 ${diff.toExponential(2)}°（须 ≈0）；` +
       `俯仰 0° 对照组 ${ctrlDiff.toFixed(2)}°（须明显不同，证明演示有区分度）`,
@@ -371,6 +371,33 @@ const dirty: ImuParams = { gyroBiasDps: 1, gyroNoiseDps: 0.2, accelNoise: 0.15, 
     "模式持久化与非法值回落",
     initial === "basic" && afterWrite === "full" && afterBasic === "basic" && garbage === "basic",
     `空→${modes[0]}，写 full→${modes[1]}，写 basic→${modes[2]}，非法值→${modes[3]}`,
+  );
+}
+
+// 10d. 暂停语义：冻结时间轴后姿态必须完全不变，且解说不应跨相位跳变
+{
+  const pauseAt = gimbalDemoPhaseEnd("locked") - 0.3; // 停在死锁相位末尾前
+  const held = gimbalDemo(pauseAt);
+  // 模拟暂停期间反复取同一时刻（主循环在 paused 时不推进 demoState.t）
+  let maxDrift = 0;
+  for (let i = 0; i < 50; i++) {
+    const again = gimbalDemo(pauseAt);
+    maxDrift = Math.max(
+      maxDrift,
+      Math.abs(again.roll - held.roll),
+      Math.abs(again.pitch - held.pitch),
+      Math.abs(again.yaw - held.yaw),
+    );
+    if (again.message !== held.message) maxDrift = Infinity;
+  }
+  // 继续播放后时间轴必须能从暂停点接着走（不是从头开始）
+  const afterResume = gimbalDemo(pauseAt + 1.5);
+  const movedOn = Math.abs(afterResume.roll - held.roll) + Math.abs(afterResume.yaw - held.yaw) > 0.5;
+  check(
+    "暂停冻结时间轴且继续可接播",
+    maxDrift < 1e-12 && movedOn && held.pitch >= 89.999,
+    `暂停点 t=${pauseAt.toFixed(2)}s 姿态 (φ=${held.roll.toFixed(1)}°,θ=${held.pitch.toFixed(1)}°,ψ=${held.yaw.toFixed(1)}°)；` +
+      `冻结期间漂移 ${maxDrift.toExponential(1)}；继续 1.5s 后已推进=${movedOn}`,
   );
 }
 

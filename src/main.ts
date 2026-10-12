@@ -362,25 +362,50 @@ const gimRoll = bindSlider("gim-roll", (v) => { gimState.rollDeg = v; applyGimba
 /** 手动操作即接管演示（滑块输入、数值输入、步距调整都算） */
 for (const id of ["gim-yaw", "gim-pitch", "gim-roll"]) {
   const el = $<HTMLInputElement>(id);
-  el.addEventListener("input", stopDemo);
-  el.addEventListener("change", stopDemo);
+  // 不能直接把 stopDemo 当回调：事件对象会被误传成 keepConclusion 参数
+  el.addEventListener("input", () => stopDemo());
+  el.addEventListener("change", () => stopDemo());
 }
 
 // ---------- 万向节锁完整演示 ----------
 const demoState = {
   t: -1, // <0 表示未在演示
+  paused: false,
   /** 演示到「记住此刻姿态」时记录下来的参照姿态四元数 */
   recorded: null as { w: number; x: number; y: number; z: number } | null,
   /** 「验证」相位比对出的夹角（度） */
   diffDeg: null as number | null,
 };
 
-function stopDemo(): void {
-  if (demoState.t < 0) return;
+const DEMO_BTN_IDLE = "演示：只剩 2 个自由度";
+
+/** 暂停按钮只在演示进行中可用；暂停时保持当前角度、解说与进度，点击继续 */
+function setPauseButton(paused: boolean | null): void {
+  const btn = $<HTMLButtonElement>("btn-gim-pause");
+  if (paused === null) {
+    btn.disabled = true;
+    btn.textContent = "暂停";
+    return;
+  }
+  btn.disabled = false;
+  btn.textContent = paused ? "继续" : "暂停";
+}
+
+/**
+ * 结束演示。keepConclusion=true（自然播完）时保留比对结论供讲解，
+ * 手动停止则一并清掉，让面板回到待机状态。
+ */
+function stopDemo(keepConclusion = false): void {
+  const wasIdle = demoState.t < 0;
   demoState.t = -1;
-  $("btn-gim-demo").textContent = "演示：只剩 2 个自由度";
-  $("gimbal-compare").textContent = "";
-  $("gimbal-compare").classList.remove("warn", "ok");
+  demoState.paused = false;
+  $("btn-gim-demo").textContent = DEMO_BTN_IDLE;
+  setPauseButton(null);
+  $("gimbal-progress").style.width = "0%";
+  if (!keepConclusion && !wasIdle) {
+    $("gimbal-compare").textContent = "";
+    $("gimbal-compare").classList.remove("warn", "ok");
+  }
 }
 
 $("btn-gim-demo").addEventListener("click", () => {
@@ -389,9 +414,19 @@ $("btn-gim-demo").addEventListener("click", () => {
     return;
   }
   demoState.t = 0;
+  demoState.paused = false;
   demoState.recorded = null;
   demoState.diffDeg = null;
   $("btn-gim-demo").textContent = "停止演示";
+  setPauseButton(false);
+  $("gimbal-compare").textContent = "";
+  $("gimbal-compare").classList.remove("warn", "ok");
+});
+
+$("btn-gim-pause").addEventListener("click", () => {
+  if (demoState.t < 0) return;
+  demoState.paused = !demoState.paused;
+  setPauseButton(demoState.paused);
 });
 
 $("btn-gim-reset").addEventListener("click", () => {
@@ -428,16 +463,16 @@ function updateGimbalUi(): void {
   if (demoState.diffDeg !== null) {
     const same = demoState.diffDeg < 0.05;
     cmp.textContent = same
-      ? `✔ 两次操作得到的姿态完全相同（夹角 ${demoState.diffDeg.toFixed(3)}°）——滚转与偏航其实是同一个自由度`
+      ? `✔ 两次操作得到的姿态完全相同（夹角 ${demoState.diffDeg.toFixed(3)}°）——横滚与偏航其实是同一个自由度`
       : `姿态夹角 ${demoState.diffDeg.toFixed(2)}°`;
     cmp.classList.toggle("ok", same);
     cmp.classList.toggle("warn", !same);
   }
 }
 
-/** 演示推进（独立于仿真暂停状态） */
+/** 演示推进（独立于仿真暂停状态）；暂停时冻结时间轴，画面与解说原地保持 */
 function stepDemo(dt: number): void {
-  if (demoState.t < 0) return;
+  if (demoState.t < 0 || demoState.paused) return;
   demoState.t += dt;
   const d = gimbalDemo(demoState.t);
 
@@ -456,10 +491,8 @@ function stepDemo(dt: number): void {
   }
 
   if (d.finished) {
-    // 保留最终画面与结论，只把按钮恢复，允许重播
-    demoState.t = -1;
-    $("btn-gim-demo").textContent = "演示：只剩 2 个自由度";
-    $("gimbal-progress").style.width = "0%";
+    // 自然播完：保留最终画面与结论供讲解，按钮复位、允许重播
+    stopDemo(true);
   }
 }
 

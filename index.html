@@ -3,7 +3,19 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#030712" />
+  <meta name="description" content="四元数姿态解算学习演示装置：模拟 IMU、四种解算算法实时对比、万向节锁平衡环架演示。" />
   <title>四元数姿态解算 · 学习演示装置</title>
+  <style>html { background: #030712; }</style>
+  <!-- Fira Sans / Fira Code 非阻塞加载；网络不可达时自动降级到系统字体，不影响使用 -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    rel="stylesheet"
+    href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Fira+Sans:wght@400;500;600&display=swap"
+    media="print"
+    onload="this.media='all'"
+  />
 </head>
 <body>
   <header id="app-header">
@@ -68,7 +80,7 @@
         </div>
         <div id="manual-group" class="sub-group hidden">
           <div class="slider-row with-inputs">
-            <label>滚转 φ</label>
+            <label>横滚 φ</label>
             <input type="range" id="man-roll" min="-180" max="180" step="1" value="0" />
             <input type="number" class="num-input" data-num="man-roll" step="any" />
             <input type="number" class="step-input" data-step="man-roll" min="0.01" max="180" title="滑杆步距" />
@@ -184,21 +196,25 @@
           <input type="number" class="step-input" data-step="gim-pitch" min="0.005" max="90" title="滑杆步距" />
         </div>
         <div class="slider-row with-inputs">
-          <label>滚转 φ</label>
+          <label>横滚 φ</label>
           <input type="range" id="gim-roll" min="-180" max="180" step="1" value="0" />
           <input type="number" class="num-input" data-num="gim-roll" step="any" />
           <input type="number" class="step-input" data-step="gim-roll" min="0.01" max="180" title="滑杆步距" />
         </div>
         <div class="row btn-row">
           <button class="btn primary" id="btn-gim-demo">演示：只剩 2 个自由度</button>
+        </div>
+        <div class="row btn-row">
+          <button class="btn" id="btn-gim-pause" disabled>暂停</button>
           <button class="btn" id="btn-gim-reset">复位</button>
         </div>
         <div class="progress-track"><div class="progress-bar" id="gimbal-progress"></div></div>
         <div class="ov-chip" id="gimbal-compare"></div>
         <p class="hint">
-          把俯仰拖到 ±90°：内环（滚转）的轴会与外环（偏航）的轴重合，两环变红报警——
-          此时滚转和偏航变成同一个动作，丢了一个自由度，这就是万向节锁。<br />
-          上方按钮会完整演一遍：先用【滚转】再用【偏航】各转 60°，并对比两次得到的姿态是否相同。
+          把俯仰拖到 ±90°：内环（横滚）的轴会与外环（偏航）的轴重合，两环变红报警——
+          此时横滚和偏航变成同一个动作，丢了一个自由度，这就是万向节锁。<br />
+          上方按钮会完整演一遍：先用【横滚】再用【偏航】各转 60°，并对比两次得到的姿态是否相同。
+          演示可随时暂停，停在任意姿态方便讲解。
         </p>
       </section>
 
@@ -206,7 +222,7 @@
         <h2>原理速览</h2>
         <details open>
           <summary>为什么要用四元数？</summary>
-          <p>欧拉角（滚转 φ、俯仰 θ、偏航 ψ）直观，但按固定顺序旋转、只有三个自由度：当俯仰接近 ±90° 时第二次旋转轴与第一次重合，丢失一个自由度——即「万向节锁」。四元数 q = w + xi + yj + zk 用四个数表示旋转，任何姿态下都平滑无奇异，插值（Slerp）路径自然，是姿态表示的标准选择。切到上方「万向节锁」视图可以亲眼看到这件事。</p>
+          <p>欧拉角（横滚 φ、俯仰 θ、偏航 ψ）直观，但按固定顺序旋转、只有三个自由度：当俯仰接近 ±90° 时第二次旋转轴与第一次重合，丢失一个自由度——即「万向节锁」。四元数 q = w + xi + yj + zk 用四个数表示旋转，任何姿态下都平滑无奇异，插值（Slerp）路径自然，是姿态表示的标准选择。切到上方「万向节锁」视图可以亲眼看到这件事。</p>
         </details>
         <details open>
           <summary>陀螺仪为什么积分会漂移？</summary>
@@ -214,7 +230,7 @@
         </details>
         <details class="adv">
           <summary>加速度计能帮什么忙？</summary>
-          <p>静止或匀速时，加速度计测量重力方向在机体系的投影，可独立解算滚转与俯仰（但看不出偏航，且机动时被线加速度污染）。融合的思路：高频信陀螺（动态好、会漂移），低频信加计（静态准、动态差），各取所长。</p>
+          <p>静止或匀速时，加速度计测量重力方向在机体系的投影，可独立解算横滚与俯仰（但看不出偏航，且机动时被线加速度污染）。融合的思路：高频信陀螺（动态好、会漂移），低频信加计（静态准、动态差），各取所长。</p>
         </details>
         <details class="adv">
           <summary>三种融合算法的直觉</summary>
@@ -232,7 +248,7 @@
     <div class="chart-block att">
       <div class="chart-header">
         <div class="chart-tabs" id="att-tabs">
-          <button data-ch="0" class="tab active">滚转 φ</button>
+          <button data-ch="0" class="tab active">横滚 φ</button>
           <button data-ch="1" class="tab">俯仰 θ</button>
           <button data-ch="2" class="tab">偏航 ψ</button>
         </div>

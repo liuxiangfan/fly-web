@@ -9,7 +9,7 @@ export interface GimbalRig {
   quad: QuadModel;
   /**
    * 设置三个环的角度（弧度）。
-   * 偏航绕显示 +Y 转 −yaw、俯仰绕显示 +Z 转 pitch、滚转绕显示 +X 转 roll，
+   * 偏航绕显示 +Y 转 −yaw、俯仰绕显示 +Z 转 pitch、横滚绕显示 +X 转 roll，
    * 与 core/gimbal.ts 的 gimbalInnerQuat 严格同约定。
    */
   setAngles(roll: number, pitch: number, yaw: number): void;
@@ -48,6 +48,21 @@ const { R_OUTER, R_MID, R_INNER, TUBE, PIN_R } = GIMBAL_GEOM;
 const LOCK_COLOR = 0xf85149;
 const PIN_COLOR = 0xd6e0ec;
 const POST_COLOR = 0x3a4657;
+
+/**
+ * 三个环各用一个可区分的颜色，标签文字取同色系更亮的版本。
+ * 环与标签同色 + 标签随环转动，两者共同保证「一眼看出标签属于哪个环」。
+ */
+const RING_COLOR = {
+  yaw: 0x5a8ac0,
+  pitch: 0xc09a5a,
+  roll: 0x5ab89a,
+} as const;
+const LABEL_COLOR = {
+  yaw: "#8dbdf0",
+  pitch: "#e0bc80",
+  roll: "#82d6bc",
+} as const;
 /** 环架中心离地高度（group.position.y），底座立柱据此接到外环底部 */
 const HUB_HEIGHT = 1.15;
 
@@ -68,7 +83,7 @@ interface TintableMesh {
  * 一条直径，且枢轴点要落在相邻环上，于是：
  *   外环（偏航，轴 +Y）环面 YZ，枢轴在 ±Z（接中环）、±Y（接底座立柱）
  *   中环（俯仰，轴 +Z）环面 XZ，枢轴在 ±Z（接外环）、±X（接内环）
- *   内环（滚转，轴 +X）环面 XY，枢轴在 ±X（接中环）
+ *   内环（横滚，轴 +X）环面 XY，枢轴在 ±X（接中环）
  * 三个环面两两垂直，与真实环架一致；自检脚本会验证连通性与姿态一致性。
  */
 export function buildGimbal(): GimbalRig {
@@ -92,20 +107,20 @@ export function buildGimbal(): GimbalRig {
     return { mesh, target: { mat, base: new THREE.Color(PIN_COLOR) } };
   };
 
-  const makeLabel = (text: string, pos: [number, number, number]): THREE.Sprite => {
-    const s = makeTextSprite(text, "#93a4ba", { size: 0.14, bold: false, alwaysOnTop: true });
+  const makeLabel = (text: string, color: string, pos: [number, number, number]): THREE.Sprite => {
+    const s = makeTextSprite(text, color, { size: 0.15, bold: false, alwaysOnTop: true });
     s.position.set(pos[0], pos[1], pos[2]);
     return s;
   };
 
-  /** 死锁时轴重合的是偏航轴与滚转轴，故高亮外环、内环以及承载这两根轴的轴销 */
+  /** 死锁时轴重合的是偏航轴与横滚轴，故高亮外环、内环以及承载这两根轴的轴销 */
   const lockTargets: TintTarget[] = [];
   const axisPinTargets: TintTarget[] = [];
   const pivots: THREE.Mesh[] = [];
 
   // ---- 外环：偏航，绕显示 +Y（垂直轴）。环面 YZ，枢轴在 ±Z（接中环）、±Y（接底座）----
   const yawGroup = new THREE.Group();
-  const yawRing = makeRing(R_OUTER, 0x5a6b85);
+  const yawRing = makeRing(R_OUTER, RING_COLOR.yaw);
   yawRing.mesh.rotation.y = Math.PI / 2; // 环孔轴 Z→X，环面变为 YZ
   yawGroup.add(yawRing.mesh);
   lockTargets.push(yawRing.target);
@@ -116,10 +131,14 @@ export function buildGimbal(): GimbalRig {
     yawGroup.add(pin.mesh);
     axisPinTargets.push(pin.target);
   }
+  // 标签贴在环体上随环转动。方位角按相机取景（约 +X+Z 方向俯视）挑选，
+  // 让三个标签落在各自环上视觉最清晰、彼此不重叠的位置：
+  // 外环（YZ 平面）标签放在顶部偏左；中环（水平面）放在左前；内环（XY 平面）放在顶部
+  yawGroup.add(makeLabel("偏航", LABEL_COLOR.yaw, [0, R_OUTER * 0.72, R_OUTER * 0.7]));
 
   // ---- 中环：俯仰，绕显示 +Z。环面 XZ（水平），枢轴在 ±Z（接外环）、±X（接内环）----
   const pitchGroup = new THREE.Group();
-  const pitchRing = makeRing(R_MID, 0x66788f);
+  const pitchRing = makeRing(R_MID, RING_COLOR.pitch);
   pitchRing.mesh.rotation.x = Math.PI / 2; // 环孔轴 Z→Y，环面变为 XZ
   pitchGroup.add(pitchRing.mesh);
   for (const s of [1, -1]) {
@@ -130,10 +149,12 @@ export function buildGimbal(): GimbalRig {
     pitchGroup.add(pin.mesh);
     pivots.push(pin.mesh);
   }
+  // 标签贴在环体上随环转动：位于环面内的 −X 方向（中环水平面左侧）
+  pitchGroup.add(makeLabel("俯仰", LABEL_COLOR.pitch, [-(R_MID + 0.13), 0, 0]));
 
-  // ---- 内环：滚转，绕显示 +X。环面 XY，枢轴在 ±X（接中环）----
+  // ---- 内环：横滚，绕显示 +X。环面 XY，枢轴在 ±X（接中环）----
   const rollGroup = new THREE.Group();
-  const rollRing = makeRing(R_INNER, 0x7387a0);
+  const rollRing = makeRing(R_INNER, RING_COLOR.roll);
   rollGroup.add(rollRing.mesh); // 默认环面即 XY，孔轴 Z
   lockTargets.push(rollRing.target);
   for (const s of [1, -1]) {
@@ -145,6 +166,10 @@ export function buildGimbal(): GimbalRig {
     pivots.push(pin.mesh);
     axisPinTargets.push(pin.target);
   }
+  // 标签贴在环体上随环转动。半径取「所属环半径 + 小偏移」并保持在外环之内，
+  // 这样标签绕到任何方位都仍紧贴自己的环，不会飘到整个环架外面去。
+  // 配色上三环三色、标签与所属环同色，因此归属一目了然。
+  rollGroup.add(makeLabel("横滚", LABEL_COLOR.roll, [0, R_INNER + 0.08, 0]));
 
   // 内嵌小四轴：不做任何额外旋转，其姿态就等于三级环链条的组合结果。
   // 不带自己的轴标签，避免环心处文字堆叠（环本身已经表达了三个旋转轴）。
@@ -188,10 +213,8 @@ export function buildGimbal(): GimbalRig {
   base.receiveShadow = true;
   group.add(base);
 
-  // 标签挂在外层 group（不随环翻转），各自贴近所属环的外缘且互不重叠
-  group.add(makeLabel("偏航", [0, 0.46, R_OUTER + 0.18]));
-  group.add(makeLabel("俯仰", [R_MID + 0.2, 0.14, 0]));
-  group.add(makeLabel("滚转", [-(R_INNER + 0.18), 0.2, 0]));
+  // 三个环的标签分别挂在各自的环 group 下（见上文），随环一起转动，
+  // 加上环与标签同色，因此能直接看出每个标签属于哪个环。
 
   const lockColor = new THREE.Color(LOCK_COLOR);
 

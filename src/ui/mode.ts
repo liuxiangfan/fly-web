@@ -83,10 +83,10 @@ export function narrateAttitude(pureErrDeg: number, mahonyErrDeg: number): strin
 /** 解说栏文案（万向节锁视图） */
 export function narrateGimbal(pitchDeg: number, locked: boolean): string {
   if (locked) {
-    return `俯仰 θ = ${pitchDeg.toFixed(0)}°：内外环轴重合 → 滚转与偏航变成同一个动作（万向节锁，只剩 2 个自由度）`;
+    return `俯仰 θ = ${pitchDeg.toFixed(0)}°：内外环轴重合 → 横滚与偏航变成同一个动作（万向节锁，只剩 2 个自由度）`;
   }
   if (Math.abs(Math.abs(pitchDeg) - 90) < 25) {
     return `俯仰 θ = ${pitchDeg.toFixed(0)}°：正在接近 ±90°，注意内外环的轴逐渐靠拢`;
   }
-  return `俯仰 θ = ${pitchDeg.toFixed(0)}°：三轴正交，滚转与偏航各自独立`;
+  return `俯仰 θ = ${pitchDeg.toFixed(0)}°：三轴正交，横滚与偏航各自独立`;
 }

@@ -43,7 +43,7 @@ export function qIntegrate(q: Quat, omega: V3, dt: number): Quat {
   return qNorm({ w: q.w + d.w, x: q.x + d.x, y: q.y + d.y, z: q.z + d.z });
 }
 
-/** 欧拉角（ZYX：偏航 ψ 绕 z、俯仰 θ 绕 y、滚转 φ 绕 x，NED 航空约定）→ 四元数，单位弧度 */
+/** 欧拉角（ZYX：偏航 ψ 绕 z、俯仰 θ 绕 y、横滚 φ 绕 x，NED 航空约定）→ 四元数，单位弧度 */
 export function qFromEuler(roll: number, pitch: number, yaw: number): Quat {
   const cr = Math.cos(roll / 2), sr = Math.sin(roll / 2);
   const cp = Math.cos(pitch / 2), sp = Math.sin(pitch / 2);
