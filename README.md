@@ -4,8 +4,10 @@
 
 ## 在线演示
 
-> 每次推送到 `master` 自动部署（GitHub Actions → Cloudflare Workers）：
-> **https://quaternion-attitude-demo.liu06167492.workers.dev**
+> **https://fly_web.070616.xyz**（自定义域名）
+> 备用：https://quaternion-attitude-demo.liu06167492.workers.dev
+>
+> 每次推送到 `master` 自动构建并部署（GitHub Actions → 类型检查 → 37 项自检 → Cloudflare Workers）。
 
 ## 功能特性
 
