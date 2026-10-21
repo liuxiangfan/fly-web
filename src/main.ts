@@ -12,20 +12,9 @@ import {
   type Estimator,
 } from "./estimators";
 import { DEG, qAngleBetween, qToEuler, RAD } from "./core/quat";
-import { gimbalDemo, gimbalInnerQuat } from "./core/gimbal";
-import {
-  applyModeDom,
-  applyViewDom,
-  estimatorMask,
-  loadMode,
-  narrateAttitude,
-  narrateGimbal,
-  resolveScenario,
-  resolveSource,
-  saveMode,
-  type UiMode,
-  type UiView,
-} from "./ui/mode";
+import { gimbalDemo, gimbalInnerQuat, toDisplayVec } from "./core/gimbal";
+import * as THREE from "three";
+import { applyViewDom, narrateGimbal, type UiView } from "./ui/mode";
 
 const H = 1 / 500; // 仿真/解算步长
 const LOG_DT = 0.04; // 曲线记录间隔
@@ -73,8 +62,6 @@ const state = {
   attVisible: [true, true, true, true, true],
   errVisible: [true, true, true, true],
   lastImu: null as ImuSample | null,
-  /** 界面模式：精简/完整，持久化在 localStorage（默认精简） */
-  mode: loadMode() as UiMode,
   /** 视图：四轴姿态 / 万向节锁（不持久化，每次从四轴姿态开始） */
   view: "attitude" as UiView,
 };
@@ -83,7 +70,6 @@ const state = {
 const sceneHandles = createScene($("viewport"));
 
 // ---------- 图表 ----------
-// RollingChart 的曲线系列在构造时固定，精简模式不重建结构，只用可见性掩码隐藏
 const truthSeries = { label: "真实", color: "#e6edf3" };
 const estSeries = ests.map((e) => ({ label: e.label, color: e.color }));
 const attChart = new RollingChart($("att-canvas"), [truthSeries, ...estSeries], { windowSec: CHART_WINDOW });
@@ -189,8 +175,6 @@ function buildLegend(
   return { vals, chips };
 }
 
-const EST_IDS = ests.map((e) => e.id);
-
 const attLegend = buildLegend(
   $("att-legend"),
   [truthSeries, ...ests.map((e) => ({ id: e.id, label: e.label, color: e.color }))],
@@ -204,15 +188,12 @@ const errLegend = buildLegend(
   () => applyVisibility(),
 );
 
-/** 用户勾选 × 模式掩码 → 图表实际可见性；同时同步图例芯片的置灰状态 */
+/** 用户勾选 → 图表可见性；同时同步图例芯片的置灰状态 */
 function applyVisibility(): void {
-  const modeMask = estimatorMask(state.mode, EST_IDS);
-  const attMask = [state.attVisible[0], ...EST_IDS.map((_, i) => state.attVisible[i + 1] && modeMask[i])];
-  const errMask = EST_IDS.map((_, i) => state.errVisible[i] && modeMask[i]);
-  attChart.setVisible(attMask);
-  errChart.setVisible(errMask);
-  attLegend.chips.forEach((c, i) => c.classList.toggle("off", !attMask[i]));
-  errLegend.chips.forEach((c, i) => c.classList.toggle("off", !errMask[i]));
+  attChart.setVisible(state.attVisible);
+  errChart.setVisible(state.errVisible);
+  attLegend.chips.forEach((c, i) => c.classList.toggle("off", !state.attVisible[i]));
+  errLegend.chips.forEach((c, i) => c.classList.toggle("off", !state.errVisible[i]));
 }
 
 // ---------- 控件 ----------
@@ -518,31 +499,6 @@ function syncSeg(containerId: string, dataKey: string, active: string): void {
     .forEach((b) => b.classList.toggle("active", b.dataset[dataKey] === active));
 }
 
-/** 应用精简/完整模式：写 body 属性、收敛不允许的选择、刷新曲线可见性 */
-function applyMode(mode: UiMode): void {
-  state.mode = mode;
-  saveMode(mode);
-  applyModeDom(mode);
-
-  const src = resolveSource(state.source, mode);
-  if (src !== state.source) {
-    state.source = src as typeof state.source;
-    sourceSelect.value = src;
-    updateSourceChip();
-  }
-
-  const sc = resolveScenario(scenarioSelect.value, mode);
-  if (sc !== scenarioSelect.value) {
-    scenarioSelect.value = sc;
-    world.setScenario(sc);
-    $("manual-group").classList.toggle("hidden", sc !== "manual");
-    resetSim();
-  }
-
-  applyVisibility();
-  syncSeg("mode-seg", "mode", mode);
-}
-
 /** 应用视图：显隐模型与面板、重置相机取景 */
 function applyView(view: UiView): void {
   state.view = view;
@@ -552,26 +508,22 @@ function applyView(view: UiView): void {
   if (view === "gimbal") updateGimbalUi();
 }
 
-$("mode-seg")
-  .querySelectorAll<HTMLButtonElement>(".seg-btn")
-  .forEach((btn) => btn.addEventListener("click", () => applyMode(btn.dataset.mode as UiMode)));
 $("view-seg")
   .querySelectorAll<HTMLButtonElement>(".seg-btn")
   .forEach((btn) => btn.addEventListener("click", () => applyView(btn.dataset.view as UiView)));
 
 scenarioSelect.addEventListener("change", () => {
-  const id = resolveScenario(scenarioSelect.value, state.mode);
-  scenarioSelect.value = id;
-  world.setScenario(id);
-  $("manual-group").classList.toggle("hidden", id !== "manual");
+  world.setScenario(scenarioSelect.value);
+  $("manual-group").classList.toggle("hidden", scenarioSelect.value !== "manual");
   resetSim();
 });
 
 sourceSelect.addEventListener("change", () => {
-  const v = resolveSource(sourceSelect.value, state.mode);
-  sourceSelect.value = v;
-  state.source = v as typeof state.source;
+  state.source = sourceSelect.value as typeof state.source;
   updateSourceChip();
+  // 内部量跟随显示源：切到真实姿态时箭头隐藏（updateTelemetry 会在下一帧收敛）
+  if (telState.visible) setTelemetryVisible(true);
+  updateGravityLegend();
 });
 
 $("ghost-toggle").addEventListener("change", () => {
@@ -643,11 +595,133 @@ function updateLegendValues(): void {
   });
 }
 
-/** 精简模式解说栏：把数字换成一句中文（仅在四轴姿态视图显示） */
-function updateNarrator(): void {
-  if (state.mode !== "basic" || state.view !== "attitude") return;
-  const err = errChart.latest(); // [pure, comp, mahony, madg]
-  $("narrator").textContent = narrateAttitude(err[0], err[2]);
+// ---------- 玻璃盒：算法内部量 ----------
+const telState = {
+  visible: false,
+  /**
+   * 受扰/失效提示的黏性：剧烈机动的受扰是间歇性的（受扰帧与正常帧交替），
+   * 若状态行跟着单帧抖动，用户几乎看不到提示。这里让提示一旦触发就保持
+   * holdSec 秒，期间即使回到正常帧也继续显示（并注明已恢复）。
+   */
+  disturbedUntil: 0,
+  lastFailed: false,
+};
+const TEL_HOLD_SEC = 1.5;
+
+/** 当前显示源对应的估计器；真实姿态没有解算过程，返回 null */
+function activeEstimator(): (typeof ests)[number] | null {
+  return state.source === "truth" ? null : ests.find((e) => e.id === state.source)!;
+}
+
+function setTelemetryVisible(on: boolean): void {
+  telState.visible = on;
+  document.body.dataset.telemetry = on ? "on" : "off";
+  // 真实姿态没有内部量：即使开关打开也不显示 3D 箭头
+  const est = activeEstimator();
+  sceneHandles.gravityArrows.group.visible = on && est !== null && state.view === "attitude";
+  updateGravityLegend();
+}
+
+/** 图例文字随显示源变化：真实姿态没有解算过程，说明而不是展示箭头 */
+function updateGravityLegend(): void {
+  const legend = $("gravity-legend");
+  if (state.source === "truth") {
+    legend.innerHTML = `<span class="lg-item dim">真实姿态没有解算过程——切换显示源后，这里会说明两根箭头的含义</span>`;
+    return;
+  }
+  legend.innerHTML =
+    `<span class="lg-item"><span class="lg-dot" style="background:#f1f5f9"></span>预测的「下」（当前估计姿态）</span>` +
+    `<span class="lg-item"><span class="lg-dot" style="background:#e879f9"></span>实测的「下」（加速度计）</span>`;
+}
+
+$("telemetry-toggle").addEventListener("change", () => {
+  setTelemetryVisible(($("telemetry-toggle") as HTMLInputElement).checked);
+});
+
+const fmtDps = (v: [number, number, number]): string =>
+  v.map((a) => fmtSigned(a * DEG, 1)).join("  ");
+
+/** 算法专属行：互补看两路信源，Mahony 看 P/I 分工，Madgwick 看残差 */
+function detailRows(est: (typeof ests)[number]): string {
+  const d = est.telemetry.detail;
+  switch (est.id) {
+    case "comp": {
+      const w = d.accelWeight ?? 0;
+      return `<div class="tel-line"><span class="dim">本帧加计权重</span><span>${(w * 100).toFixed(1)}%</span></div>` +
+        `<div class="tel-line"><span class="dim">加计倾角 φ/θ</span><span>${fmtSigned(d.rollAccDeg ?? 0)}° ${fmtSigned(d.pitchAccDeg ?? 0)}°</span></div>`;
+    }
+    case "mahony": {
+      const p = d.pShare ?? 0;
+      return `<div class="tel-bar"><span class="dim">Kp 比例 ${(p * 100).toFixed(0)}%</span>` +
+        `<span class="bar"><span class="bar-p" style="width:${(p * 100).toFixed(0)}%"></span>` +
+        `<span class="bar-i" style="width:${((1 - p) * 100).toFixed(0)}%"></span></span>` +
+        `<span class="dim">Ki 积分 ${((1 - p) * 100).toFixed(0)}%</span></div>` +
+        `<div class="tel-line"><span class="dim">∫e 用量</span><span>${((d.iUsage ?? 0) * 100).toFixed(0)}%</span></div>`;
+    }
+    case "madg":
+      return `<div class="tel-line"><span class="dim">目标残差 ‖f‖</span><span>${(d.residual ?? 0).toFixed(3)}</span></div>` +
+        `<div class="tel-line"><span class="dim">梯度步长</span><span>${((d.stepNorm ?? 0) * 1e3).toFixed(2)} m°/s⁻¹</span></div>`;
+    default:
+      return "";
+  }
+}
+
+/** 内部读数块 + 3D 双箭头（每 0.1s 刷新一次） */
+function updateTelemetry(): void {
+  const est = activeEstimator();
+  const arrows = sceneHandles.gravityArrows;
+  arrows.group.visible = telState.visible && est !== null && state.view === "attitude";
+  if (!telState.visible || !est) return;
+
+  const t = est.telemetry;
+  // 3D 箭头方向：机体系向量经 toDisplayVec 翻转到显示约定，归一化后由 ArrowHelper 定向
+  const setDir = (arrow: THREE.ArrowHelper, v: [number, number, number], active: boolean) => {
+    const len = Math.hypot(v[0], v[1], v[2]);
+    arrow.visible = active && len > 1e-6;
+    if (active && len > 1e-6) {
+      arrow.setDirection(new THREE.Vector3(v[0] / len, v[1] / len, v[2] / len));
+    }
+  };
+  setDir(arrows.predicted, toDisplayVec(t.predictedGravity), true);
+  setDir(arrows.measured, toDisplayVec(t.measuredGravity), t.accelValid);
+
+  // 受扰状态：实测箭头降饱和；提示带黏性（见 telState 注释）
+  const disturbed = !t.accelValid && t.accelNorm > 0.1 * 9.80665;
+  const failed = t.accelNorm <= 0.1 * 9.80665;
+  arrows.measured.setColor(new THREE.Color(disturbed || failed ? 0x8b5a92 : 0xe879f9));
+
+  const now = performance.now() / 1000;
+  if (disturbed || failed) telState.disturbedUntil = now + TEL_HOLD_SEC;
+  telState.lastFailed = failed;
+  const inHold = now < telState.disturbedUntil;
+
+  // 面板读数
+  const st = $("tel-status");
+  if (est.id === "pure") {
+    st.textContent = "无修正项——预测与实测的偏差只增不减";
+    st.classList.remove("warn");
+  } else if (failed) {
+    st.textContent = "加计失效（近似自由落体）：已忽略实测方向";
+    st.classList.add("warn");
+  } else if (disturbed) {
+    st.textContent = "加计受扰中（‖a‖ 偏离 g 超过 35%）：实测方向不可信";
+    st.classList.add("warn");
+  } else if (inHold) {
+    st.textContent = "加计刚从受扰中恢复——机动时加计会被线加速度污染";
+    st.classList.add("warn");
+  } else {
+    st.textContent = "";
+    st.classList.remove("warn");
+  }
+
+  $("tel-rawgyro").textContent = `${fmtDps(t.rawGyro)} °/s`;
+  const corrMag = Math.hypot(t.correction[0], t.correction[1], t.correction[2]) * DEG;
+  $("tel-correction").textContent =
+    est.id === "pure" ? "0（无修正）" : `${fmtDps(t.correction)} °/s（|Δ| ${corrMag.toFixed(1)}）`;
+
+  $("tel-detail").innerHTML = detailRows(est);
+  const ae = t.detail.alignErrorDeg;
+  $("tel-alignerr").textContent = Number.isFinite(ae) ? `${ae.toFixed(2)}°` : "—";
 }
 
 // ---------- 主循环 ----------
@@ -722,7 +796,7 @@ function frame(): void {
     updateReadouts();
     updateLegendValues();
     updateGimbalUi();
-    updateNarrator();
+    updateTelemetry();
     attChart.render();
     errChart.render();
   }
@@ -732,4 +806,5 @@ function frame(): void {
 updateSourceChip();
 setGimbalAngles(0, 0, 0);
 applyView("attitude"); // 视图不持久化，始终从四轴姿态视图开始
-applyMode(state.mode); // 模式读取自 localStorage（默认精简）
+setTelemetryVisible(false); // 玻璃盒默认关闭，写 body[data-telemetry] 供 CSS 使用
+updateGravityLegend();

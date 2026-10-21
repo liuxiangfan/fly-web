@@ -25,7 +25,7 @@
 
 ### 通用
 
-- **精简 / 完整**双模式:精简模式隐藏高级参数与机动,适合课堂演示入门
+- **玻璃盒（算法内部可视化）**:可开关。3D 中以双箭头展示"算法预测的重力方向"(白)与"加计实测的重力方向"(品红)——收敛时重合,纯积分时白箭头持续转偏(漂移的直观形态);面板同步显示陀螺输入与修正量、Mahony 的 Kp/Ki 占比条、Madgwick 的梯度残差;剧烈机动导致加计受扰时会自动降饱和并给出提示
 - 暂停 / 重置、视图拖拽旋转与滚轮缩放
 - 纯前端、零后端、零密钥,所有计算在浏览器本地完成
 
@@ -62,7 +62,7 @@ npm run check     # 数值自测 + 场景自检(selftest + scenecheck)
 │   │   ├── gimbal.ts       # 万向节锁运动学
 │   │   └── rng.ts          # 可复现随机数
 │   ├── estimators/
-│   │   └── index.ts        # 纯积分 / 互补 / Mahony / Madgwick 四种解算器
+│   │   └── index.ts        # 纯积分 / 互补 / Mahony / Madgwick 四种解算器(含内部量遥测)
 │   ├── scene/
 │   │   ├── quad.ts         # 四轴飞行器模型
 │   │   ├── gimbal.ts       # 平衡环架模型
@@ -70,7 +70,7 @@ npm run check     # 数值自测 + 场景自检(selftest + scenecheck)
 │   │   └── setup.ts        # 场景 / 灯光 / 相机初始化
 │   └── ui/
 │       ├── chart.ts        # 手写 Canvas 姿态与误差曲线
-│       └── mode.ts         # 精简 / 完整模式切换
+│       └── mode.ts         # 视图(四轴姿态 / 万向节锁)状态与文案
 ├── scripts/
 │   ├── selftest.ts         # 解算算法数值自测
 │   ├── scenecheck.ts       # 场景装配自检

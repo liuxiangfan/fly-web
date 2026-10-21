@@ -22,15 +22,7 @@ import {
   gimbalLocked,
   toDisplayQ,
 } from "../src/core/gimbal";
-import {
-  estimatorMask,
-  loadMode,
-  resolveScenario,
-  resolveSource,
-  saveMode,
-  type KvStore,
-  type UiMode,
-} from "../src/ui/mode";
+import { narrateGimbal } from "../src/ui/mode";
 
 const H = 1 / 500;
 let failures = 0;
@@ -329,51 +321,6 @@ const dirty: ImuParams = { gyroBiasDps: 1, gyroNoiseDps: 0.2, accelNoise: 0.15, 
   );
 }
 
-// 11. 精简模式策略：不允许的选项收敛，曲线掩码只留纯积分与 Mahony
-{
-  const ids = ["pure", "comp", "mahony", "madg"];
-  const basicMask = estimatorMask("basic", ids);
-  const fullMask = estimatorMask("full", ids);
-  const srcBasic = resolveSource("madg", "basic");
-  const srcFull = resolveSource("madg", "full");
-  const scBasic = resolveScenario("violent", "basic");
-  const scFull = resolveScenario("violent", "full");
-  const keep = resolveSource("pure", "basic");
-  check(
-    "精简模式收敛选项与掩码",
-    JSON.stringify(basicMask) === JSON.stringify([true, false, true, false]) &&
-      fullMask.every(Boolean) &&
-      srcBasic === "mahony" &&
-      srcFull === "madg" &&
-      scBasic === "hover" &&
-      scFull === "violent" &&
-      keep === "pure",
-    `掩码 basic=${JSON.stringify(basicMask)}；显示源 madg→${srcBasic}(basic)/${srcFull}(full)；机动 violent→${scBasic}(basic)/${scFull}(full)`,
-  );
-}
-
-// 12. 模式持久化：缺失/非法值回落 basic，写入 full 后读回 full
-{
-  const mem = new Map<string, string>();
-  const store: KvStore = {
-    getItem: (k) => mem.get(k) ?? null,
-    setItem: (k, v) => void mem.set(k, v),
-  };
-  const greedy: KvStore = { getItem: () => "垃圾值", setItem: () => {} };
-  const initial = loadMode(store);
-  saveMode("full", store);
-  const afterWrite = loadMode(store);
-  saveMode("basic", store);
-  const afterBasic = loadMode(store);
-  const garbage = loadMode(greedy);
-  const modes: UiMode[] = [initial, afterWrite, afterBasic, garbage];
-  check(
-    "模式持久化与非法值回落",
-    initial === "basic" && afterWrite === "full" && afterBasic === "basic" && garbage === "basic",
-    `空→${modes[0]}，写 full→${modes[1]}，写 basic→${modes[2]}，非法值→${modes[3]}`,
-  );
-}
-
 // 10d. 暂停语义：冻结时间轴后姿态必须完全不变，且解说不应跨相位跳变
 {
   const pauseAt = gimbalDemoPhaseEnd("locked") - 0.3; // 停在死锁相位末尾前
@@ -398,6 +345,56 @@ const dirty: ImuParams = { gyroBiasDps: 1, gyroNoiseDps: 0.2, accelNoise: 0.15, 
     maxDrift < 1e-12 && movedOn && held.pitch >= 89.999,
     `暂停点 t=${pauseAt.toFixed(2)}s 姿态 (φ=${held.roll.toFixed(1)}°,θ=${held.pitch.toFixed(1)}°,ψ=${held.yaw.toFixed(1)}°)；` +
       `冻结期间漂移 ${maxDrift.toExponential(1)}；继续 1.5s 后已推进=${movedOn}`,
+  );
+}
+
+// 13. 玻璃盒遥测：静态收敛后预测与实测重力方向必须对齐；互补的加计倾角必须等于真值
+{
+  const qTrue = qFromEuler(30 * RAD, 20 * RAD, 0);
+  const gauss = new Gauss(mulberry32(7));
+  const pure = new PureGyroEstimator();
+  const comp = new ComplementaryEstimator();
+  const mahony = new MahonyEstimator();
+  const madg = new MadgwickEstimator();
+  const ests = [pure, comp, mahony, madg];
+  // 纯积分从真值出发（它没有修正通道，只验证遥测数值本身）
+  pure.q = { ...qTrue };
+  for (let i = 0; i < Math.round(8 / H); i++) {
+    const s = simulateImu(qTrue, [0, 0, 0], i * H, clean, gauss, 1);
+    for (const e of ests) e.update(s.gyro, s.accel, H);
+  }
+  const errs = ests.map((e) => e.telemetry.detail.alignErrorDeg ?? NaN);
+  const alignOk = errs.every((v) => Number.isFinite(v) && v < 1.5);
+  // 互补的加计倾角（遥测）应与真值欧拉角一致（干净加计下就是真值）
+  const rollAccErr = Math.abs((comp.telemetry.detail.rollAccDeg ?? NaN) - 30);
+  const pitchAccErr = Math.abs((comp.telemetry.detail.pitchAccDeg ?? NaN) - 20);
+  // Mahony 的 P/I 占比在干净收敛后应为有限值且在 [0,1]
+  const pShare = mahony.telemetry.detail.pShare ?? NaN;
+  // 纯积分的修正量必须恒为 0
+  const pureCorrZero = pure.telemetry.correction.every((v) => v === 0);
+  // 所有估计器的 accelValid 都应为真（干净 IMU）
+  const allValid = ests.every((e) => e.telemetry.accelValid);
+  check(
+    "玻璃盒遥测：收敛后重力方向对齐",
+    alignOk && rollAccErr < 0.1 && pitchAccErr < 0.1 &&
+      Number.isFinite(pShare) && pShare >= 0 && pShare <= 1 && pureCorrZero && allValid,
+    `对齐差 pure/comp/mahony/madg = ${errs.map((v) => v.toFixed(3)).join("/")}°；` +
+      `互补加计倾角误差 φ=${rollAccErr.toExponential(1)}° θ=${pitchAccErr.toExponential(1)}°；` +
+      `Mahony P 占比 ${(pShare * 100).toFixed(0)}%；纯积分修正恒零=${pureCorrZero}；accelValid 全真=${allValid}`,
+  );
+}
+
+// 14. 万向节锁解说文案：锁定/接近/正常三个分支
+{
+  const locked = narrateGimbal(90, true);
+  const near = narrateGimbal(70, false);
+  const normal = narrateGimbal(20, false);
+  check(
+    "万向节锁解说文案分支",
+    locked.includes("重合") && locked.includes("2 个自由度") &&
+      near.includes("接近") && normal.includes("独立"),
+    `锁定含关键信息=${locked.includes("重合") && locked.includes("2 个自由度")}；` +
+      `接近含提示=${near.includes("接近")}；正常含独立=${normal.includes("独立")}`,
   );
 }
 

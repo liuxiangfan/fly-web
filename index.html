@@ -24,10 +24,6 @@
       <p class="subtitle">模拟 IMU · 解算算法实时对比 · 纯浏览器运行</p>
     </div>
     <div class="header-controls">
-      <div class="seg" id="mode-seg">
-        <button class="seg-btn active" data-mode="basic">精简</button>
-        <button class="seg-btn" data-mode="full">完整</button>
-      </div>
       <span class="mono dim" id="clock">t = 0.0 s</span>
       <button id="btn-pause" class="btn primary">暂停</button>
       <button id="btn-reset" class="btn">重置</button>
@@ -50,7 +46,10 @@
         <div class="ov-chip mono dim" id="readout-true">真实 φ +0.0° θ +0.0° ψ +0.0°</div>
         <div class="ov-chip mono dim imu" id="readout-imu">陀螺 [ +0.0, +0.0, +0.0 ] °/s<br />加计 [ +0.0, +0.0, +0.0 ] m/s²</div>
         <div class="ov-chip dim axes" id="readout-axes">机体轴：x 前 · y 右 · z 下（NED）</div>
-        <div class="ov-chip" id="narrator"></div>
+        <div class="ov-chip" id="gravity-legend">
+          <span class="lg-item"><span class="lg-dot" style="background:#f1f5f9"></span>预测的「下」（当前估计姿态）</span>
+          <span class="lg-item"><span class="lg-dot" style="background:#e879f9"></span>实测的「下」（加速度计）</span>
+        </div>
       </div>
 
       <div class="overlay" id="gimbal-overlay">
@@ -74,8 +73,8 @@
             <option value="manual">手动控制</option>
             <option value="roll360">横滚 360°</option>
             <option value="pitch">俯仰摆动</option>
-            <option value="composite" class="opt-adv">复合机动</option>
-            <option value="violent" class="opt-adv">剧烈机动</option>
+            <option value="composite">复合机动</option>
+            <option value="violent">剧烈机动</option>
           </select>
         </div>
         <div id="manual-group" class="sub-group hidden">
@@ -171,14 +170,35 @@
           <select id="source-select">
             <option value="truth">真实姿态</option>
             <option value="pure">纯陀螺积分</option>
-            <option value="comp" class="opt-adv">互补滤波</option>
+            <option value="comp">互补滤波</option>
             <option value="mahony" selected>Mahony</option>
-            <option value="madg" class="opt-adv">Madgwick</option>
+            <option value="madg">Madgwick</option>
           </select>
         </div>
         <div class="row check-row">
           <label><input type="checkbox" id="ghost-toggle" checked /> 显示真实姿态幻影（线框）</label>
         </div>
+        <div class="row check-row">
+          <label><input type="checkbox" id="telemetry-toggle" /> 显示算法内部量（玻璃盒）</label>
+        </div>
+      </section>
+
+      <section class="panel-section section-telemetry" id="telemetry-section">
+        <h2>算法内部（玻璃盒）</h2>
+        <div class="tel-status" id="tel-status"></div>
+        <div class="tel-block mono" id="tel-rate">
+          <div class="tel-label">角速度（°/s）</div>
+          <div class="tel-line"><span class="dim">陀螺</span><span id="tel-rawgyro">—</span></div>
+          <div class="tel-line tel-corr"><span class="dim">修正</span><span id="tel-correction">—</span></div>
+        </div>
+        <div class="tel-block mono" id="tel-detail"></div>
+        <div class="tel-block mono" id="tel-align">
+          <div class="tel-line"><span class="dim">重力对齐差</span><span id="tel-alignerr">—</span></div>
+        </div>
+        <p class="hint">
+          3D 视图中：白箭头 = 算法预测的「下」，品红箭头 = 加计实测的「下」。
+          收敛时两箭头重合；选纯陀螺积分可见白箭头缓慢转偏而品红不动——这就是漂移。
+        </p>
       </section>
 
       <section class="panel-section section-gimbal">
@@ -228,15 +248,15 @@
           <summary>陀螺仪为什么积分会漂移？</summary>
           <p>陀螺仪输出角速度，姿态由 q̇ = ½ q ⊗ ω 逐步积分得到。真实陀螺存在恒定零偏（bias）与噪声：零偏每秒都被积分进姿态，误差随时间线性累积。本页把「纯陀螺积分」算法的模型姿态切成显示源，即可看到它相对幻影缓缓转偏。</p>
         </details>
-        <details class="adv">
+        <details>
           <summary>加速度计能帮什么忙？</summary>
           <p>静止或匀速时，加速度计测量重力方向在机体系的投影，可独立解算横滚与俯仰（但看不出偏航，且机动时被线加速度污染）。融合的思路：高频信陀螺（动态好、会漂移），低频信加计（静态准、动态差），各取所长。</p>
         </details>
-        <details class="adv">
+        <details>
           <summary>三种融合算法的直觉</summary>
           <p><b>互补滤波</b>：陀螺积分结果与加计姿态角按比例混合，α 控制加计权重。<b>Mahony</b>：把加计方向与预测重力方向的叉积作为误差，经 P/I 反馈修正角速度，是飞控最常用的方案。<b>Madgwick</b>：把姿态估计视为优化问题，沿目标函数梯度下降修正，单参数 β 权衡跟随速度与噪声抑制。</p>
         </details>
-        <details class="adv">
+        <details>
           <summary>本页约定</summary>
           <p>世界系 NED（x 北、y 东、z 下），机体系前右下。<b>机体轴 x 前、y 右、z 下</b>，所以三维场景里 <b>z 箭头指向地面</b>（这与「z 向上」的直觉相反，但和四元数、加速度计读数完全一致）。四元数 q 为机体系→世界系。模拟加速度计静止时输出 +g 沿机体「下」方向。解算频率 500 Hz，曲线每 40 ms 记录一点。</p>
         </details>

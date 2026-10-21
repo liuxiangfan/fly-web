@@ -21,6 +21,12 @@ export interface SceneHandles {
   setView: (view: UiView, ghostEnabled: boolean) => void;
   /** 只同步模型显隐，不动相机（用于幻影开关等不该打断观察角度的场景） */
   syncVisibility: (view: UiView, ghostEnabled: boolean) => void;
+  /** 玻璃盒：挂在显示四轴上的两根重力方向箭头（白=预测、品红=实测） */
+  gravityArrows: {
+    group: THREE.Group;
+    predicted: THREE.ArrowHelper;
+    measured: THREE.ArrowHelper;
+  };
 }
 
 /** 两个视图各自的取景 */
@@ -94,6 +100,26 @@ export function createScene(container: HTMLElement): SceneHandles {
   ghost.group.position.y = 1.0;
   scene.add(ghost.group);
 
+  // 玻璃盒：两根重力方向箭头，挂在显示四轴上随机体一起转。
+  // 白色 = 算法预测的「下」（Rᵀ·ẑ）；品红 = 加计实测的「下」。
+  // 收敛时两箭头重合；纯积分时白箭头缓慢转偏、品红纹丝不动——漂移的直观形态。
+  // 长度取 0.34：比机体轴箭头（0.52）短，避免视觉混淆；起点略高于机身中心。
+  const arrowOrigin = new THREE.Vector3(0, 0.08, 0);
+  const predictedArrow = new THREE.ArrowHelper(
+    new THREE.Vector3(0, -1, 0), arrowOrigin, 0.34, 0xf1f5f9, 0.062, 0.04,
+  );
+  const measuredArrow = new THREE.ArrowHelper(
+    new THREE.Vector3(0, -1, 0), arrowOrigin, 0.34, 0xe879f9, 0.062, 0.04,
+  );
+  const gravityArrows = {
+    group: new THREE.Group(),
+    predicted: predictedArrow,
+    measured: measuredArrow,
+  };
+  gravityArrows.group.add(predictedArrow, measuredArrow);
+  gravityArrows.group.visible = false; // 默认关闭，由 UI 开关控制
+  quad.group.add(gravityArrows.group);
+
   // 万向节锁演示装置（默认隐藏，由 setView 控制）
   const gimbal = buildGimbal();
   gimbal.group.position.y = 1.15;
@@ -141,5 +167,8 @@ export function createScene(container: HTMLElement): SceneHandles {
   resize();
   new ResizeObserver(resize).observe(container);
 
-  return { renderer, scene, camera, controls, quad, ghost, gimbal, toDisplay, setView, syncVisibility };
+  return {
+    renderer, scene, camera, controls, quad, ghost, gimbal, gravityArrows,
+    toDisplay, setView, syncVisibility,
+  };
 }

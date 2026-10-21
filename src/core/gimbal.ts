@@ -32,6 +32,16 @@ export function toDisplayQ(qNed: Quat): Quat {
 }
 
 /**
+ * NED 机体系向量 → 显示坐标系向量（S·v，左乘基变换即可）。
+ * 用于把估计器遥测的重力方向画在 3D 模型上：箭头作为显示四轴的子节点，
+ * 模型姿态由场景图完成，这里只负责把「机体系方向」翻转到显示约定。
+ * S = 绕 X 轴 +90°：(x, y, z) → (x, −z, y)。
+ */
+export function toDisplayVec(v: [number, number, number]): [number, number, number] {
+  return [v[0], -v[2], v[1]];
+}
+
+/**
  * 万向环链条组合出的内环世界姿态（显示坐标系）。
  * 与 scene/gimbal.ts 里 yawGroup.rotation.y = −ψ、pitchGroup.rotation.z = θ、
  * rollGroup.rotation.x = φ 的三级父子关系严格对应。

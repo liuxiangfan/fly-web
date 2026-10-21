@@ -631,15 +631,32 @@ details b { color: var(--text); font-weight: 600; }
 }
 
 /* ==========================================================================
-   解说栏与坐标约定
+   坐标约定
    ========================================================================== */
-#narrator {
-  max-width: 480px;
-  line-height: 1.65;
-  border-left: 3px solid var(--accent);
-  box-shadow: 0 0 18px rgba(34, 211, 238, 0.1);
-}
 #readout-axes { border-left: 3px solid var(--border-strong); line-height: 1.5; }
+
+/* 重力箭头图例：默认隐藏，玻璃盒开启时显示（与 3D 箭头同步） */
+#gravity-legend {
+  display: none;
+  flex-direction: column;
+  gap: 3px;
+  border-left: 3px solid #e879f9;
+  line-height: 1.5;
+}
+body[data-telemetry="on"] #gravity-legend { display: flex; }
+#gravity-legend .lg-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+#gravity-legend .lg-dot {
+  width: 10px;
+  height: 3px;
+  border-radius: 2px;
+  flex: none;
+}
 
 /* ==========================================================================
    万向节锁面板
@@ -704,30 +721,85 @@ details b { color: var(--text); font-weight: 600; }
 }
 
 /* ==========================================================================
-   模式 / 视图 可见性（由 body[data-*] 驱动）
+   玻璃盒：算法内部读数块
+   ========================================================================== */
+.section-telemetry { display: none; }
+body[data-telemetry="on"] .section-telemetry { display: block; }
+
+.tel-status {
+  min-height: 18px;
+  margin-bottom: 8px;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--text-dim);
+}
+.tel-status.warn {
+  color: #ffc9c4;
+  padding: 4px 8px;
+  border: 1px solid var(--danger);
+  border-radius: var(--r-sm);
+  background: rgba(248, 81, 73, 0.14);
+}
+
+.tel-block {
+  padding: 7px 9px;
+  margin-bottom: 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-input);
+  font-size: 11px;
+  line-height: 1.8;
+}
+.tel-label {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-dim);
+  letter-spacing: 0.04em;
+  margin-bottom: 2px;
+}
+.tel-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: baseline;
+}
+.tel-line .dim { font-size: 10.5px; flex: none; }
+.tel-corr span:last-child { color: var(--accent); }
+
+/* Mahony P/I 占比条：蓝=比例，绿=积分（与两算法曲线色呼应） */
+.tel-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10.5px;
+}
+.tel-bar .bar {
+  flex: 1;
+  display: flex;
+  height: 8px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+}
+.tel-bar .bar-p { background: var(--c-mahony); }
+.tel-bar .bar-i { background: var(--c-madg); }
+
+/* ==========================================================================
+   视图可见性（由 body[data-view] 驱动）
    ========================================================================== */
 #gimbal-overlay,
 .section-gimbal,
-#narrator { display: none; }
+.section-telemetry { display: none; }
 
-body[data-mode="basic"] .section-imu,
-body[data-mode="basic"] .section-algo,
-body[data-mode="basic"] .ov-chip.quat,
-body[data-mode="basic"] .ov-chip.imu,
-body[data-mode="basic"] .ov-chip.axes,
-body[data-mode="basic"] .chart-block.att,
-body[data-mode="basic"] details.adv,
-body[data-mode="basic"] .legend-chip[data-est="comp"],
-body[data-mode="basic"] .legend-chip[data-est="madg"],
-body[data-mode="basic"] option.opt-adv { display: none; }
-
-body[data-mode="basic"] #charts { grid-template-columns: 1fr; }
-body[data-mode="basic"] #narrator { display: block; }
+body[data-telemetry="on"] .section-telemetry { display: block; }
 
 body[data-view="gimbal"] #readout-overlay,
 body[data-view="gimbal"] #charts,
 body[data-view="gimbal"] .section-scenario,
 body[data-view="gimbal"] .section-view,
+body[data-view="gimbal"] .section-telemetry,
 body[data-view="gimbal"] .section-imu,
 body[data-view="gimbal"] .section-algo,
 body[data-view="gimbal"] .section-principles { display: none; }
