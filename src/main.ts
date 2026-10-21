@@ -131,7 +131,7 @@ function rebuildAttChart(): void {
 
 // ---------- 图例 ----------
 interface LegendDef {
-  /** 估计器 id，用于精简模式下由 CSS 隐藏对应图例芯片 */
+  /** 估计器 id，图例芯片据此关联数据系列 */
   id?: string;
   label: string;
   color: string;
