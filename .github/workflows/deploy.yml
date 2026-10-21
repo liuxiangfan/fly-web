@@ -34,10 +34,15 @@ jobs:
       - name: Build
         run: npm run build
 
+      # 本项目是纯静态资产（wrangler.jsonc 只配 assets），需要 wrangler v4；
+      # wrangler-action@v3 默认安装的 v3.x 不认 assets-only 配置，故显式安装
+      - name: Install Wrangler v4
+        run: npm install --no-save wrangler@4
+
       - name: Deploy to Cloudflare Workers
-        # PROVIDER 选择：官方 wrangler-action 需要 CLOUDFLARE_API_TOKEN secret
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: deploy
+          wranglerVersion: 4
