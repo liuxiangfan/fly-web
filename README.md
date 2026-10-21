@@ -4,7 +4,8 @@
 
 ## 在线演示
 
-> 部署在 Cloudflare Workers 上:<!-- 替换为你的实际地址 -->`https://quaternion-attitude-demo.<你的子域>.workers.dev`
+> 每次推送到 `master` 自动部署（GitHub Actions → Cloudflare Workers）：
+> **https://quaternion-attitude-demo.liu06167492.workers.dev**
 
 ## 功能特性
 
