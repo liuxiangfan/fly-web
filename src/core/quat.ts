@@ -63,6 +63,38 @@ export function qFromAxisAngle(axis: V3, angle: number): Quat {
   return { w: Math.cos(h), x: axis[0] * s, y: axis[1] * s, z: axis[2] * s };
 }
 
+/**
+ * 四元数 → 轴角表示（qFromAxisAngle 的逆）。
+ * angle ∈ [0, π]；q 与 −q 返回完全相同的 axis/angle——
+ * 这是「双覆盖」的直接体现：两个四元数表示同一旋转，轴角表示却只有一个。
+ * 零旋转（虚部≈0）时 axis 返回 [1,0,0]、angle=0（轴无定义，任取单位轴）。
+ */
+export function qToAxisAngle(q: Quat): { axis: V3; angle: number } {
+  // 落到短路径：w ≥ 0（q 与 −q 中取 w 非负的那个），保证 angle ∈ [0, π]
+  const s = q.w < 0 ? -1 : 1;
+  const w = s * q.w;
+  const v: V3 = [s * q.x, s * q.y, s * q.z];
+  const angle = 2 * Math.acos(Math.min(1, w));
+  const vn = Math.hypot(v[0], v[1], v[2]);
+  if (vn < 1e-12) return { axis: [1, 0, 0], angle: 0 }; // 零旋转
+  return { axis: [v[0] / vn, v[1] / vn, v[2] / vn], angle };
+}
+
+/**
+ * 欧拉角分量线性插值（对照组）：qToEuler → 各分量 lerp → qFromEuler。
+ * 这是「直觉做法」——但路径穿过欧拉角空间而非旋转群，
+ * 在多轴复合旋转下明显偏离球面大圆（与 qSlerp 对比即教学点）。
+ */
+export function eulerLerp(a: Quat, b: Quat, t: number): Quat {
+  const ea = qToEuler(a);
+  const eb = qToEuler(b);
+  return qFromEuler(
+    ea.roll + (eb.roll - ea.roll) * t,
+    ea.pitch + (eb.pitch - ea.pitch) * t,
+    ea.yaw + (eb.yaw - ea.yaw) * t,
+  );
+}
+
 export interface Euler {
   roll: number;
   pitch: number;

@@ -658,6 +658,50 @@ body[data-telemetry="on"] #gravity-legend { display: flex; }
   flex: none;
 }
 
+/* 四元数视图图例：仅在 quat 视图显示 */
+#quat-legend {
+  display: none;
+  flex-direction: column;
+  gap: 3px;
+  border-left: 3px solid var(--accent);
+  line-height: 1.5;
+}
+body[data-view="quat"] #quat-legend { display: flex; }
+#quat-legend .lg-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+#quat-legend .lg-dot {
+  width: 10px;
+  height: 3px;
+  border-radius: 2px;
+  flex: none;
+}
+
+/* 磁航向图例：四轴姿态视图显示（显示源=真实姿态时由 JS 换引导文案） */
+#mag-legend {
+  display: none;
+  border-left: 3px solid #ffb454;
+  line-height: 1.5;
+}
+body[data-view="attitude"] #mag-legend { display: block; }
+#mag-legend .lg-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+#mag-legend .lg-dot {
+  width: 10px;
+  height: 3px;
+  border-radius: 2px;
+  flex: none;
+}
+
 /* ==========================================================================
    万向节锁面板
    ========================================================================== */
@@ -791,9 +835,14 @@ body[data-telemetry="on"] .section-telemetry { display: block; }
    ========================================================================== */
 #gimbal-overlay,
 .section-gimbal,
-.section-telemetry { display: none; }
+.section-telemetry,
+.section-quat,
+#quat-legend { display: none; }
 
 body[data-telemetry="on"] .section-telemetry { display: block; }
+
+body[data-view="quat"] #quat-legend { display: flex; }
+body[data-view="quat"] .section-quat { display: block; }
 
 body[data-view="gimbal"] #readout-overlay,
 body[data-view="gimbal"] #charts,
@@ -806,6 +855,18 @@ body[data-view="gimbal"] .section-principles { display: none; }
 
 body[data-view="gimbal"] .section-gimbal { display: block; }
 body[data-view="gimbal"] #gimbal-overlay { display: flex; }
+
+/* 四元数视图：与 gimbal 同款纯净策略——只留四元数面板 */
+body[data-view="quat"] #charts,
+body[data-view="quat"] .section-scenario,
+body[data-view="quat"] .section-view,
+body[data-view="quat"] .section-telemetry,
+body[data-view="quat"] .section-imu,
+body[data-view="quat"] .section-algo,
+body[data-view="quat"] .section-principles,
+body[data-view="quat"] #readout-overlay { display: none; }
+
+body[data-view="quat"] .section-quat { display: block; }
 
 /* ==========================================================================
    响应式

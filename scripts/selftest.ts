@@ -12,7 +12,19 @@ import {
   MahonyEstimator,
   PureGyroEstimator,
 } from "../src/estimators";
-import { DEG, RAD, qAngleBetween, qFromEuler, qId, qIntegrate, qToEuler } from "../src/core/quat";
+import {
+  DEG,
+  RAD,
+  eulerLerp,
+  qAngleBetween,
+  qFromAxisAngle,
+  qFromEuler,
+  qId,
+  qIntegrate,
+  qSlerp,
+  qToAxisAngle,
+  qToEuler,
+} from "../src/core/quat";
 import {
   GIMBAL_DEMO_DURATION,
   gimbalAxisAlign,
@@ -52,7 +64,7 @@ function runStatic(
   for (let i = 0; i < steps; i++) {
     const t = i * H;
     const s = simulateImu(qTrue, [0, 0, 0], t, params, gauss, 1);
-    for (const e of ests) e.update(s.gyro, s.accel, H);
+    for (const e of ests) e.update(s.gyro, s.accel, s.mag, H);
   }
   return ests.map((e) => {
     const eu = qToEuler(e.q);
@@ -64,8 +76,9 @@ function runStatic(
   });
 }
 
-const clean: ImuParams = { gyroBiasDps: 0, gyroNoiseDps: 0, accelNoise: 0, linAccel: 0, vibration: 0 };
-const dirty: ImuParams = { gyroBiasDps: 1, gyroNoiseDps: 0.2, accelNoise: 0.15, linAccel: 0.5, vibration: 0.3 };
+// 磁参数全零：守护既有噪声序列不变（磁采样不消耗随机数）
+const clean: ImuParams = { gyroBiasDps: 0, gyroNoiseDps: 0, accelNoise: 0, linAccel: 0, vibration: 0, magNoise: 0, hardIron: 0, disturbMag: 0 };
+const dirty: ImuParams = { gyroBiasDps: 1, gyroNoiseDps: 0.2, accelNoise: 0.15, linAccel: 0.5, vibration: 0.3, magNoise: 0, hardIron: 0, disturbMag: 0 };
 
 // 1. 欧拉角 ↔ 四元数 往返
 {
@@ -125,7 +138,7 @@ const dirty: ImuParams = { gyroBiasDps: 1, gyroNoiseDps: 0.2, accelNoise: 0.15, 
   };
   for (let i = 0; i < Math.round(6 / H); i++) {
     const s = world.step(H, dirty);
-    for (let k = 1; k < ests.length; k++) ests[k].update(s.gyro, s.accel, H);
+    for (let k = 1; k < ests.length; k++) ests[k].update(s.gyro, s.accel, s.mag, H);
     for (let k = 1; k < ests.length; k++) {
       const eu = qToEuler(ests[k].q);
       const tu = qToEuler(world.q);
@@ -361,7 +374,7 @@ const dirty: ImuParams = { gyroBiasDps: 1, gyroNoiseDps: 0.2, accelNoise: 0.15, 
   pure.q = { ...qTrue };
   for (let i = 0; i < Math.round(8 / H); i++) {
     const s = simulateImu(qTrue, [0, 0, 0], i * H, clean, gauss, 1);
-    for (const e of ests) e.update(s.gyro, s.accel, H);
+    for (const e of ests) e.update(s.gyro, s.accel, s.mag, H);
   }
   const errs = ests.map((e) => e.telemetry.detail.alignErrorDeg ?? NaN);
   const alignOk = errs.every((v) => Number.isFinite(v) && v < 1.5);
@@ -395,6 +408,161 @@ const dirty: ImuParams = { gyroBiasDps: 1, gyroNoiseDps: 0.2, accelNoise: 0.15, 
       near.includes("接近") && normal.includes("独立"),
     `锁定含关键信息=${locked.includes("重合") && locked.includes("2 个自由度")}；` +
       `接近含提示=${near.includes("接近")}；正常含独立=${normal.includes("独立")}`,
+  );
+}
+
+// 15. 轴角提取：零旋转、已知轴角、以及 q 与 −q 得到完全相同的结果（双覆盖核心断言）
+{
+  const zero = qToAxisAngle(qId());
+  const okZero = zero.angle < 1e-12 && Math.abs(zero.axis[0] - 1) < 1e-12;
+
+  // 绕 z 轴转 90°
+  const rotZ = qFromAxisAngle([0, 0, 1], Math.PI / 2);
+  const az = qToAxisAngle(rotZ);
+  const okZ =
+    Math.abs(az.angle - Math.PI / 2) < 1e-12 &&
+    Math.abs(az.axis[2] - 1) < 1e-12 &&
+    Math.abs(az.axis[0]) < 1e-12;
+
+  // 复合姿态：q 与 −q 必须给出同一 axis/angle
+  const q = qFromEuler(32 * RAD, -41 * RAD, 115 * RAD);
+  const qn = { w: -q.w, x: -q.x, y: -q.y, z: -q.z };
+  const a1 = qToAxisAngle(q);
+  const a2 = qToAxisAngle(qn);
+  const sameSelf =
+    Math.abs(a1.angle - a2.angle) < 1e-12 &&
+    Math.hypot(a1.axis[0] - a2.axis[0], a1.axis[1] - a2.axis[1], a1.axis[2] - a2.axis[2]) < 1e-12;
+  // 且由 axis/angle 重构回四元数后与原姿态一致（用 qAngleBetween 判等）
+  const rebuilt = qFromAxisAngle(a1.axis, a1.angle);
+  const roundTripErr = qAngleBetween(rebuilt, q) * DEG;
+  const roundTrip = roundTripErr < 1e-9;
+
+  check(
+    "轴角提取与 q/−q 双覆盖",
+    okZero && okZ && sameSelf && roundTrip,
+    `零旋转=${okZero}；绕z 90°=${okZ}；q 与 −q 同轴同角=${sameSelf}；轴角重构回位误差 ${roundTripErr.toFixed(12)}°`,
+  );
+}
+
+// 16. eulerLerp 端点正确，且与 qSlerp 在多轴复合旋转下路径有可观测差异
+{
+  const a = qFromEuler(10 * RAD, 0, 0);
+  const b = qFromEuler(50 * RAD, 0, 0);
+  const e0 = eulerLerp(a, b, 0);
+  const e1 = eulerLerp(a, b, 1);
+  const okEnd =
+    qAngleBetween(e0, a) * DEG < 1e-9 && qAngleBetween(e1, b) * DEG < 1e-9;
+
+  // 单轴时两者应几乎重合（欧拉插值在小旋转下逼近大圆）
+  const singleAxisDiff = qAngleBetween(eulerLerp(a, b, 0.5), qSlerp(a, b, 0.5)) * DEG;
+
+  // 多轴大旋转：构造 Slerp 与 Euler 明显分叉的姿态对
+  const c = qFromEuler(0 * RAD, 0, 0);
+  const d = qFromEuler(140 * RAD, 70 * RAD, 160 * RAD);
+  const multiDiff = qAngleBetween(eulerLerp(c, d, 0.5), qSlerp(c, d, 0.5)) * DEG;
+
+  check(
+    "欧拉插值端点正确且与 Slerp 有区分度",
+    okEnd && singleAxisDiff < 1 && multiDiff > 5,
+    `端点误差 <1e-9°=${okEnd}；单轴中点差 ${singleAxisDiff.toFixed(3)}°（应≈0）；` +
+      `多轴复合(140°,70°,160°)中点差 ${multiDiff.toFixed(2)}°（应 >5°，Slerp 走大圆、欧拉走扭曲线）`,
+  );
+}
+
+// 17. MARG 互补滤波：磁开 → 静态偏航收敛；磁关 → 偏航漂移（开关对比度是教学核心）
+{
+  // 静态倾斜 + 偏航 40° 真值，陀螺带 1°/s 零偏（会拖偏 yaw）
+  const qTrue = qFromEuler(15 * RAD, 25 * RAD, 40 * RAD);
+  const pWithMag: ImuParams = { ...dirty, magNoise: 0.8, hardIron: 0, disturbMag: 0 };
+
+  const run = (magEnabled: boolean, T: number) => {
+    const comp = new ComplementaryEstimator();
+    comp.magEnabled = magEnabled;
+    comp.alpha = 2; // 加快收敛便于短时测试
+    const g = new Gauss(mulberry32(magEnabled ? 7 : 8));
+    for (let i = 0; i < Math.round(T / H); i++) {
+      const s = simulateImu(qTrue, [0, 0, 0], i * H, pWithMag, g, 1);
+      comp.update(s.gyro, s.accel, s.mag, H);
+    }
+    return qToEuler(comp.q);
+  };
+
+  const on = run(true, 10);
+  const off = run(false, 10);
+  // 磁开：偏航收敛到 40° 附近（±5°）；磁关：偏航随陀螺漂移（>10° 误差）
+  const onErr = Math.abs(on.yaw - 40 * RAD) * DEG;
+  const offErr = Math.abs(off.yaw - 40 * RAD) * DEG;
+  check(
+    "MARG 互补：磁开收敛 / 磁关漂移",
+    onErr < 5 && offErr > 10,
+    `磁开 10s 偏航误差 ${onErr.toFixed(2)}°（应 <5°）；磁关 10s 偏航误差 ${offErr.toFixed(2)}°（应 >10°，陀螺零偏所致）`,
+  );
+}
+
+// 18. MARG Mahony：磁开 → 偏航收敛
+{
+  const qTrue = qFromEuler(15 * RAD, 25 * RAD, 40 * RAD);
+  const pWithMag: ImuParams = { ...dirty, magNoise: 0.8, hardIron: 0, disturbMag: 0 };
+  const mahony = new MahonyEstimator();
+  mahony.magEnabled = true;
+  mahony.kp = 2;
+  const g = new Gauss(mulberry32(11));
+  for (let i = 0; i < Math.round(12 / H); i++) {
+    const s = simulateImu(qTrue, [0, 0, 0], i * H, pWithMag, g, 1);
+    mahony.update(s.gyro, s.accel, s.mag, H);
+  }
+  const e = qToEuler(mahony.q);
+  const yawErr = Math.abs(e.yaw - 40 * RAD) * DEG;
+  check(
+    "MARG Mahony：磁开偏航收敛",
+    yawErr < 5,
+    `12s 偏航误差 ${yawErr.toFixed(2)}°（应 <5°）；磁航向读数 ${(mahony.telemetry.detail.yawMagDeg ?? NaN).toFixed(1)}°`,
+  );
+}
+
+// 19. MARG Madgwick（数值梯度）：磁开 → 偏航收敛
+{
+  const qTrue = qFromEuler(15 * RAD, 25 * RAD, 40 * RAD);
+  const pWithMag: ImuParams = { ...dirty, magNoise: 0.8, hardIron: 0, disturbMag: 0 };
+  const madg = new MadgwickEstimator();
+  madg.magEnabled = true;
+  madg.beta = 0.3;
+  const g = new Gauss(mulberry32(13));
+  for (let i = 0; i < Math.round(12 / H); i++) {
+    const s = simulateImu(qTrue, [0, 0, 0], i * H, pWithMag, g, 1);
+    madg.update(s.gyro, s.accel, s.mag, H);
+  }
+  const e = qToEuler(madg.q);
+  const yawErr = Math.abs(e.yaw - 40 * RAD) * DEG;
+  check(
+    "MARG Madgwick：磁开偏航收敛",
+    yawErr < 5,
+    `12s 偏航误差 ${yawErr.toFixed(2)}°（应 <5°）；磁航向读数 ${(madg.telemetry.detail.yawMagDeg ?? NaN).toFixed(1)}°`,
+  );
+}
+
+// 20. 磁干扰：硬铁+交变干扰下 MARG 偏航误差增大，但仍显著优于磁关
+{
+  const qTrue = qFromEuler(15 * RAD, 25 * RAD, 40 * RAD);
+  const pDisturbed: ImuParams = { ...dirty, magNoise: 0.8, hardIron: 0.5, disturbMag: 0.5 };
+
+  const run = (magEnabled: boolean) => {
+    const comp = new ComplementaryEstimator();
+    comp.magEnabled = magEnabled;
+    comp.alpha = 2;
+    const g = new Gauss(mulberry32(magEnabled ? 21 : 22));
+    for (let i = 0; i < Math.round(10 / H); i++) {
+      const s = simulateImu(qTrue, [0, 0, 0], i * H, pDisturbed, g, 1);
+      comp.update(s.gyro, s.accel, s.mag, H);
+    }
+    return Math.abs(qToEuler(comp.q).yaw - 40 * RAD) * DEG;
+  };
+  const onErr = run(true);
+  const offErr = run(false);
+  check(
+    "磁干扰下 MARG 退化但仍有价值",
+    onErr < offErr,
+    `干扰下：磁开偏航误差 ${onErr.toFixed(1)}° < 磁关 ${offErr.toFixed(1)}°（磁扰使精度下降但不至于失控，磁强计校准是实际工程课题）`,
   );
 }
 

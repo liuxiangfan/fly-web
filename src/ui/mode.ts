@@ -5,7 +5,7 @@
  * 只有 applyViewDom 会写 body 属性。视图显隐全部交给 CSS（body[data-view]）。
  */
 
-export type UiView = "attitude" | "gimbal";
+export type UiView = "attitude" | "gimbal" | "quat";
 
 /** 写 body[data-view] */
 export function applyViewDom(view: UiView, doc: Document = document): void {

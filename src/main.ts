@@ -1,5 +1,6 @@
 import "./style.css";
 import { createScene } from "./scene/setup";
+import { QUAT_POSE_PAIRS } from "./scene/quatview";
 import { RollingChart } from "./ui/chart";
 import { World } from "./core/world";
 import { scenarios } from "./core/scenarios";
@@ -11,7 +12,7 @@ import {
   PureGyroEstimator,
   type Estimator,
 } from "./estimators";
-import { DEG, qAngleBetween, qToEuler, RAD } from "./core/quat";
+import { DEG, qAngleBetween, qFromEuler, qSlerp, qToEuler, RAD } from "./core/quat";
 import { gimbalDemo, gimbalInnerQuat, toDisplayVec } from "./core/gimbal";
 import * as THREE from "three";
 import { applyViewDom, narrateGimbal, type UiView } from "./ui/mode";
@@ -53,6 +54,9 @@ const imuParams: ImuParams = {
   accelNoise: 0.1,
   linAccel: 1,
   vibration: 0.3,
+  magNoise: 0.8, // 磁力计默认开启（教学主线路径），带小噪声
+  hardIron: 0,
+  disturbMag: 0,
 };
 
 const state = {
@@ -308,10 +312,19 @@ bindSlider("imu-gyro-noise", (v) => (imuParams.gyroNoiseDps = v), (v) => `${v.to
 bindSlider("imu-accel-noise", (v) => (imuParams.accelNoise = v), (v) => `${v.toFixed(2)}m/s²`);
 bindSlider("imu-lin-accel", (v) => (imuParams.linAccel = v), (v) => `${v.toFixed(1)}m/s²`);
 bindSlider("imu-vibration", (v) => (imuParams.vibration = v), (v) => v.toFixed(2));
+bindSlider("imu-mag-noise", (v) => (imuParams.magNoise = v), (v) => `${v.toFixed(1)}μT`);
+bindSlider("imu-mag-disturb", (v) => (imuParams.disturbMag = v), (v) => v.toFixed(2));
 bindSlider("mahony-kp", (v) => (mahony.kp = v), (v) => v.toFixed(2));
 bindSlider("mahony-ki", (v) => (mahony.ki = v), (v) => v.toFixed(2));
 bindSlider("madg-beta", (v) => (madg.beta = v), (v) => v.toFixed(2));
 bindSlider("comp-alpha", (v) => (comp.alpha = v), (v) => v.toFixed(2));
+
+// 磁力计总开关：同时切换三个融合算法的 MARG 路径
+$("mag-enable").addEventListener("change", () => {
+  const on = ($("mag-enable") as HTMLInputElement).checked;
+  for (const e of ests) e.magEnabled = on;
+  updateMagLegend();
+});
 
 // ---------- 万向节锁演示（独立于主仿真） ----------
 const gimState = { yawDeg: 0, pitchDeg: 0, rollDeg: 0 };
@@ -416,6 +429,98 @@ $("btn-gim-reset").addEventListener("click", () => {
   $("gimbal-compare").textContent = "";
   $("gimbal-compare").classList.remove("warn", "ok");
 });
+
+// ---------- 四元数可视化视图（独立驱动，不影响主仿真） ----------
+const quatState = {
+  pairId: "combo" as string,
+  playing: false,
+  playT: 0,
+  /** 播放一圈的时长（秒） */
+  playDur: 6,
+};
+
+// 姿态对下拉（QUAT_POSE_PAIRS 动态填充）
+{
+  const sel = $<HTMLSelectElement>("quat-pair-select");
+  sel.innerHTML = "";
+  for (const p of QUAT_POSE_PAIRS) {
+    const opt = document.createElement("option");
+    opt.value = p.id;
+    opt.textContent = p.name;
+    sel.appendChild(opt);
+  }
+  sel.addEventListener("change", () => {
+    quatState.pairId = sel.value;
+    quatState.playing = false;
+    $("btn-quat-play").textContent = "播放插值";
+    const pair = QUAT_POSE_PAIRS.find((p) => p.id === sel.value)!;
+    quatSlider.set(0);
+    applyQuatInterpolation(pair, 0);
+  });
+}
+
+const quatSlider = bindSlider(
+  "quat-t",
+  (v) => {
+    const pair = QUAT_POSE_PAIRS.find((p) => p.id === quatState.pairId)!;
+    applyQuatInterpolation(pair, v);
+  },
+  (v) => v.toFixed(2),
+);
+
+function applyQuatInterpolation(pair: { from: [number, number, number]; to: [number, number, number] }, t: number): void {
+  sceneHandles.quatView.setInterpolation(pair.from, pair.to, t);
+  // q−q 组同步显示当前 t 处的姿态
+  const k = Math.PI / 180;
+  const cur = quatStateCurrentEulerDeg(pair, t);
+  sceneHandles.quatView.setNegation(cur[0] / k, cur[1] / k, cur[2] / k);
+  // 分量读数（w,x,y,z）
+  const q = qSlerp(
+    qFromEuler(pair.from[0] * k, pair.from[1] * k, pair.from[2] * k),
+    qFromEuler(pair.to[0] * k, pair.to[1] * k, pair.to[2] * k),
+    t,
+  );
+  $("quat-readout").textContent = `[${[q.w, q.x, q.y, q.z].map((a) => a.toFixed(3)).join(", ")}]`;
+}
+
+/** t 处的当前欧拉角（度）——Slerp 的欧拉表示，供 q−q 组使用 */
+function quatStateCurrentEulerDeg(
+  pair: { from: [number, number, number]; to: [number, number, number] },
+  t: number,
+): [number, number, number] {
+  const k = Math.PI / 180;
+  const q = qSlerp(
+    qFromEuler(pair.from[0] * k, pair.from[1] * k, pair.from[2] * k),
+    qFromEuler(pair.to[0] * k, pair.to[1] * k, pair.to[2] * k),
+    t,
+  );
+  const e = qToEuler(q);
+  return [e.roll / k, e.pitch / k, e.yaw / k];
+}
+
+$("btn-quat-play").addEventListener("click", () => {
+  quatState.playing = !quatState.playing;
+  if (quatState.playing) {
+    quatState.playT = quatSlider.get() >= 0.995 ? 0 : quatSlider.get();
+    $("btn-quat-play").textContent = "停止播放";
+  } else {
+    $("btn-quat-play").textContent = "播放插值";
+  }
+});
+
+$("quat-neg-toggle").addEventListener("change", () => {
+  sceneHandles.quatView.showNegation(($("quat-neg-toggle") as HTMLInputElement).checked);
+});
+
+/** 插值播放推进（独立于仿真暂停状态） */
+function stepQuatPlay(dt: number): void {
+  if (!quatState.playing) return;
+  quatState.playT += dt / quatState.playDur;
+  if (quatState.playT >= 1) {
+    quatState.playT = 0; // 循环播放
+  }
+  quatSlider.set(quatState.playT); // 内部会触发 apply 回调驱动 3D
+}
 
 /** 万向环读数、死锁警告、比对结果与高亮（每 0.1s 调一次） */
 function updateGimbalUi(): void {
@@ -634,6 +739,19 @@ function updateGravityLegend(): void {
     `<span class="lg-item"><span class="lg-dot" style="background:#e879f9"></span>实测的「下」（加速度计）</span>`;
 }
 
+/** 磁航向图例：说明琥珀箭头，随 MARG 开关换文案 */
+function updateMagLegend(): void {
+  const magOn = ($("mag-enable") as HTMLInputElement).checked;
+  const legend = $("mag-legend");
+  if (!magOn) {
+    legend.innerHTML =
+      `<span class="lg-item"><span class="lg-dot" style="background:#ffb454"></span>磁航向指示（MARG 已关：会随陀螺漂移偏离真北）</span>`;
+  } else {
+    legend.innerHTML =
+      `<span class="lg-item"><span class="lg-dot" style="background:#ffb454"></span>磁航向指示（MARG 开：被磁场约束，与罗盘箭头保持一致）</span>`;
+  }
+}
+
 $("telemetry-toggle").addEventListener("change", () => {
   setTelemetryVisible(($("telemetry-toggle") as HTMLInputElement).checked);
 });
@@ -641,14 +759,19 @@ $("telemetry-toggle").addEventListener("change", () => {
 const fmtDps = (v: [number, number, number]): string =>
   v.map((a) => fmtSigned(a * DEG, 1)).join("  ");
 
-/** 算法专属行：互补看两路信源，Mahony 看 P/I 分工，Madgwick 看残差 */
+/** 算法专属行：互补看两路信源，Mahony 看 P/I 分工，Madgwick 看残差；MARG 开时附磁航向 */
 function detailRows(est: (typeof ests)[number]): string {
   const d = est.telemetry.detail;
+  const magRow =
+    d.magEnabled === 1
+      ? `<div class="tel-line"><span class="dim">磁航向 ψₘ</span><span>${fmtSigned(d.yawMagDeg ?? 0)}°</span></div>`
+      : "";
   switch (est.id) {
     case "comp": {
       const w = d.accelWeight ?? 0;
       return `<div class="tel-line"><span class="dim">本帧加计权重</span><span>${(w * 100).toFixed(1)}%</span></div>` +
-        `<div class="tel-line"><span class="dim">加计倾角 φ/θ</span><span>${fmtSigned(d.rollAccDeg ?? 0)}° ${fmtSigned(d.pitchAccDeg ?? 0)}°</span></div>`;
+        `<div class="tel-line"><span class="dim">加计倾角 φ/θ</span><span>${fmtSigned(d.rollAccDeg ?? 0)}° ${fmtSigned(d.pitchAccDeg ?? 0)}°</span></div>` +
+        magRow;
     }
     case "mahony": {
       const p = d.pShare ?? 0;
@@ -656,11 +779,13 @@ function detailRows(est: (typeof ests)[number]): string {
         `<span class="bar"><span class="bar-p" style="width:${(p * 100).toFixed(0)}%"></span>` +
         `<span class="bar-i" style="width:${((1 - p) * 100).toFixed(0)}%"></span></span>` +
         `<span class="dim">Ki 积分 ${((1 - p) * 100).toFixed(0)}%</span></div>` +
-        `<div class="tel-line"><span class="dim">∫e 用量</span><span>${((d.iUsage ?? 0) * 100).toFixed(0)}%</span></div>`;
+        `<div class="tel-line"><span class="dim">∫e 用量</span><span>${((d.iUsage ?? 0) * 100).toFixed(0)}%</span></div>` +
+        magRow;
     }
     case "madg":
       return `<div class="tel-line"><span class="dim">目标残差 ‖f‖</span><span>${(d.residual ?? 0).toFixed(3)}</span></div>` +
-        `<div class="tel-line"><span class="dim">梯度步长</span><span>${((d.stepNorm ?? 0) * 1e3).toFixed(2)} m°/s⁻¹</span></div>`;
+        `<div class="tel-line"><span class="dim">梯度步长</span><span>${((d.stepNorm ?? 0) * 1e3).toFixed(2)} m°/s⁻¹</span></div>` +
+        magRow;
     default:
       return "";
   }
@@ -735,7 +860,7 @@ let fpsAcc = 0;
 function stepSim(): void {
   const sample = world.step(H, imuParams);
   state.lastImu = sample;
-  for (const e of ests) e.update(sample.gyro, sample.accel, H);
+  for (const e of ests) e.update(sample.gyro, sample.accel, sample.mag, H);
   logAcc += H;
   if (logAcc >= LOG_DT) {
     logAcc -= LOG_DT;
@@ -770,6 +895,7 @@ function frame(): void {
 
   // 万向节锁演示独立于仿真，暂停时也能演示
   stepDemo(dt);
+  stepQuatPlay(dt);
 
   if (state.playing) {
     simAcc += dt;
@@ -786,6 +912,17 @@ function frame(): void {
   const q = state.source === "truth" ? world.q : ests.find((e) => e.id === state.source)!.q;
   quad.group.quaternion.copy(toDisplay(q));
   ghost.group.quaternion.copy(toDisplay(world.q));
+
+  // 磁航向箭头：世界系水平箭头（挂 scene，不随机体姿态旋转），指向估计姿态
+  // 的机头方位在水平面上的投影。四轴姿态视图可见；显示真实姿态时隐藏（无解算）。
+  sceneHandles.headingArrow.visible = state.view === "attitude" && state.source !== "truth";
+  if (sceneHandles.headingArrow.visible) {
+    const eu = qToEuler(q);
+    // 显示坐标：北=+X、东=+Z、上=+Y；NED 偏航 ψ（绕 z 下正转）在显示系是绕 +Y 的 −ψ
+    sceneHandles.headingArrow.setDirection(
+      new THREE.Vector3(Math.cos(eu.yaw), 0, Math.sin(eu.yaw)),
+    );
+  }
 
   controls.update();
   renderer.render(sceneHandles.scene, sceneHandles.camera);
@@ -808,3 +945,4 @@ setGimbalAngles(0, 0, 0);
 applyView("attitude"); // 视图不持久化，始终从四轴姿态视图开始
 setTelemetryVisible(false); // 玻璃盒默认关闭，写 body[data-telemetry] 供 CSS 使用
 updateGravityLegend();
+updateMagLegend();

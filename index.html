@@ -36,6 +36,7 @@
         <div class="seg" id="view-seg">
           <button class="seg-btn active" data-view="attitude">四轴姿态</button>
           <button class="seg-btn" data-view="gimbal">万向节锁</button>
+          <button class="seg-btn" data-view="quat">四元数</button>
         </div>
       </div>
 
@@ -50,6 +51,12 @@
           <span class="lg-item"><span class="lg-dot" style="background:#f1f5f9"></span>预测的「下」（当前估计姿态）</span>
           <span class="lg-item"><span class="lg-dot" style="background:#e879f9"></span>实测的「下」（加速度计）</span>
         </div>
+        <div class="ov-chip" id="quat-legend">
+          <span class="lg-item"><span class="lg-dot" style="background:#f1f5f9"></span>Slerp 轨迹（旋转群大圆，理想路径）</span>
+          <span class="lg-item"><span class="lg-dot" style="background:#e879f9"></span>欧拉角插值轨迹（穿过欧拉空间，会扭）</span>
+          <span class="lg-item"><span class="lg-dot" style="background:#22d3ee"></span>当前插值姿态的旋转轴（轴角表示）</span>
+        </div>
+        <div class="ov-chip" id="mag-legend"></div>
       </div>
 
       <div class="overlay" id="gimbal-overlay">
@@ -131,11 +138,29 @@
           <input type="range" id="imu-vibration" min="0" max="1" step="0.05" value="0.3" />
           <input type="number" class="num-input" data-num="imu-vibration" step="any" />
           <input type="number" class="step-input" data-step="imu-vibration" min="0.0005" max="0.5" title="滑杆步距" />
+        </div>
+        <div class="sub-group">
+          <div class="slider-row with-inputs">
+            <label>磁力计噪声</label>
+            <input type="range" id="imu-mag-noise" min="0" max="5" step="0.1" value="0.8" />
+            <input type="number" class="num-input" data-num="imu-mag-noise" step="any" />
+            <input type="number" class="step-input" data-step="imu-mag-noise" min="0.01" max="2.5" title="滑杆步距" />
           </div>
+          <div class="slider-row with-inputs">
+            <label>磁干扰强度</label>
+            <input type="range" id="imu-mag-disturb" min="0" max="1" step="0.05" value="0" />
+            <input type="number" class="num-input" data-num="imu-mag-disturb" step="any" />
+            <input type="number" class="step-input" data-step="imu-mag-disturb" min="0.005" max="0.5" title="滑杆步距" />
+          </div>
+          <p class="hint">磁干扰模拟机身金属与电机通电磁场：MARG 偏航精度会下降（实际飞控需要磁强计校准）。</p>
+        </div>
       </section>
 
       <section class="panel-section section-algo">
         <h2>解算算法</h2>
+        <div class="row check-row mag-row">
+          <label><input type="checkbox" id="mag-enable" checked /> 启用磁力计（MARG，约束偏航）</label>
+        </div>
         <div class="slider-row with-inputs">
           <label>Mahony Kp</label>
           <input type="range" id="mahony-kp" min="0.05" max="5" step="0.05" value="1" />
@@ -201,6 +226,37 @@
         </p>
       </section>
 
+      <section class="panel-section section-quat">
+        <h2>四元数可视化</h2>
+        <div class="row">
+          <label for="quat-pair-select">姿态对</label>
+          <select id="quat-pair-select"></select>
+        </div>
+        <div class="slider-row with-inputs">
+          <label>插值进度 t</label>
+          <input type="range" id="quat-t" min="0" max="1" step="0.01" value="0" />
+          <input type="number" class="num-input" data-num="quat-t" step="any" />
+          <input type="number" class="step-input" data-step="quat-t" min="0.01" max="1" title="滑杆步距" />
+        </div>
+        <div class="row btn-row">
+          <button class="btn primary" id="btn-quat-play">播放插值</button>
+        </div>
+        <div class="row check-row">
+          <label><input type="checkbox" id="quat-neg-toggle" /> 演示 q 与 −q（同一旋转）</label>
+        </div>
+        <div class="row check-row quat-only-extra hidden">
+          <label>当前四元数分量 <span class="mono dim" id="quat-readout">—</span></label>
+        </div>
+        <p class="hint">
+          蓝色线框 = 起点姿态，橙色线框 = 终点姿态，实心四轴 = 当前插值位置。
+          白弧是 Slerp（始终走球面大圆），品红弧是欧拉角逐分量插值（穿过欧拉空间，多轴时会扭曲）。
+          青色箭头是当前姿态的旋转轴（轴角表示：绕它转多少度）。
+        </p>
+        <p class="hint">
+          勾选「q 与 −q」：两个四轴分别按 q 与 −q 摆放——它们表示同一个旋转，所以永远完全重合。
+        </p>
+      </section>
+
       <section class="panel-section section-gimbal">
         <h2>万向节锁演示</h2>
         <div class="slider-row with-inputs">
@@ -259,6 +315,18 @@
         <details>
           <summary>本页约定</summary>
           <p>世界系 NED（x 北、y 东、z 下），机体系前右下。<b>机体轴 x 前、y 右、z 下</b>，所以三维场景里 <b>z 箭头指向地面</b>（这与「z 向上」的直觉相反，但和四元数、加速度计读数完全一致）。四元数 q 为机体系→世界系。模拟加速度计静止时输出 +g 沿机体「下」方向。解算频率 500 Hz，曲线每 40 ms 记录一点。</p>
+        </details>
+        <details>
+          <summary>为什么 q 和 −q 是同一个旋转？</summary>
+          <p>把四元数 q = (w, x, y, z) 全部取负得到 −q，代回旋转公式 R(q)=R(−q)——旋转矩阵完全一样。几何直觉：绕轴 n 转角 θ，等价于绕 −n 转角 −θ，即 (n, θ) 与 (−n, −θ) 是同一件事，而 −q 正好编码了后者。代价是四元数有「双重覆盖」：4 个数对应 2 种符号表示。所以插值时若两个四元数点积为负，要先翻个符号再插（Slerp 的短路径处理），否则会绕远路。切到「四元数」视图勾选「q 与 −q」可以亲眼看到两个四轴永远重合。</p>
+        </details>
+        <details>
+          <summary>Slerp 为什么走大圆——欧拉插值的扭曲线</summary>
+          <p>姿态插值的「理想路径」是旋转群 SO(3) 上的测地线：绕一根固定的轴匀速转过去，机头上任意一点在空间画出大圆弧，这就是 Slerp。而欧拉角插值（三个角度各自线性变化）路径穿过欧拉角空间，两个角度同时变化时合成的旋转轴本身也在转——机头轨迹会扭曲、先慢后快再慢。单轴旋转时两者几乎重合；多轴复合旋转（试「姿态对」第一项）时品红弧明显偏离白弧，中点姿态差可达 50° 以上。这就是为什么相机动画、关键帧姿态过渡都应该用四元数插值。</p>
+        </details>
+        <details>
+          <summary>加计看不出偏航，磁力计来补——以及它怎么被干扰</summary>
+          <p>加速度计测量重力，重力与偏航无关，所以纯 IMU 解算的偏航只靠陀螺积分、会持续漂移（勾掉「启用磁力计」看误差图的偏航通道）。磁力计测地球磁场：水平分量给出「磁北」方向，经倾斜补偿后即可约束偏航——这就是 MARG（磁+角速度+重力）方案。但磁力计怕干扰：机身金属产生<b>硬铁偏移</b>、电机通电产生<b>交变磁场</b>，都会把偏航拉偏（拖「磁干扰强度」滑块观察）。实际飞控需要上电校准或自适应滤波来对抗。另注意：磁北≠真北（磁偏角），真实产品还要做 declination 修正。</p>
         </details>
       </section>
     </aside>

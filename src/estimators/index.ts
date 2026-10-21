@@ -1,5 +1,6 @@
 import type { Quat, V3 } from "../core/quat";
-import { qFromEuler, qId, qIntegrate, qNorm, qSlerp, qToEuler } from "../core/quat";
+import { qFromEuler, qId, qIntegrate, qNorm, qRotInv, qSlerp, qToEuler } from "../core/quat";
+import { MAG_WORLD_NED } from "../core/imu";
 
 /**
  * 估计器内部量（玻璃盒可视化用）。
@@ -21,6 +22,8 @@ export interface EstimatorTelemetry {
   accelNorm: number;
   /** 加计是否可信（‖a‖ 偏离 g 不超过 35%） */
   accelValid: boolean;
+  /** 磁力计是否可信（‖m‖ 偏离期望场强不超过 40%）；magEnabled=false 时恒 false */
+  magValid: boolean;
   /** 算法专属细节（互补：权重与两路倾角；Mahony：P/I 占比；Madgwick：残差），任意结构 */
   detail: Record<string, number>;
 }
@@ -35,6 +38,7 @@ export function emptyTelemetry(): EstimatorTelemetry {
     measuredGravity: [0, 0, 0],
     accelNorm: 0,
     accelValid: false,
+    magValid: false,
     detail: {},
   };
 }
@@ -46,8 +50,33 @@ export interface Estimator {
   q: Quat;
   /** 最近一帧 update() 填充的内部量（玻璃盒可视化只读） */
   telemetry: EstimatorTelemetry;
-  update(gyro: V3, accel: V3, dt: number): void;
+  /** magEnabled=true 时启用磁力计（MARG），偏航由磁场约束 */
+  magEnabled: boolean;
+  update(gyro: V3, accel: V3, mag: V3, dt: number): void;
   reset(): void;
+}
+
+/** 世界磁场参考模长（μT），用于磁力计可信度判定 */
+const MAG_REF = Math.hypot(MAG_WORLD_NED[0], MAG_WORLD_NED[1], MAG_WORLD_NED[2]);
+
+/**
+ * 倾斜补偿磁航向（弧度）：用加计给出的横滚/俯仰把机体系磁向量转到水平面，
+ * 再取水平分量的航向角。这是 MARG 补偏航的标准做法——磁力计只能约束偏航，
+ * 横滚/俯仰仍由加计提供。
+ */
+function tiltCompensatedYaw(roll: number, pitch: number, mx: number, my: number, mz: number): number {
+  const cr = Math.cos(roll), sr = Math.sin(roll);
+  const cp = Math.cos(pitch), sp = Math.sin(pitch);
+  // 把机体系磁向量经 R(roll)·R(pitch) 的逆变换转到水平系
+  const mxH = mx * cp + my * sr * sp + mz * cr * sp;
+  const myH = my * cr - mz * sr;
+  return Math.atan2(-myH, mxH); // NED 约定：北=0，东=+90°
+}
+
+/** 磁力计可信判定：‖m‖ 偏离参考场强不超过 40% */
+function magIsPlausible(m: V3): boolean {
+  const n = Math.hypot(m[0], m[1], m[2]);
+  return n > 1e-6 && Math.abs(n - MAG_REF) < 0.4 * MAG_REF;
 }
 
 const G = 9.80665;
@@ -73,7 +102,8 @@ export class PureGyroEstimator implements Estimator {
   color = "#f85149";
   q = qId();
   telemetry = emptyTelemetry();
-  update(gyro: V3, accel: V3, dt: number): void {
+  magEnabled = false;
+  update(gyro: V3, accel: V3, _mag: V3, dt: number): void {
     this.q = qIntegrate(this.q, gyro, dt);
     const { w, x, y, z } = this.q;
     // 遥测：correction 恒为零——这正是「漂移只增不减」的原因
@@ -86,6 +116,7 @@ export class PureGyroEstimator implements Estimator {
       measuredGravity: norm > 1e-6 ? [accel[0] / norm, accel[1] / norm, accel[2] / norm] : [0, 0, 0],
       accelNorm: norm,
       accelValid: Math.abs(norm - G) < 0.35 * G,
+      magValid: false, // 纯积分无修正通道，磁力计对它无意义
       detail: { alignErrorDeg: angleBetweenDeg(this.telemetry.predictedGravity, this.telemetry.measuredGravity) },
     };
   }
@@ -103,7 +134,8 @@ export class ComplementaryEstimator implements Estimator {
   q = qId();
   alpha = 1; // 加计融合速率（1/s）
   telemetry = emptyTelemetry();
-  update(gyro: V3, accel: V3, dt: number): void {
+  magEnabled = false;
+  update(gyro: V3, accel: V3, mag: V3, dt: number): void {
     const qGyro = qIntegrate(this.q, gyro, dt);
     const norm = Math.hypot(accel[0], accel[1], accel[2]);
     if (norm < 1e-6) {
@@ -122,7 +154,17 @@ export class ComplementaryEstimator implements Estimator {
     const ax = accel[0] / norm, ay = accel[1] / norm, az = accel[2] / norm;
     const rollAcc = Math.atan2(ay, az);
     const pitchAcc = Math.atan2(-ax, Math.hypot(ay, az));
-    const { yaw } = qToEuler(qGyro); // 偏航沿用陀螺（加计看不出偏航）
+    // 偏航来源：IMU 模式沿用陀螺（加计看不出偏航）；MARG 模式用倾斜补偿磁航向
+    let yaw: number;
+    let yawMag: number | undefined;
+    const magOk = this.magEnabled && magIsPlausible(mag);
+    if (magOk) {
+      const eAcc = qToEuler(qGyro); // 倾斜补偿用陀螺短时姿态（扰动最小）
+      yawMag = tiltCompensatedYaw(eAcc.roll, eAcc.pitch, mag[0], mag[1], mag[2]);
+      yaw = yawMag;
+    } else {
+      yaw = qToEuler(qGyro).yaw;
+    }
     const qAcc = qFromEuler(rollAcc, pitchAcc, yaw);
     const wAcc = 1 - Math.exp(-this.alpha * dt);
     this.q = qSlerp(qGyro, qAcc, wAcc);
@@ -132,17 +174,25 @@ export class ComplementaryEstimator implements Estimator {
     this.telemetry = {
       rate: [gyro[0], gyro[1], gyro[2]],
       rawGyro: [gyro[0], gyro[1], gyro[2]],
-      // 互补没有显式角速度修正，用「本帧姿态被加计拉动的角度 / dt」作为等效修正量
-      correction: [wAcc * (rollAcc - euGyro.roll) / dt, wAcc * (pitchAcc - euGyro.pitch) / dt, 0],
+      // 互补没有显式角速度修正，用「本帧姿态被加计/磁拉动的角度 / dt」作为等效修正量
+      correction: [
+        wAcc * (rollAcc - euGyro.roll) / dt,
+        wAcc * (pitchAcc - euGyro.pitch) / dt,
+        yawMag !== undefined ? wAcc * (yaw - euGyro.yaw) / dt : 0,
+      ],
       predictedGravity: [2 * (x * z - w * y), 2 * (w * x + y * z), 1 - 2 * x * x - 2 * y * y],
       measuredGravity: [ax, ay, az],
       accelNorm: norm,
       accelValid: Math.abs(norm - G) < 0.35 * G,
+      magValid: magOk,
       detail: {
         accelWeight: wAcc,
         rollAccDeg: rollAcc * (180 / Math.PI),
         pitchAccDeg: pitchAcc * (180 / Math.PI),
         alignErrorDeg: angleBetweenDeg(this.telemetry.predictedGravity, [ax, ay, az]),
+        ...(yawMag !== undefined
+          ? { yawMagDeg: yawMag * (180 / Math.PI), magEnabled: 1 }
+          : { magEnabled: 0 }),
       },
     };
   }
@@ -162,7 +212,8 @@ export class MahonyEstimator implements Estimator {
   ki = 0.05;
   private eInt: V3 = [0, 0, 0];
   telemetry = emptyTelemetry();
-  update(gyro: V3, accel: V3, dt: number): void {
+  magEnabled = false;
+  update(gyro: V3, accel: V3, mag: V3, dt: number): void {
     const { w, x, y, z } = this.q;
     const norm = Math.hypot(accel[0], accel[1], accel[2]);
     let omega: V3 = [gyro[0], gyro[1], gyro[2]];
@@ -171,13 +222,30 @@ export class MahonyEstimator implements Estimator {
     let pTerm: V3 = [0, 0, 0];
     let iTerm: V3 = [0, 0, 0];
     let iUsage = 0;
+    let magOk = false;
+    let yawMagDeg = NaN;
     if (norm > 1e-6) {
       const ax = measured[0], ay = measured[1], az = measured[2];
       const vx = predicted[0], vy = predicted[1], vz = predicted[2];
       // 误差 = 实测 × 预测（叉积）
       const ex = ay * vz - az * vy;
       const ey = az * vx - ax * vz;
-      const ez = ax * vy - ay * vx;
+      let ez = ax * vy - ay * vx;
+
+      // MARG：磁场误差只约束偏航——误差 = (m × m_pred) 的 z 分量并入 ez。
+      // m_pred = Rᵀ(q)·M_WORLD：当前姿态认为世界磁场在机体系的投影。
+      // 磁场水平分量只携带航向信息，故不往 ex/ey 添加任何项。
+      magOk = this.magEnabled && magIsPlausible(mag);
+      if (magOk) {
+        const mPred = qRotInv(this.q, MAG_WORLD_NED);
+        const mn = Math.hypot(mag[0], mag[1], mag[2]);
+        // e_mag_z = (m × m_pred)_z / ‖m‖（归一化后量级与重力误差可比）
+        ez += ((mag[0] * mPred[1] - mag[1] * mPred[0]) / mn) * 0.5;
+        // 教学读数：倾斜补偿磁航向
+        const eu = qToEuler(this.q);
+        yawMagDeg = tiltCompensatedYaw(eu.roll, eu.pitch, mag[0], mag[1], mag[2]) * (180 / Math.PI);
+      }
+
       this.eInt = [this.eInt[0] + ex * dt, this.eInt[1] + ey * dt, this.eInt[2] + ez * dt];
       const iCap = Math.hypot(this.eInt[0], this.eInt[1], this.eInt[2]);
       const scale = iCap > 5 ? 5 / iCap : 1; // 积分限幅
@@ -197,11 +265,13 @@ export class MahonyEstimator implements Estimator {
       measuredGravity: measured,
       accelNorm: norm,
       accelValid: Math.abs(norm - G) < 0.35 * G,
+      magValid: magOk,
       detail: {
         pShare: magP + magI > 1e-12 ? magP / (magP + magI) : 0, // 比例项占比（供双色条）
         iUsage,
         eIntMag: Math.hypot(this.eInt[0], this.eInt[1], this.eInt[2]),
         alignErrorDeg: angleBetweenDeg(predicted, measured),
+        ...(magOk ? { yawMagDeg, magEnabled: 1 } : { magEnabled: 0 }),
       },
     };
   }
@@ -220,7 +290,8 @@ export class MadgwickEstimator implements Estimator {
   q = qId();
   beta = 0.1;
   telemetry = emptyTelemetry();
-  update(gyro: V3, accel: V3, dt: number): void {
+  magEnabled = false;
+  update(gyro: V3, accel: V3, mag: V3, dt: number): void {
     const { w, x, y, z } = this.q;
     // 陀螺微分项：q̇ = ½ q ⊗ ω（此处不乘 dt，最后统一乘）
     const gdW = 0.5 * (-x * gyro[0] - y * gyro[1] - z * gyro[2]);
@@ -233,6 +304,8 @@ export class MadgwickEstimator implements Estimator {
     const predicted: V3 = [2 * (x * z - w * y), 2 * (w * x + y * z), 1 - 2 * x * x - 2 * y * y];
     const measured: V3 = norm > 1e-6 ? [accel[0] / norm, accel[1] / norm, accel[2] / norm] : [0, 0, 0];
     let residual = 0;
+    let magOk = false;
+    let yawMagDeg = NaN;
     if (norm > 1e-6) {
       const ax = measured[0], ay = measured[1], az = measured[2];
       // 目标函数 f = 预测重力方向 − 实测方向
@@ -245,6 +318,27 @@ export class MadgwickEstimator implements Estimator {
       let s1 = 2 * z * f1 + 2 * w * f2 - 4 * x * f3;
       let s2 = -2 * w * f1 + 2 * z * f2 - 4 * y * f3;
       let s3 = 2 * x * f1 + 2 * y * f2;
+
+      // MARG：磁场修正。磁场只约束偏航——构造「绕机体系 z 轴」的梯度方向分量，
+      // 与重力梯度**并列**参与同一次归一化（而不是独立的 dt 缩放步）：
+      // 绕 z 转 δ 的下降方向是 ½·q⊗(0,0,δ)，对 (dw,dx,dy,dz) 的贡献与陀螺微分项同构。
+      // δ 取偏航最短角差 yawErr（已是角度而非角速度），与重力残差无量纲化后等权竞争。
+      magOk = this.magEnabled && magIsPlausible(mag);
+      if (magOk) {
+        const eu = qToEuler({ w, x, y, z });
+        const yawMag = tiltCompensatedYaw(eu.roll, eu.pitch, mag[0], mag[1], mag[2]);
+        yawMagDeg = yawMag * (180 / Math.PI);
+        let yawErr = yawMag - eu.yaw;
+        while (yawErr > Math.PI) yawErr -= 2 * Math.PI;
+        while (yawErr < -Math.PI) yawErr += 2 * Math.PI;
+        const dir = yawErr > 0 ? 1 : -1;
+        const magS = 0.5 * Math.min(1, Math.abs(yawErr)); // 修正强度随误差饱和（避免过冲）
+        dw += dir * magS * (-z);
+        dx += dir * magS * (y);
+        dy += dir * magS * (-x);
+        dz += dir * magS * (w);
+      }
+
       const sNorm = Math.hypot(s0, s1, s2, s3);
       if (sNorm > 1e-9) {
         s0 /= sNorm; s1 /= sNorm; s2 /= sNorm; s3 /= sNorm;
@@ -267,10 +361,12 @@ export class MadgwickEstimator implements Estimator {
       measuredGravity: measured,
       accelNorm: norm,
       accelValid: Math.abs(norm - G) < 0.35 * G,
+      magValid: magOk,
       detail: {
         residual,
         stepNorm: Math.hypot(dx, dy, dz) * dt,
         alignErrorDeg: angleBetweenDeg(predicted, measured),
+        ...(magOk ? { yawMagDeg, magEnabled: 1 } : { magEnabled: 0 }),
       },
     };
   }

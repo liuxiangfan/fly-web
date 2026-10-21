@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { buildQuad, type QuadModel } from "./quad";
 import { buildGimbal, type GimbalRig } from "./gimbal";
+import { buildQuatView, type QuatViewRig } from "./quatview";
 import { makeTextSprite } from "./labels";
 import { toDisplayQ } from "../core/gimbal";
 import type { Quat } from "../core/quat";
@@ -15,6 +16,7 @@ export interface SceneHandles {
   quad: QuadModel;
   ghost: QuadModel;
   gimbal: GimbalRig;
+  quatView: QuatViewRig;
   /** NED 姿态四元数 → Three.js 显示四元数（S·q·S⁻¹），与万向环演示同源 */
   toDisplay: (qNed: Quat) => THREE.Quaternion;
   /** 切换视图：显隐对应模型并重置相机取景。ghostEnabled 为幻影复选框当前状态 */
@@ -27,12 +29,15 @@ export interface SceneHandles {
     predicted: THREE.ArrowHelper;
     measured: THREE.ArrowHelper;
   };
+  /** 磁航向指示：水平面内指向估计姿态的机头方位（琥珀色），挂四轴组（随偏航转） */
+  headingArrow: THREE.ArrowHelper;
 }
 
 /** 两个视图各自的取景 */
 const VIEW_FRAMING: Record<UiView, { target: [number, number, number]; pos: [number, number, number] }> = {
   attitude: { target: [0, 0.9, 0], pos: [1.9, 1.35, 2.4] },
   gimbal: { target: [0, 1.15, 0], pos: [2.3, 1.75, 2.5] },
+  quat: { target: [0, 1.0, 0], pos: [0, 1.6, 3.2] },
 };
 
 export function createScene(container: HTMLElement): SceneHandles {
@@ -120,11 +125,27 @@ export function createScene(container: HTMLElement): SceneHandles {
   gravityArrows.group.visible = false; // 默认关闭，由 UI 开关控制
   quad.group.add(gravityArrows.group);
 
+  // 磁航向指示：挂在**场景**（不随机体滚转/俯仰），从四轴高度沿水平面指向
+  // 「估计姿态的机头方位在水平面上的投影」。MARG 关：随陀螺漂移偏离真北罗盘箭头；
+  // MARG 开：被磁场拉回与罗盘对齐。由 main.ts 每帧更新位置与朝向。
+  const headingArrow = new THREE.ArrowHelper(
+    new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 1.0, 0), 0.9, 0xffb454, 0.11, 0.07,
+  );
+  headingArrow.position.set(0, 1.0, 0);
+  scene.add(headingArrow);
+
   // 万向节锁演示装置（默认隐藏，由 setView 控制）
   const gimbal = buildGimbal();
   gimbal.group.position.y = 1.15;
   gimbal.group.visible = false;
   scene.add(gimbal.group);
+
+  // 四元数可视化视图（默认隐藏，由 setView 控制）；初始为差异最大的姿态对
+  const quatView = buildQuatView();
+  quatView.group.position.y = 1.0;
+  quatView.group.visible = false;
+  scene.add(quatView.group);
+  quatView.setInterpolation([0, 0, 0], [140, 70, 160], 0);
 
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.target.set(0, 0.9, 0);
@@ -142,10 +163,10 @@ export function createScene(container: HTMLElement): SceneHandles {
   };
 
   const syncVisibility = (view: UiView, ghostEnabled: boolean): void => {
-    const isGimbal = view === "gimbal";
-    quad.group.visible = !isGimbal;
-    ghost.group.visible = !isGimbal && ghostEnabled;
-    gimbal.group.visible = isGimbal;
+    quad.group.visible = view === "attitude";
+    ghost.group.visible = view === "attitude" && ghostEnabled;
+    gimbal.group.visible = view === "gimbal";
+    quatView.group.visible = view === "quat";
   };
 
   const setView = (view: UiView, ghostEnabled: boolean): void => {
@@ -168,7 +189,7 @@ export function createScene(container: HTMLElement): SceneHandles {
   new ResizeObserver(resize).observe(container);
 
   return {
-    renderer, scene, camera, controls, quad, ghost, gimbal, gravityArrows,
+    renderer, scene, camera, controls, quad, ghost, gimbal, quatView, gravityArrows, headingArrow,
     toDisplay, setView, syncVisibility,
   };
 }
