@@ -939,6 +939,22 @@ function frame(): void {
   }
 }
 
+// ---------- 使用说明文档页 ----------
+$("btn-docs").addEventListener("click", () => {
+  const overlay = document.getElementById("docs-overlay")!;
+  overlay.hidden = !overlay.hidden;
+  if (!overlay.hidden) {
+    overlay.scrollTop = 0;
+    document.body.style.overflow = "hidden";
+  } else {
+    document.body.style.overflow = "";
+  }
+});
+$("btn-docs-close").addEventListener("click", () => {
+  document.getElementById("docs-overlay")!.hidden = true;
+  document.body.style.overflow = "";
+});
+
 // ---------- 初始化 ----------
 updateSourceChip();
 setGimbalAngles(0, 0, 0);

@@ -13,7 +13,7 @@
 import * as THREE from "three";
 import { buildGimbal, GIMBAL_GEOM } from "../src/scene/gimbal";
 import { buildQuad } from "../src/scene/quad";
-import { buildQuatView } from "../src/scene/quatview";
+import { buildQuatView, SPHERE_RADIUS } from "../src/scene/quatview";
 import { gimbalAxisAlign, toDisplayQ } from "../src/core/gimbal";
 import { qFromEuler, qSlerp, qRot, RAD } from "../src/core/quat";
 import { mulberry32 } from "../src/core/rng";
@@ -318,27 +318,28 @@ const rig = buildGimbal();
   const to = [140, 70, 160] as [number, number, number];
   rig.setInterpolation(from, to, 0.5);
 
-  // 弧线几何端点（显示坐标）应等于起/终点姿态把机头 [1,0,0] 旋转后经基变换的向量
+  // 弧线采样点（显示坐标）应落在参考球面上：机头方向 × 球面半径，
+  // 且两端点分别等于起/终点姿态的机头方向 × 半径
   const noseOf = (deg: [number, number, number]) => {
     const q = qFromEuler(deg[0] * RAD, deg[1] * RAD, deg[2] * RAD);
     const r = toDisplayQ(q);
-    const v = new THREE.Vector3(1, 0, 0).applyQuaternion(new THREE.Quaternion(r.x, r.y, r.z, r.w));
-    return v;
+    const dir = new THREE.Vector3(1, 0, 0).applyQuaternion(new THREE.Quaternion(r.x, r.y, r.z, r.w));
+    return dir.multiplyScalar(SPHERE_RADIUS); // 球面半径（非单位向量）
   };
-  const slerpPos = (rig.parts.slerpLine.geometry.getAttribute("position") as THREE.BufferAttribute).array as ArrayLike<number>;
-  const eulerPos = (rig.parts.eulerLine.geometry.getAttribute("position") as THREE.BufferAttribute).array as ArrayLike<number>;
+  const slerpPts = rig.parts.slerpPoints;
+  const eulerPts = rig.parts.eulerPoints;
   const pStart = noseOf(from);
   const pEnd = noseOf(to);
   // 欧拉插值终点经 qToEuler→qFromEuler 往返，浮点误差约 1e-8，故容差取 1e-6
-  const close = (arr: ArrayLike<number>, v: THREE.Vector3) =>
-    Math.hypot(arr[0] - v.x, arr[1] - v.y, arr[2] - v.z) < 1e-6;
+  const close = (v: THREE.Vector3, want: THREE.Vector3) =>
+    v.distanceTo(want) < 1e-6;
   const endpointsOk =
-    close(slerpPos, pStart) && close(eulerPos, pStart) &&
-    close([slerpPos[slerpPos.length - 3], slerpPos[slerpPos.length - 2], slerpPos[slerpPos.length - 1]], pEnd) &&
-    close([eulerPos[eulerPos.length - 3], eulerPos[eulerPos.length - 2], eulerPos[eulerPos.length - 1]], pEnd);
+    close(slerpPts[0], pStart) && close(eulerPts[0], pStart) &&
+    close(slerpPts[slerpPts.length - 1], pEnd) &&
+    close(eulerPts[eulerPts.length - 1], pEnd);
 
   // 两条弧线点数一致（同一采样数）
-  const sameCount = slerpPos.length === eulerPos.length && slerpPos.length >= 3;
+  const sameCount = slerpPts.length === eulerPts.length && slerpPts.length >= 3;
 
   // q 与 −q 组：两个四轴世界姿态应恒等（双覆盖的可视化证明）
   rig.setNegation(35, -52, 128);
@@ -358,7 +359,7 @@ const rig = buildGimbal();
   check(
     "四元数视图：弧线端点正确、q/−q 恒等",
     endpointsOk && sameCount && negIdentity,
-    `弧线端点=起终点机头=${endpointsOk}；两弧同点数 ${slerpPos.length / 3}=${eulerPos.length / 3}=${sameCount}；` +
+    `弧线端点=起终点机头=${endpointsOk}；两弧同点数 ${slerpPts.length}=${eulerPts.length}=${sameCount}；` +
       `q 与 −q 组世界姿态恒等=${negIdentity}`,
   );
 }
