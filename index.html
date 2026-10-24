@@ -750,10 +750,14 @@
           <p>
             三者各有所长也各有所短，谁也不能单独完成任务。解算算法每 2 毫秒（500 Hz）做一轮四步循环，把它们拧成一股：
           </p>
-          <div class="formula">① 预测　q̇ = ½ · q ⊗ ω　　　　陀螺仪积分：高频、动态好、<b>会漂移</b>
-② 观测　a ↔ ĝ　m ↔ m̂　　　 加速度计/磁力计给出「下」与「磁北」：低频、静态准、动态差
-③ 误差　e = a × ĝ　　　　　 实测方向与预测方向的叉积 = 姿态误差
-④ 修正　ω ← ω + Kp·e + Ki·∫e　（或 Madgwick / 卡尔曼的方式）→ 回到 ① 积分</div>
+          <div class="formula">① 预测　q̇ = ½ · q ⊗ ω
+　　陀螺仪积分：高频、动态好、会漂移
+② 观测　a ↔ ĝ　m ↔ m̂
+　　加速度计/磁力计给出「下」与「磁北」：低频、静态准、动态差
+③ 误差　e = a × ĝ
+　　实测方向与预测方向的叉积 = 姿态误差
+④ 修正　ω ← ω + Kp·e + Ki·∫e dt　（或 Madgwick / 卡尔曼的方式）→ 回到 ①</div>
+          <div class="fvars"><b>变量</b>　ω：机体系角速度　q：姿态四元数　a：加速度计测得的方向　ĝ：算法预测的重力方向　m̂：预测磁向　e：姿态误差（叉积）</div>
           <p>
             一句话记住分工：<b>陀螺仪负责「快」，加速度计和磁力计负责「准」，算法负责让快的别跑偏、准的别添乱。</b>
           </p>
@@ -900,7 +904,8 @@
 
           <h3>四元数定义</h3>
           <p>四元数用一个实部加一个三维虚向量表示旋转，共 4 个数：</p>
-          <div class="formula">q = w + x·i + y·j + z·k　记作　q = [w, <b>v</b>]，　约束　w² + x² + y² + z² = ‖q‖² = 1</div>
+          <div class="formula">q = w + x·i + y·j + z·k　　　记作　q = [w, <b>v</b>]
+约束（单位四元数）　w² + x² + y² + z² = ‖q‖² = 1</div>
           <p>
             单位约束把 4 个数压回 3 个自由度。i、j、k 是三个虚单位，满足 i² = j² = k² = ijk = −1。
             四元数乘法（Hamilton 积）由这套规则代数展开，写成向量形式最紧凑：
@@ -920,7 +925,8 @@
             （实部：−⟨qv⟩ + ⟨vq*⟩ 类交叉项全部抵消）。为什么恰好是旋转？
             直觉来自轴角视角：任何单位四元数都能写成
           </p>
-          <div class="formula">q = [cos(θ/2),　n̂ · sin(θ/2)]　——绕单位轴 n̂ 转 θ 角</div>
+          <div class="formula">q = [cos(θ/2),　n̂ · sin(θ/2)]
+——绕单位轴 n̂ 转 θ 角（半角编码）</div>
           <p>
             把它代入三明治公式作用在 v 上，结果正是 v 绕 n̂ 旋转 θ（Rodrigues 公式的四元数形式）。
             <b>半角 θ/2 是关键</b>：三明治结构里 q 出现两次，每次贡献一半旋转。
@@ -928,9 +934,8 @@
             这就是 q 与 −q 表示同一旋转（双重覆盖）的根源，「四元数」视图的并排演示可验证：代数上，
             上面 R(q) 的每个元素都只含 w²、v²、wv 这类<b>二阶量</b>，全体变号不变：
           </p>
-          <div class="formula">R(q) = ⎡ 1−2(y²+z²)　 2(xy−wz)　　2(xz+wy) ⎤
-　　　　⎢ 2(xy+wz)　 1−2(x²+z²)　 2(yz−wx) ⎥
-　　　　⎣ 2(xz−wy)　　2(yz+wx)　 1−2(x²+y²) ⎦　　⇒　R(−q) = R(q)</div>
+          <div class="formula">R(q) = <span class="mtx"><i class="ml"></i><span class="mrows" style="--cols:3"><span>1 − 2(y² + z²)</span><span>2(xy − wz)</span><span>2(xz + wy)</span><span>2(xy + wz)</span><span>1 − 2(x² + z²)</span><span>2(yz − wx)</span><span>2(xz − wy)</span><span>2(yz + wx)</span><span>1 − 2(x² + y²)</span></span><i class="mr"></i></span>　　⇒　R(−q) = R(q)
+（矩阵元素全是 w、x、y、z 的二阶量——全体变号，矩阵不变）</div>
           <p>
             这个矩阵就是四元数与旋转矩阵的换算桥：解算算法全程用四元数（乘法快、无奇异），
             只在输出给人看时换成欧拉角。代码中 <span class="mono">qToEuler / qFromEuler</span> 实现的正是 R 的元素提取与回填。
@@ -995,31 +1000,26 @@
           <div class="formula">i×j = k　　j×k = i　　k×i = j
 j×i = −k　 k×j = −i　 i×k = −j　　（交换顺序 = 结果变号 = 转动顺序不可交换）
 i² = j² = k² = i·j·k = −1</div>
-          <figure class="doc-fig"><svg viewBox="0 0 660 240" role="img">
-  <defs><marker id="m3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0e7fa8"/></marker><marker id="m4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c026a3"/></marker><marker id="m5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#45566e"/></marker></defs>
+          <figure class="doc-fig"><svg viewBox="0 0 660 242" role="img">
+  <defs><marker id="m3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0e7fa8"/></marker><marker id="m4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c026a3"/></marker><marker id="m5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#16202f"/></marker></defs>
   <circle cx="150" cy="118" r="66" fill="none" stroke="#e2e8f2" stroke-width="1.6"/>
-  <path d="M 158 64 A 58 58 0 0 1 201.15767664977295 143.0" fill="none" stroke="#0e7fa8" stroke-width="2.2" marker-end="url(#m3)"/>
-  <path d="M 201.15767664977295 159.0 A 58 58 0 0 1 98.84232335022705 143.0" fill="none" stroke="#0e7fa8" stroke-width="2.2" marker-end="url(#m3)"/>
-  <path d="M 100.84232335022705 141.0 A 58 58 0 0 1 140 62" fill="none" stroke="#0e7fa8" stroke-width="2.2" marker-end="url(#m3)"/>
-  <circle cx="150" cy="52" r="16" fill="#ffffff" stroke="#16202f" stroke-width="1.6"/><text x="150" y="57" font-size="15" fill="#16202f" text-anchor="middle" font-weight="600">i</text>
-  <circle cx="207.2" cy="151.0" r="16" fill="#ffffff" stroke="#16202f" stroke-width="1.6"/><text x="207.15767664977295" y="156.0" font-size="15" fill="#16202f" text-anchor="middle" font-weight="600">j</text>
-  <circle cx="92.8" cy="151.0" r="16" fill="#ffffff" stroke="#16202f" stroke-width="1.6"/><text x="92.84232335022705" y="156.0" font-size="15" fill="#16202f" text-anchor="middle" font-weight="600">k</text>
-  <text x="150" y="122" font-size="11" fill="#45566e" text-anchor="middle" font-weight="600">i²=j²=k²</text><text x="150" y="138" font-size="11" fill="#45566e" text-anchor="middle" font-weight="600">= −1</text>
-  <text x="216" y="74" font-size="11" fill="#0e7fa8" text-anchor="start">i×j = k</text>
-  <text x="216" y="164" font-size="11" fill="#0e7fa8" text-anchor="start">j×k = i</text>
-  <text x="22" y="164" font-size="11" fill="#0e7fa8" text-anchor="start">k×i = j</text>
-  <text x="110" y="214" font-size="10.5" fill="#64748c" text-anchor="start">顺着箭头乘得正；逆着乘变号（ji = −k）——不可交换</text>
-  <text x="490" y="26" font-size="12" fill="#16202f" text-anchor="middle" font-weight="600">同一个三明治，差一个共轭</text>
+  <path d="M 174.7 56.8 A 66 66 0 0 1 215.4 127.2" fill="none" stroke="#0e7fa8" stroke-width="2.4" marker-end="url(#m3)"/><path d="M 190.6 170.0 A 66 66 0 0 1 109.4 170.0" fill="none" stroke="#0e7fa8" stroke-width="2.4" marker-end="url(#m3)"/><path d="M 84.6 127.2 A 66 66 0 0 1 125.3 56.8" fill="none" stroke="#0e7fa8" stroke-width="2.4" marker-end="url(#m3)"/>
+  <circle cx="150.0" cy="52.0" r="16" fill="#ffffff" stroke="#16202f" stroke-width="1.6"/><text x="150.0" y="57.0" font-size="15" fill="#16202f" text-anchor="middle" font-weight="600">i</text><circle cx="207.2" cy="151.0" r="16" fill="#ffffff" stroke="#16202f" stroke-width="1.6"/><text x="207.2" y="156.0" font-size="15" fill="#16202f" text-anchor="middle" font-weight="600">j</text><circle cx="92.8" cy="151.0" r="16" fill="#ffffff" stroke="#16202f" stroke-width="1.6"/><text x="92.8" y="156.0" font-size="15" fill="#16202f" text-anchor="middle" font-weight="600">k</text>
+  <text x="150.0" y="116.0" font-size="11" fill="#45566e" text-anchor="middle" font-weight="600">i² = j² = k²</text>
+  <text x="150.0" y="134.0" font-size="11" fill="#45566e" text-anchor="middle" font-weight="600">= −1</text>
+  <text x="227.9" y="77.0" font-size="11.5" fill="#0e7fa8" text-anchor="middle">i×j = k</text><text x="150.0" y="212.0" font-size="11.5" fill="#0e7fa8" text-anchor="middle">j×k = i</text><text x="72.1" y="77.0" font-size="11.5" fill="#0e7fa8" text-anchor="middle">k×i = j</text>
+  <text x="150.0" y="232.0" font-size="10.5" fill="#64748c" text-anchor="middle">顺着箭头乘得正；逆着乘变号（ji = −k）——不可交换</text>
+  <text x="490.0" y="26.0" font-size="12" fill="#16202f" text-anchor="middle" font-weight="600">同一个三明治，差一个共轭</text>
   <line x1="360" y1="120" x2="452" y2="120" stroke="#64748c" stroke-width="2" stroke-dasharray="5 4"/>
-  <text x="406" y="110" font-size="10.5" fill="#64748c" text-anchor="middle">镜面</text>
-  <line x1="400" y1="160" x2="430" y2="92" stroke="#c026a3" stroke-width="2.2" marker-end="url(#m4)"/><line x1="400" y1="160" x2="370" y2="92" stroke="#c026a3" stroke-width="2.2" marker-end="url(#m4)"/>
-  <text x="438" y="150" font-size="12" fill="#c026a3" text-anchor="start">v</text><text x="360" y="150" font-size="12" fill="#c026a3" text-anchor="start">v′</text>
-  <text x="406" y="182" font-size="11.5" fill="#c026a3" text-anchor="middle" font-weight="600">q v q → 反射</text>
-  <line x1="540" y1="150" x2="610" y2="122" stroke="#16202f" stroke-width="2.2" marker-end="url(#m5)"/>
+  <text x="406.0" y="110.0" font-size="10.5" fill="#64748c" text-anchor="middle">镜面</text>
+  <line x1="400.0" y1="160.0" x2="430.0" y2="92.0" stroke="#c026a3" stroke-width="2.2" marker-end="url(#m4)"/><line x1="400.0" y1="160.0" x2="370.0" y2="92.0" stroke="#c026a3" stroke-width="2.2" marker-end="url(#m4)"/>
+  <text x="440.0" y="152.0" font-size="12" fill="#c026a3" text-anchor="start">v</text><text x="358.0" y="152.0" font-size="12" fill="#c026a3" text-anchor="start">v′</text>
+  <text x="406.0" y="184.0" font-size="11.5" fill="#c026a3" text-anchor="middle" font-weight="600">q v q → 反射</text>
+  <line x1="540.0" y1="150.0" x2="610.0" y2="122.0" stroke="#16202f" stroke-width="2.2" marker-end="url(#m5)"/>
   <path d="M 560 138 A 26 26 0 0 1 594 132" fill="none" stroke="#0e7fa8" stroke-width="1.8" marker-end="url(#m3)"/>
-  <text x="530" y="162" font-size="12" fill="#16202f" text-anchor="start">v</text><text x="606" y="134" font-size="12" fill="#16202f" text-anchor="start">v′</text>
-  <text x="574" y="182" font-size="11.5" fill="#0e7fa8" text-anchor="middle" font-weight="600">q v q* → 旋转</text>
-  <text x="490" y="214" font-size="10.5" fill="#64748c" text-anchor="middle">反射把世界镜像（左右互换）；旋转保持手性。</text>
+  <text x="530.0" y="162.0" font-size="12" fill="#16202f" text-anchor="start">v</text><text x="606.0" y="134.0" font-size="12" fill="#16202f" text-anchor="start">v′</text>
+  <text x="574.0" y="184.0" font-size="11.5" fill="#0e7fa8" text-anchor="middle" font-weight="600">q v q* → 旋转</text>
+  <text x="490.0" y="216.0" font-size="10.5" fill="#64748c" text-anchor="middle">反射把世界镜像（左右互换）；旋转保持手性。</text>
 </svg><figcaption class="fig-cap">图 10 · 左：乘法环——顺着箭头乘得正、逆着变号；右：同一个「三明治」差一个共轭——q v q 是反射（河面成像），q v q* 才是旋转。</figcaption></figure>
           <h3>反射 vs 旋转：一个共轭的差别</h3>
           <p>
@@ -1046,6 +1046,7 @@ i² = j² = k² = i·j·k = −1</div>
 
           <h3>陀螺仪：测角速度</h3>
           <div class="formula">ω<sub>g</sub> = ω<sub>true</sub> + <b>b</b>(t) + <b>n</b>(t)　（机体系三轴角速度）</div>
+          <div class="fvars"><b>变量</b>　ω<sub>g</sub>：陀螺仪读数　ω<sub>true</sub>：真实角速度　b：零偏（慢变恒定偏差）　n：白噪声（每帧独立）</div>
           <p>
             <b>b</b> 是零偏：温度漂移、启动误差造成的<b>慢变</b>恒定分量（真实 MEMS 陀螺仪约 0.1–2 °/s，本装置滑块 0–5）；
             <b>n</b> 是白噪声：每帧独立的随机分量。关键在于陀螺仪输出的是<b>角速度</b>——姿态必须由它积分而来，
@@ -1054,6 +1055,7 @@ i² = j² = k² = i·j·k = −1</div>
 
           <h3>加速度计：测比力</h3>
           <div class="formula">f<sub>b</sub> = Rᵀ(q)·(a<sub>world</sub> − g<sub>world</sub>) + 噪声　（机体系）</div>
+          <div class="fvars"><b>变量</b>　f<sub>b</sub>：机体系比力　Rᵀ(q)：世界→机体的旋转　a<sub>world</sub>：运动加速度　g<sub>world</sub>：重力（NED 系 = [0, 0, +9.8]）</div>
           <p>
             加速度计是「比力」传感器：它测量<b>支撑力产生的等效加速度</b>，等于运动加速度减去重力。
             NED 系里重力 g = [0, 0, +9.8]（z 向下）。无人机<b>静止或匀速</b>（悬停微扰近似成立）时 a<sub>world</sub> ≈ 0，于是：
@@ -1096,7 +1098,10 @@ i² = j² = k² = i·j·k = −1</div>
             对应「磁干扰强度」滑块；水平分量被污染的直接后果是<b>偏航</b>被拉偏。
           </p>
 
-          <div class="formula">小结　陀螺仪：快、全轴、但积分必漂　｜　加速度计：定横滚俯仰、机动失效、不管偏航　｜　磁力计：定偏航、怕电磁干扰</div>
+          <div class="formula">小结：
+　陀螺仪——快、全轴、但积分必漂
+　加速度计——定横滚俯仰、机动失效、不管偏航
+　磁力计——定偏航、怕电磁干扰</div>
         </section>
 
         <section id="m-integral" class="math-section">
@@ -1111,7 +1116,10 @@ i² = j² = k² = i·j·k = −1</div>
             设 t 时刻姿态为 q(t)。之后 dt 内，机体以角速度 ω（<b>机体系</b>表示）转了一小格：绕轴
             n̂ = ω/‖ω‖ 转了 dθ = ‖ω‖·dt。由轴角公式，这个小旋转的四元数是：
           </p>
-          <div class="formula">dq = [cos(dθ/2),　n̂·sin(dθ/2)]　≈　[1,　n̂·dθ/2]　=　[1,　ω·dt/2]　（cos x ≈ 1, sin x ≈ x）</div>
+          <div class="formula">dq = [cos(dθ/2),　n̂·sin(dθ/2)]
+　≈ [1,　n̂·dθ/2]
+　= [1,　ω·dt/2]
+（小角度近似：cos x ≈ 1，sin x ≈ x——<b>系数 ½ 的来源</b>）</div>
           <p class="plain">白话：转得非常少的时候，「旋转四元数」退化成「1 + 转轴方向 × 半个转角」。<b>系数 ½ 在这里就出现了</b>——它来自四元数的半角表示，不是人为凑的。</p>
 
           <h3>第二步：左乘还是右乘</h3>
@@ -1126,7 +1134,9 @@ i² = j² = k² = i·j·k = −1</div>
             （若拿到的是世界系角速度，则改用左乘 q̇ = ½ (0, ω<sub>world</sub>) ⊗ q。）</p>
 
           <h3>第三步：取导数极限</h3>
-          <div class="formula">q̇(t) = lim<sub>dt→0</sub> [q(t+dt) − q(t)] / dt = q(t) ⊗ [0, ω/2]　⇒　<b>q̇ = ½ · q ⊗ (0, ω)</b></div>
+          <div class="formula">q̇(t) = lim<sub>dt→0</sub> <span class="frac"><span class="n">q(t+dt) − q(t)</span><span class="d">dt</span></span> = q(t) ⊗ [0, ω/2]
+⇒　<b>q̇ = ½ · q ⊗ (0, ω)</b></div>
+          <div class="fvars"><b>变量</b>　q̇：q 的时间导数　dt：积分步长（本装置 2 ms）　ω：机体系角速度</div>
           <p class="plain">白话：把「新姿态 − 旧姿态」除以时间就是变化率；实部相乘得 0（[1,·] 的实部 1 减去后归零），推导完毕。</p>
           <p>
             这个方程说明：姿态四元数的运动完全由机体系角速度驱动，且是<b>线性</b>微分方程——
@@ -1137,13 +1147,16 @@ i² = j² = k² = i·j·k = −1</div>
           <h3>第四步：离散化——代码里每 2 ms 做什么</h3>
           <p>500 Hz 解算把连续方程变成每帧一步。两种常用离散化：</p>
           <div class="formula">一阶（快）　q ← q ⊗ [1, ω·dt/2]，然后归一化
-精确（本装置用）　Δq = [cos(‖ω‖·dt/2),　(ω/‖ω‖)·sin(‖ω‖·dt/2)]，q ← q ⊗ Δq</div>
+精确（本装置用）
+　Δq = [cos(‖ω‖·dt/2),　<span class="frac"><span class="n">ω</span><span class="d">‖ω‖</span></span>·sin(‖ω‖·dt/2)]
+　q ← q ⊗ Δq</div>
           <p class="plain">白话：「精确」式其实就是轴角公式本身——把一帧内的角增量 ‖ω‖·dt 当作完整旋转处理，大角速度下也不失真。
             最后归一化 q ← q/‖q‖ 修掉浮点累积的模长漂移，四元数数值稳定的全部维护成本就这一步。</p>
 
           <h3>漂移从哪里进来</h3>
           <p>把测量模型代入：积分器实际拿到的是 ω<sub>g</sub> = ω<sub>true</sub> + b + n，于是：</p>
-          <div class="formula">dθ<sub>误差</sub>/dt = ‖b‖　（零偏 → 姿态角<b>线性</b>漂移）　；　噪声 n → 随机游走（方差随时间线性增长）</div>
+          <div class="formula"><span class="frac"><span class="n">dθ误差</span><span class="d">dt</span></span> = ‖b‖　（零偏 → 姿态角线性漂移）
+噪声 n → 随机游走（方差随时间线性增长）</div>
           <p>
             零偏 1 °/s 跑 60 秒就是 60° 的偏差——「横滚 360°」剧本里红线飞走的原因。
             预测一步无法自救，必须引入不漂的观测来持续纠偏：进入下一节「误差与修正」。
@@ -1158,6 +1171,7 @@ i² = j² = k² = i·j·k = −1</div>
           <p>同一个物理向量「重力」，可以由两条独立途径得到它<b>在机体系</b>的表示：</p>
           <div class="formula">预测　ĝ<sub>b</sub> = Rᵀ(q̂)·g<sub>world</sub>　　——拿当前估计姿态把世界系重力旋进机体系（代码 qRotInv）
 实测　a<sub>b</sub> ≈ −Rᵀ(q<sub>true</sub>)·g<sub>world</sub>　——加速度计直接测出（静止/匀速时）</div>
+          <div class="fvars"><b>变量</b>　ĝ<sub>b</sub>：预测的「下」（我以为）　a<sub>b</sub>：实测的「下」（加速度计）　q̂：估计姿态　q<sub>true</sub>：真实姿态</div>
           <p>
             白话：<b>ĝ<sub>b</sub> 是「我以为的下」，a<sub>b</sub> 是「实际测到的下」。</b>
             若姿态估计完全正确，两者严格重合；姿态有偏差，两个箭头就岔开一个角度 θ<sub>err</sub>。
@@ -1165,7 +1179,8 @@ i² = j² = k² = i·j·k = −1</div>
           </p>
 
           <h3>叉积为什么能编码旋转误差</h3>
-          <div class="formula">e = a<sub>b</sub> × ĝ<sub>b</sub>　　‖e‖ = ‖a‖‖ĝ‖·sin θ<sub>err</sub>　≈　θ<sub>err</sub>（小角度时）</div>
+          <div class="formula">e = a<sub>b</sub> × ĝ<sub>b</sub>
+‖e‖ = ‖a‖·‖ĝ‖·sin θ<sub>err</sub> ≈ θ<sub>err</sub>（小角度时）</div>
           <figure class="doc-fig"><svg viewBox="0 0 660 215" role="img">
   <defs><marker id="m7" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#45566e"/></marker><marker id="m8" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c026a3"/></marker><marker id="m9" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0e7fa8"/></marker></defs>
   <circle cx="190" cy="112" r="5" fill="#16202f"/>
@@ -1226,6 +1241,7 @@ i² = j² = k² = i·j·k = −1</div>
           <div class="formula">e = a<sub>b</sub> × ĝ<sub>b</sub>　　　　　　　　　　　（重力对齐误差）
 ω<sub>used</sub> = ω<sub>g</sub> − (Kp·e + Ki·∫e dt)　　（注入修正后的等效角速度）
 q̇ = ½ q ⊗ (0, ω<sub>used</sub>)　　　　　（照常积分）</div>
+          <div class="fvars"><b>变量</b>　e：误差向量　Kp：比例增益（弹簧刚度）　Ki：积分增益（账本速率）　∫e dt：误差累积量</div>
           <p>
             白话：Kp 像弹簧刚度——偏得越多拉得越快；Ki 像一个慢慢学习的学生——它盯着「总是差的那一点」，
             把原因（陀螺仪零偏）记在账上并持续补偿。<b>Ki 的自动消零偏机制</b>：稳态时若陀螺仪有恒定零偏 b，
@@ -1237,10 +1253,13 @@ q̇ = ½ q ⊗ (0, ω<sub>used</sub>)　　　　　（照常积分）</div>
           <h3>Madgwick：优化视角的梯度下降</h3>
           <p>Madgwick 换一种哲学：姿态估计是一个<b>最优化问题</b>——找一个 q，使「预测重力」与「实测重力」最接近：</p>
           <div class="formula">f(q) = ‖ q* ⊗ (0, ĝ<sub>world</sub>) ⊗ q − (0, a<sub>b</sub>) ‖²　　（目标函数：预测 vs 实测的残差平方）</div>
+          <div class="fvars"><b>变量</b>　f：目标函数（越小姿态越准）　q*：共轭四元数　ĝ<sub>world</sub>：世界系重力方向　a<sub>b</sub>：实测方向</div>
           <p>
             f(q) 越小姿态越对。对 f 求关于 q 的梯度，每步沿负梯度走固定步长 β：
           </p>
-          <div class="formula">q̇ = q̇<sub>gyro</sub> − β · ∇f(q) / ‖∇f(q)‖　　（陀螺仪预测 + 一步下降）</div>
+          <div class="formula">q̇ = q̇<sub>gyro</sub> − β · <span class="frac"><span class="n">∇f(q)</span><span class="d">‖∇f(q)‖</span></span>
+（陀螺仪预测 + 一步下降）</div>
+          <div class="fvars"><b>变量</b>　q̇<sub>gyro</sub>：陀螺积分项　β：下降步长（≈修正角速度上限）　∇f：目标函数梯度（最陡上升方向，取负即下山）</div>
           <p>
             白话：像蒙着眼下山——感受脚下哪边更陡（梯度），朝下坡方向迈一小步（步长 β）。
             β 一个参数同时承担 Mahony 中 Kp 的角色。与 Mahony 的实际差别：无积分项（恒定零偏留下小稳态误差）、
@@ -1254,7 +1273,10 @@ q̇ = ½ q ⊗ (0, ω<sub>used</sub>)　　　　　（照常积分）</div>
             「此刻我更该信谁？」它同时维护<b>预测的不确定度</b>（方差 P，由过程噪声 Q 驱动）与
             <b>观测的不确定度</b>（观测噪声 R），按两者之比计算最优增益：
           </p>
-          <div class="formula">K = P·Hᵀ·(H·P·Hᵀ + R)⁻¹　　K 大 → 多信观测；K 小 → 多信预测</div>
+          <div class="formula">K = P·Hᵀ·(H·P·Hᵀ + R)⁻¹
+　K 大 → 多信观测
+　K 小 → 多信预测</div>
+          <div class="fvars"><b>变量</b>　K：卡尔曼增益（此刻信观测几成）　P：预测的不确定度（协方差）　H：观测矩阵　R：观测噪声方差</div>
           <p>
             机动中预测方差大、且加速度计受扰被门控 → 自动偏信陀螺仪；静止时观测准 → 自动偏信加速度计。
             本装置实现的是飞控标准的<b>误差状态卡尔曼滤波（ES-EKF/MEKF）</b>：协方差维护在
@@ -1327,7 +1349,8 @@ m<sub>y</sub>' = m<sub>y</sub>·cos φ − m<sub>z</sub>·sin φ
 
           <h3>公式与推导要点</h3>
           <p>设单位四元数 q₀、q₁，它们在四维球面上的夹角 Ω 由内积给出：cos Ω = q₀·q₁。Slerp 公式：</p>
-          <div class="formula">slerp(q₀, q₁, t) = [ sin((1−t)Ω)·q₀ + sin(tΩ)·q₁ ] / sin Ω　，　t ∈ [0, 1]</div>
+          <div class="formula">slerp(q₀, q₁, t) = <span class="frac"><span class="n">sin((1−t)Ω)·q₀ + sin(tΩ)·q₁</span><span class="d">sin Ω</span></span>
+t ∈ [0, 1]　（cos Ω = q₀·q₁：两四元数在 4D 球面上的夹角）</div>
           <p>
             推导思路：待求曲线是四维球面（单位四元数流形）上连接 q₀、q₁ 的一段圆弧，
             在 q₀、q₁ 与原点张成的二维平面内参数化——这正是一维「角度插值」在球面上的推广（平面线性插值的球面正弦加权版）。
@@ -1357,7 +1380,9 @@ m<sub>y</sub>' = m<sub>y</sub>·cos φ − m<sub>z</sub>·sin φ
             <b>立体投影</b>（eater.net 可视化教程的核心手法）。想象从超球的「南极」(−1,0,0,0)
             打一盏灯，S³ 上每个点 q 的影子落在 w=0 的三维屏幕上：
           </p>
-          <div class="formula">p(q) = (x, y, z) / (1 + w)　　　（从南极投影到 w=0 超平面）</div>
+          <div class="formula">p(q) = <span class="frac"><span class="n">(x, y, z)</span><span class="d">(1 + w)</span></span>
+（从南极 (−1,0,0,0) 投影到 w = 0 超平面）</div>
+          <div class="fvars"><b>变量</b>　p(q)：q 的 3D 投影位置　(x,y,z)：四元数虚部　w：实部（决定点在球内/球外）</div>
           <p>三条关键性质（都可以在「四元数」视图的 <b>4D 立体投影</b> 模式里亲眼验证）：</p>
           <ul>
             <li><b>赤道 = 参考球面</b>：w=0 的四元数（如基向量 i、j、k）投影后恰好落在单位球面上——视图里的半透明球就是 4D 超球的「赤道圈」。</li>
@@ -1454,7 +1479,11 @@ m<sub>y</sub>' = m<sub>y</sub>·cos φ − m<sub>z</sub>·sin φ
             <li><b>修正增益怎么定</b>——固定比例（互补 α / Mahony Kp / Madgwick β）还是按方差自适应（卡尔曼）。</li>
           </ul>
           <div class="formula">预测（人人相同）　q ← q ⊗ Δq(ω·dt)
-修正（各显神通）　互补：欧拉角加权　Mahony：P/I 反馈　Madgwick：梯度下降　卡尔曼：方差加权</div>
+修正（各显神通）：
+　互补——欧拉角加权
+　Mahony——P/I 反馈
+　Madgwick——梯度下降
+　卡尔曼——方差加权</div>
           <p>对照曲线看：纯陀螺仪积分只有预测（红线漂移）；后四者多一条修正通道（橙/蓝/绿/紫），差距全在修正的品质。</p>
         </section>
 
@@ -1641,9 +1670,7 @@ m<sub>y</sub>' = m<sub>y</sub>·cos φ − m<sub>z</sub>·sin φ
         <p class="docs-lede">把姿态解算变成下山</p>
 <h3 id="fd-madg-1">第一步：目标函数的逐分量展开</h3>
           <p>「预测重力」用四元数旋转公式展开（数学原理·姿态表示），减去实测，得到三个残差分量：</p>
-          <div class="formula">f(q) = ⎡ 2(xz − wy) − a<sub>x</sub> ⎤
-　　　⎢ 2(wx + yz) − a<sub>y</sub> ⎥
-　　　⎣ 2(0.5 − x² − y²) − a<sub>z</sub> ⎦　　f(q) = ‖f‖²</div>
+          <div class="formula">f(q) = <span class="mtx"><i class="ml"></i><span class="mrows" style="--cols:1"><span>2(xz − wy) − a<sub>x</sub></span><span>2(wx + yz) − a<sub>y</sub></span><span>2(0.5 − x² − y²) − a<sub>z</sub></span></span><i class="mr"></i></span>　　　目标函数　f(q) = ‖f‖²</div>
           <p class="plain">白话：第三行 2(0.5 − x² − y²) 就是预测重力的 z 分量 1−2(x²+y²) 的另一半——三个分量都是 q 的二次函数，所以 f 对 q 求导毫不费力。</p>
 
           <h3 id="fd-madg-2">第二步：梯度与「下山方向」</h3>
@@ -1671,12 +1698,14 @@ m<sub>y</sub>' = m<sub>y</sub>·cos φ − m<sub>z</sub>·sin φ
           </p>
 
           <h3 id="fd-madg-3">第三步：下降步与陀螺项的合成</h3>
-          <div class="formula">q̇ = q̇<sub>gyro</sub> − β · ∇f / ‖∇f‖　　（预测走大步，修正走小步）</div>
+          <div class="formula">q̇ = q̇<sub>gyro</sub> − β · <span class="frac"><span class="n">∇f</span><span class="d">‖∇f‖</span></span>　　（预测走大步，修正走小步）</div>
           <p>归一化 ∇f 让 β 的量纲是「rad/s」——它直接就是修正角速度的上限：β = 0.1 意味着每秒最多拉回约 0.1 rad ≈ 5.7°。这与 Kp·e 在小误差下等价（e ≈ θ<sub>err</sub> 时 Kp·e 的量级也由 Kp 决定）。</p>
 
           <h3 id="fd-madg-4">第四步：无积分项的代价——稳态误差公式</h3>
           <p>恒定零偏 b 下，Madgwick 收敛到的平衡点由「下降步恰好抵消漂移」决定：</p>
-          <div class="formula">β · ‖∇f(q<sub>稳态</sub>)‖ ≈ b　⇒　稳态姿态误差 ≈ b / β（小角度）</div>
+          <div class="formula">β · ‖∇f(q<sub>稳态</sub>)‖ ≈ b
+⇒　稳态姿态误差 ≈ <span class="frac"><span class="n">b</span><span class="d">β</span></span>　（小角度）</div>
+          <div class="fvars"><b>变量</b>　b：陀螺仪零偏　β：梯度步长——零偏每小时推 b 度、下降步最多拉 β 度，平衡点即 b/β</div>
           <p class="plain">白话：零偏每小时推着你走 b 度，下降步每小时只能拉回 β 度，两力平衡时姿态就停在差 b/β 的地方。Mahony 用账本（积分项）最终把 b 记下来，Madgwick 没有账本，只能停在平衡点——这就是两者稳态精度的差别。</p>
 
           <h3 id="fd-madg-5">第五步：磁修正为什么是「独立方向分量」</h3>
@@ -1689,8 +1718,11 @@ m<sub>y</sub>' = m<sub>y</sub>·cos φ − m<sub>z</sub>·sin φ
         <p class="docs-lede">从两台秤说起</p>
 <h3 id="fd-kalman-1">第一步：一维卡尔曼——最优加权就是方差的反比</h3>
           <p>用两台精度不同的秤称同一物体：估计值 x̂（方差 P）与新测量 z（方差 R）。最优融合（最小方差线性无偏）只有一个解：</p>
-          <div class="formula">x̂⁺ = x̂ + K·(z − x̂)　，　K = P / (P + R)
-P 很小（自信）→ K→0 → 几乎不信新测量；P 很大（心虚）→ K→1 → 几乎全信测量</div>
+          <div class="formula">x̂⁺ = x̂ + K·(z − x̂)
+K = <span class="frac"><span class="n">P</span><span class="d">P + R</span></span>
+　P 很小（自信）→ K → 0 → 几乎不信新测量
+　P 很大（心虚）→ K → 1 → 几乎全信测量</div>
+          <div class="fvars"><b>变量</b>　x̂：原估计　x̂⁺：融合后估计　z：新测量　P：估计方差　R：测量方差——最优加权就是方差的反比</div>
           <p class="plain">白话：卡尔曼增益 K 就是「此刻该信观测几成」。整部卡尔曼滤波 = 每帧自动更新这个「自信程度」的账本 P。这一行公式就是全部灵魂，后面只是把它搬到姿态上。</p>
 
           <h3 id="fd-kalman-2">第二步：为什么不能直接对四元数用线性卡尔曼</h3>
@@ -1698,22 +1730,32 @@ P 很小（自信）→ K→0 → 几乎不信新测量；P 很大（心虚）�
           <p class="plain">白话解法（MEKF 的核心思想）：把「大头」留给非线性方法——姿态照常用四元数积分；只把「小误差」拿出来做线性卡尔曼。小误差近似为 0，线性化成立，算完再把小误差贴回去。</p>
 
           <h3 id="fd-kalman-3">第三步：误差状态与它的运动方程</h3>
-          <div class="formula">误差定义　q<sub>真</sub> ≈ q ⊗ [1, δθ/2]　（δθ：机体系小角误差）　误差状态　x = [δθ, δb]
-运动方程线性化　δθ̇ = −ω×δθ − δb − n<sub>g</sub>　；　δḃ = n<sub>b</sub></div>
+          <div class="formula">误差定义　q<sub>真</sub> ≈ q ⊗ [1, δθ/2]　（δθ：机体系小角误差）
+误差状态　x = [δθ, δb]
+运动方程线性化
+　δθ̇ = −ω×δθ − δb − n<sub>g</sub>
+　δḃ = n<sub>b</sub></div>
           <p>
             两项来历：−[ω]×δθ 是「误差向量随机体旋转而转动」（坐标系耦合）；<b>−δb 是关键项</b>——
             零偏估计误差会一比一冒充角速度误差，这正是「卡尔曼能学零偏」的通道：姿态误差里含有零偏的痕迹，滤波器顺着痕迹把 b 估计出来。
           </p>
 
           <h3 id="fd-kalman-4">第四步：预测——方差怎么长大</h3>
-          <div class="formula">P⁻ = Φ·P·Φᵀ + Q·dt　，　Φ = I + A·dt　，　A = ⎡−[ω]×　−I⎤
-　　　　　　　　　　　　　　　　　⎣　0　　 0⎦</div>
+          <div class="formula">P⁻ = Φ·P·Φᵀ + Q·dt
+Φ = I + A·dt
+A = <span class="mtx"><i class="ml"></i><span class="mrows" style="--cols:2"><span>−[ω]×</span><span>−I</span><span>0</span><span>0</span></span><i class="mr"></i></span></div>
+          <div class="fvars"><b>变量</b>　P：6×6 误差协方差　Φ：状态转移　Q：过程噪声（陀螺仪噪声注入 δθ）　[ω]×：角速度的反对称矩阵</div>
           <p class="plain">白话三项：① P 对角线上的姿态方差被陀螺仪噪声 n<sub>g</sub> 每秒吹大一点（Q·dt）；② 姿态与零偏之间产生<b>负相关</b>——「零偏估小了」意味着「预测转少了」，两者此消彼长；③ 零偏自身的方差按随机游走缓慢增长（它可能慢漂）。协方差矩阵就是这三种不确定性的记账簿。</p>
 
           <h3 id="fd-kalman-5">第五步：更新——观测方程与增益</h3>
-          <div class="formula">观测方程（数学原理·误差一节的线性化）　z = a − ĝ ≈ [ĝ]×·δθ + v　→　H = [[ĝ]×, 0]
-增益　K = P⁻Hᵀ(H·P⁻·Hᵀ + R)⁻¹
-回填　δx = K·z：姿态 ← q ⊗ [1, δθ/2]；零偏估计 ← b + δb；P ← (I−KH)P（不确定度收缩）</div>
+          <div class="formula">观测方程（线性化）　z = a − ĝ ≈ [ĝ]×·δθ + v
+　⇒　H = [[ĝ]×, 0]
+增益　K = P⁻Hᵀ·(H·P⁻·Hᵀ + R)⁻¹
+回填　δx = K·z
+　姿态 ← q ⊗ [1, δθ/2]
+　零偏估计 ← b + δb
+　P ← (I − K·H)·P　（不确定度收缩）</div>
+          <div class="fvars"><b>变量</b>　z：新息（观测 − 预测）　v：观测噪声　[ĝ]×：预测重力方向的反对称矩阵　磁场观测同构：ĝ 换成 m̂ 即可</div>
           <p>磁场观测完全同构：把 ĝ 换成预测磁方向 m̂ 即可。本装置设 <b>40° 新息门控</b>——观测与预测夹角过大直接丢弃，防止机动野值把状态拽飞。</p>
 
           <h3 id="fd-kalman-6">第六步：与 Mahony 的关系——自动调增益的滤波器</h3>
@@ -1722,8 +1764,12 @@ P 很小（自信）→ K→0 → 几乎不信新测量；P 很大（心虚）�
             区别在<b>过渡过程</b>：机动中 P 大 → K 自动升 → 更信观测；观测被门控 → P 继续涨但无更新 → 纯预测；
             静止后 K 自动回落。可以说：<b>卡尔曼 = 增益随不确定度自动调度的 Mahony + 显式的零偏估计器</b>。
           </p>
-          <div class="formula">调参对照　Q ↔ 陀螺仪真实噪声水平（「过程有多不可信」）　R ↔ 加速度计噪声（「观测有多不可信」）
-带宽 ≈ 由 Q/R 比值决定：比值大 → 信观测多 → 跟随快而抖；比值小 → 平滑而慢</div>
+          <div class="formula">调参对照：
+　Q ↔ 陀螺仪真实噪声水平（过程有多不可信）
+　R ↔ 加速度计噪声（观测有多不可信）
+带宽 ≈ 由 Q/R 比值决定
+　比值大 → 信观测多 → 跟随快而抖
+　比值小 → 平滑而慢</div>
           <figure class="doc-fig"><svg viewBox="0 0 660 210" role="img">
   <rect x="46.0" y="26" width="180.0" height="152" fill="#fdecec"/>
   <rect x="526.0" y="26" width="90.0" height="152" fill="#fdf4d7"/>
