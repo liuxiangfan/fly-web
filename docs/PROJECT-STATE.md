@@ -69,7 +69,9 @@
   **图示**：9 个 figure = 8 幅内联 SVG（数学工具箱三联图/倾斜机体与加速度计读数/两个「下」与叉积误差/
   Slerp 大圆对比/互补三信号/Mahony P-I 分工/Madgwick 梯度碗/卡尔曼增益自适应——曲线类 SVG 由脚本
   预计算生成）+ 1 个 Canvas 实时演示（#fig-comp-demo 互补滤波三路信号，stepCompDemo 挂在主循环 frame()，
-  仅当文档开且在 filters 页时运转 updateCompDemoRun()）。浅色图色板：红 #e5484d 橙 #d97706
+  仅当文档开且在 filters 页时运转 updateCompDemoRun()）。**单次扫描模式**：一轮 CD_N=560 样本从左端
+  「起点」刻度向右描绘（四色笔头圆点=当前时刻，底部橙色进度条），画满停顿 CD_HOLD=1.4s 后清空重播。
+  文档正文字号 14.5px（用户嫌细后整体 +1px，标题/公式/卡片/表格/目录同步上调）。浅色图色板：红 #e5484d 橙 #d97706
   绿 #059669 紫 #7c3aed 品红 #c026a3 噪声灰 #94a3b8。
   **图示排版规约**（用户反馈文字重叠后确立）：所有 SVG 文字带白色描边光晕
   （CSS `.doc-fig text { paint-order: stroke; stroke:#fff; stroke-width:3.5px }`）；

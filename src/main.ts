@@ -1062,7 +1062,9 @@ let compDemoRunning = false;
 let compDemoT = 0;
 const cdState = { gyro: 0, fused: 0 };
 const cdBuf: number[][] = [[], [], [], []];
-const CD_N = 420;
+const CD_N = 560; // 一轮样本数（画满即停顿重播，起点永远在左端）
+const CD_HOLD = 1.4; // 画满后的停顿秒数
+let cdHoldT = 0;
 const CD_COLORS = ["#16202f", "#e5484d", "#94a3b8", "#d97706"];
 
 /** 仅当文档层打开且停留在滤波概览页时运转（主循环里每帧调用一次步进） */
@@ -1072,6 +1074,18 @@ function updateCompDemoRun(): void {
 
 function stepCompDemo(dt: number): void {
   if (!compDemoCtx || !compDemoCanvas) return;
+  if (cdBuf[0].length >= CD_N) {
+    // 停顿相位：冻结画面，倒计时结束后清空从头重播
+    cdHoldT += dt;
+    if (cdHoldT < CD_HOLD) return;
+    cdHoldT = 0;
+    compDemoT = 0;
+    cdState.gyro = 0;
+    cdState.fused = 0;
+    for (const b of cdBuf) b.length = 0;
+    drawCompDemo();
+    return;
+  }
   compDemoT += dt;
   const truth = 16 * Math.sin(0.55 * compDemoT) + 7 * Math.sin(0.17 * compDemoT);
   const dTruth =
@@ -1084,7 +1098,6 @@ function stepCompDemo(dt: number): void {
   cdBuf[1].push(cdState.gyro);
   cdBuf[2].push(accel);
   cdBuf[3].push(cdState.fused);
-  if (cdBuf[0].length > CD_N) for (const b of cdBuf) b.shift();
   drawCompDemo();
 }
 
@@ -1117,20 +1130,53 @@ function drawCompDemo(): void {
   ctx.lineTo(L, H - B);
   ctx.stroke();
   const n = cdBuf[0].length;
-  if (n < 2) return;
-  const widths = [1.6, 1.5, 1, 2.6];
-  cdBuf.forEach((buf, k) => {
-    ctx.strokeStyle = CD_COLORS[k];
-    ctx.lineWidth = widths[k];
-    ctx.beginPath();
-    for (let i = 0; i < n; i++) {
-      const x = L + ((W - L - R) * i) / (CD_N - 1);
-      const y = mid - Math.max(-38, Math.min(38, buf[i])) * sc;
-      if (i === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    }
-    ctx.stroke();
-  });
+  if (n >= 2) {
+    const widths = [1.6, 1.5, 1, 2.6];
+    cdBuf.forEach((buf, k) => {
+      ctx.strokeStyle = CD_COLORS[k];
+      ctx.lineWidth = widths[k];
+      ctx.beginPath();
+      for (let i = 0; i < n; i++) {
+        const x = L + ((W - L - R) * i) / (CD_N - 1);
+        const y = mid - Math.max(-38, Math.min(38, buf[i])) * sc;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    });
+  }
+  // 当前时刻圆点（描画笔头）：四路信号各自的最新点
+  if (n >= 1) {
+    cdBuf.forEach((buf, k) => {
+      const x = L + ((W - L - R) * (n - 1)) / (CD_N - 1);
+      const y = mid - Math.max(-38, Math.min(38, buf[n - 1])) * sc;
+      ctx.beginPath();
+      ctx.arc(x, y, k === 3 ? 5 : 3.5, 0, Math.PI * 2);
+      ctx.fillStyle = CD_COLORS[k];
+      ctx.fill();
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = "#ffffff";
+      ctx.stroke();
+    });
+  }
+  // 起点：左端刻度 + 标注
+  ctx.strokeStyle = "#b9c6d8";
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(L, T - 6);
+  ctx.lineTo(L, H - B + 6);
+  ctx.stroke();
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = "rgba(255,255,255,0.92)";
+  ctx.strokeText("起点", L - 2, T - 10);
+  ctx.fillStyle = "#64748c";
+  ctx.fillText("起点", L - 2, T - 10);
+  // 底部进度条：本轮画到哪了
+  const prog = n / CD_N;
+  ctx.fillStyle = "#e5eaf2";
+  ctx.fillRect(L, H - 8, W - L - R, 3);
+  ctx.fillStyle = "#d97706";
+  ctx.fillRect(L, H - 8, (W - L - R) * prog, 3);
   // 图例最后绘制并加白色描边光晕，压线也可读
   const legend = ["真实角", "陀螺仪积分（漂移）", "加速度计（噪声）", "融合"];
   ctx.font = "11px sans-serif";
