@@ -1093,7 +1093,7 @@ function drawCompDemo(): void {
   const ctx = compDemoCtx;
   const W = compDemoCanvas.width;
   const H = compDemoCanvas.height;
-  const L = 40, T = 24, B = 16, R = 8;
+  const L = 40, T = 34, B = 16, R = 8; // 顶部 34px 留给图例，曲线不与图例重叠
   const mid = T + (H - T - B) / 2;
   const sc = (H - T - B) / 2 / 40;
   ctx.clearRect(0, 0, W, H);
@@ -1116,14 +1116,6 @@ function drawCompDemo(): void {
   ctx.moveTo(L, T);
   ctx.lineTo(L, H - B);
   ctx.stroke();
-  const legend = ["真实角", "陀螺仪积分（漂移）", "加速度计（噪声）", "融合"];
-  ctx.font = "11px sans-serif";
-  legend.forEach((t, i) => {
-    ctx.fillStyle = CD_COLORS[i];
-    ctx.fillText(t, L + 8 + i * 150, 14);
-  });
-  ctx.fillStyle = "#64748c";
-  ctx.fillText("±30°", 6, mid - 28 * sc + 4);
   const n = cdBuf[0].length;
   if (n < 2) return;
   const widths = [1.6, 1.5, 1, 2.6];
@@ -1139,6 +1131,25 @@ function drawCompDemo(): void {
     }
     ctx.stroke();
   });
+  // 图例最后绘制并加白色描边光晕，压线也可读
+  const legend = ["真实角", "陀螺仪积分（漂移）", "加速度计（噪声）", "融合"];
+  ctx.font = "11px sans-serif";
+  ctx.textBaseline = "alphabetic";
+  legend.forEach((t, i) => {
+    const x = L + 10 + i * 152;
+    const y = 20;
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = "rgba(255,255,255,0.92)";
+    ctx.strokeText(t, x, y);
+    ctx.fillStyle = CD_COLORS[i];
+    ctx.fillText(t, x, y);
+  });
+  const scaleLabel = "±30°";
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = "rgba(255,255,255,0.92)";
+  ctx.strokeText(scaleLabel, 6, mid - 28 * sc + 4);
+  ctx.fillStyle = "#64748c";
+  ctx.fillText(scaleLabel, 6, mid - 28 * sc + 4);
 }
 
 // ---------- 初始化 ----------

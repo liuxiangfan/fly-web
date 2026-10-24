@@ -71,6 +71,10 @@
   预计算生成）+ 1 个 Canvas 实时演示（#fig-comp-demo 互补滤波三路信号，stepCompDemo 挂在主循环 frame()，
   仅当文档开且在 filters 页时运转 updateCompDemoRun()）。浅色图色板：红 #e5484d 橙 #d97706
   绿 #059669 紫 #7c3aed 品红 #c026a3 噪声灰 #94a3b8。
+  **图示排版规约**（用户反馈文字重叠后确立）：所有 SVG 文字带白色描边光晕
+  （CSS `.doc-fig text { paint-order: stroke; stroke:#fff; stroke-width:3.5px }`）；
+  图例放图外专用边距带或白底盒；曲线类图不在图内放长注释（写进 figcaption）；
+  图 1 用 ①②③ 徽章标题标明阅读起点；图 7 之字路径用 marker-mid/end 标方向。
   控制项条目 `.ctl` 三段式 `.k1/.k2/.k3`；公式 `.formula` 纯 Unicode pre-wrap；对比表 `.docs-table`。
 - **字体**：Fira Sans / Fira Code 通过 `media="print" onload` 非阻塞加载；国内网络失败时自动降级系统字体。
 

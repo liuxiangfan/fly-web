@@ -1115,7 +1115,13 @@ body[data-view="quat"] .section-quat { display: block; }
   box-shadow: var(--shadow-card);
 }
 .doc-fig svg { width: 100%; height: auto; display: block; }
-.doc-fig text { font-family: var(--font-sans); }
+.doc-fig text {
+  font-family: var(--font-sans);
+  paint-order: stroke;
+  stroke: #ffffff;
+  stroke-width: 3.5px;
+  stroke-linejoin: round;
+}
 .doc-fig-demo canvas {
   width: 100%;
   height: auto;
