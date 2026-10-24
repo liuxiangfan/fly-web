@@ -90,19 +90,24 @@ export function buildGimbal(): GimbalRig {
   const group = new THREE.Group();
 
   const makeRing = (radius: number, color: number): TintableMesh => {
-    const mat = new THREE.MeshStandardMaterial({
+    const mat = new THREE.MeshPhysicalMaterial({
       color,
-      metalness: 0.45,
-      roughness: 0.35,
+      metalness: 0.8,
+      roughness: 0.28,
+      clearcoat: 0.6,
+      clearcoatRoughness: 0.2,
       emissive: new THREE.Color(color).multiplyScalar(0.14),
     });
-    const mesh = new THREE.Mesh(new THREE.TorusGeometry(radius, TUBE, 16, 96), mat);
+    mat.envMapIntensity = 1.35; // 环境反射打亮金属环——质感主要来源
+    const mesh = new THREE.Mesh(new THREE.TorusGeometry(radius, TUBE, 20, 120), mat);
+    mesh.castShadow = true;
     mesh.receiveShadow = true;
     return { mesh, target: { mat, base: new THREE.Color(color) } };
   };
 
   const makePin = (length: number): TintableMesh => {
-    const mat = new THREE.MeshStandardMaterial({ color: PIN_COLOR, metalness: 0.5, roughness: 0.35 });
+    const mat = new THREE.MeshStandardMaterial({ color: PIN_COLOR, metalness: 0.95, roughness: 0.18 });
+    mat.envMapIntensity = 1.5;
     const mesh = new THREE.Mesh(new THREE.CylinderGeometry(PIN_R, PIN_R, length, 14), mat);
     return { mesh, target: { mat, base: new THREE.Color(PIN_COLOR) } };
   };

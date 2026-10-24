@@ -142,8 +142,8 @@ button:disabled { cursor: default; }
   position: absolute;
   inset: auto 0 -1px 0;
   height: 1px;
-  background: linear-gradient(90deg, transparent, var(--accent-line) 22%, var(--accent-line) 78%, transparent);
-  opacity: 0.7;
+  background: linear-gradient(90deg, transparent, rgba(34, 211, 238, 0.55) 22%, rgba(34, 211, 238, 0.55) 78%, transparent);
+  opacity: 0.85;
 }
 
 .title-block h1 {
@@ -203,10 +203,11 @@ button:disabled { cursor: default; }
 .btn:disabled { opacity: 0.38; }
 
 .btn.primary {
-  background: linear-gradient(180deg, #2fe0f8 0%, var(--accent) 100%);
+  background: linear-gradient(180deg, #64e9fb 0%, var(--accent) 55%, #0eafce 100%);
   border-color: var(--accent);
   color: var(--on-accent);
   font-weight: 600;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35), 0 2px 8px rgba(34, 211, 238, 0.22);
 }
 .btn.primary:not(:disabled):hover {
   filter: brightness(1.08);
@@ -243,8 +244,8 @@ button:disabled { cursor: default; }
   gap: 6px;
 }
 .ov-chip {
-  background: rgba(5, 10, 22, 0.76);
-  backdrop-filter: blur(8px);
+  background: rgba(5, 10, 22, 0.68);
+  backdrop-filter: blur(12px) saturate(1.15);
   border: 1px solid var(--border);
   border-radius: var(--r-md);
   padding: 5px 11px;
@@ -282,12 +283,17 @@ button:disabled { cursor: default; }
 
 .panel-section {
   position: relative;
-  background: var(--bg-card);
+  background: linear-gradient(180deg, #101a30 0%, var(--bg-card) 38%);
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
   padding: 13px 15px;
-  box-shadow: var(--shadow-card);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.45),
+    0 4px 14px rgba(2, 6, 18, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.035);
+  transition: border-color var(--t-base);
 }
+.panel-section:hover { border-color: var(--border-strong); }
 /* 每节标题左侧的强调短竖条，形成统一的节奏 */
 .panel-section h2 {
   display: flex;
@@ -386,18 +392,20 @@ button:disabled { cursor: default; }
 .slider-row input[type="range"]::-webkit-slider-runnable-track {
   height: 4px;
   border-radius: 2px;
-  background: linear-gradient(90deg, var(--accent-line), var(--border-strong));
+  background:
+    linear-gradient(90deg, var(--accent) 0, var(--accent-line) var(--fill, 50%), var(--bg-input) var(--fill, 50%));
+  box-shadow: inset 0 0 3px rgba(0, 0, 0, 0.35);
 }
 .slider-row input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
-  width: 13px;
-  height: 13px;
-  margin-top: -4.5px;
+  width: 14px;
+  height: 14px;
+  margin-top: -5px;
   border-radius: 50%;
-  background: var(--accent);
+  background: radial-gradient(circle at 35% 30%, #a8ecf8, var(--accent) 65%);
   border: 2px solid var(--bg-card);
-  box-shadow: 0 0 8px rgba(34, 211, 238, 0.5);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5), 0 0 10px rgba(34, 211, 238, 0.45);
   transition: transform var(--t-fast), box-shadow var(--t-fast);
 }
 .slider-row input[type="range"]:hover::-webkit-slider-thumb { transform: scale(1.15); }
@@ -408,12 +416,13 @@ button:disabled { cursor: default; }
 .slider-row input[type="range"]::-moz-range-track {
   height: 4px;
   border-radius: 2px;
-  background: var(--border-strong);
+  background: var(--bg-input);
+  box-shadow: inset 0 0 3px rgba(0, 0, 0, 0.35);
 }
 .slider-row input[type="range"]::-moz-range-progress {
   height: 4px;
   border-radius: 2px;
-  background: var(--accent-line);
+  background: linear-gradient(90deg, var(--accent), var(--accent-line));
 }
 .slider-row input[type="range"]::-moz-range-thumb {
   width: 13px;
@@ -481,12 +490,14 @@ button:disabled { cursor: default; }
   background: var(--bg-panel);
 }
 .chart-block {
-  background: var(--bg-card);
+  background: linear-gradient(180deg, #101a30 0%, var(--bg-card) 42%);
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
   padding: 9px 11px 7px;
   min-width: 0;
-  box-shadow: var(--shadow-card);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.035);
 }
 .chart-header {
   display: flex;
@@ -588,10 +599,10 @@ button:disabled { cursor: default; }
 }
 .seg-btn:hover { color: var(--text); background: var(--bg-hover); }
 .seg-btn.active {
-  background: var(--accent);
+  background: linear-gradient(180deg, #55e5f9, var(--accent));
   color: var(--on-accent);
   font-weight: 600;
-  box-shadow: 0 0 14px rgba(34, 211, 238, 0.3);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3), 0 0 14px rgba(34, 211, 238, 0.35);
 }
 
 /* 视口右上角视图切换 */
@@ -1089,20 +1100,20 @@ body[data-view="quat"] .section-quat { display: block; }
 .k3 { color: #8a5a06; background: #fdf2d0; }
 
 /* ---- 数学公式块（纯 Unicode，无外部渲染依赖） ---- */
+/* 公式块：LaTeX 风格衬线数学字体（KaTeX 本地字体，无 CDN），融入正文流 */
 .formula {
-  margin: 11px 0;
-  padding: 11px 15px;
-  font-family: var(--font-mono);
-  font-size: 15px;
+  margin: 14px 0 14px 1.2em;
+  padding: 4px 0 4px 12px;
+  font-family: "KaTeX_Main", "Cambria Math", "Times New Roman", serif;
+  font-size: 16px;
   color: var(--text);
-  background: var(--bg-input);
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--accent);
-  border-radius: var(--r-sm);
-  line-height: 1.85;
+  line-height: 1.95;
   white-space: pre-wrap;
   overflow-x: auto;
+  border-left: 2px solid var(--border);
 }
+.formula b { color: var(--accent); font-weight: 600; }
+.formula sub, .formula sup { font-size: 0.72em; }
 .formula b { color: var(--accent); }
 
 /* ---- 图示与演示 ---- */

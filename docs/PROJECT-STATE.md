@@ -1,7 +1,7 @@
 # 项目状态 · 四元数姿态解算学习演示装置
 
 > **本文件是项目的恢复锚点。** 会话上下文被压缩后，从这里可以快速接续全部关键信息。
-> 最后更新：2026-10-25（参考资料驱动的内容丰富：四种姿态表示/i-j-k/立体投影新章 + 四元数视图 4D 投影模式）
+> 最后更新：2026-10-25（质感升级：KaTeX 公式排版 / IBL+PBR 三维渲染 / 模型重做 / UI 精修 / 视图过渡动画）
 
 ## 一句话
 
@@ -33,7 +33,7 @@
 | `core/world.ts` | 真实姿态积分 + 姿态跟踪控制器（K=5，ω_max=4.2 rad/s）+ IMU 生成 |
 | `estimators/index.ts` | 五估计器统一 `Estimator` 接口：`update(gyro,accel,mag,dt)` + `magEnabled` + `telemetry`（rate/rawGyro/correction/predictedGravity/measuredGravity/accelNorm/accelValid/magValid/detail）。Mahony MARG：磁误差 z 分量并入；Madgwick：独立偏航方向分量；互补：`tiltCompensatedYaw`；**KalmanEstimator**：ES-EKF/MEKF（6 维误差状态 [δθ,δb]，重力+磁场观测，40° 新息门控，可估计陀螺仪零偏，参数 Q=gyroNoiseDps / R=obsNoise） |
 | `scene/setup.ts` | 渲染器/相机/灯光/地面/网格/罗盘/主四轴+幻影/万向环架；`toDisplay`、`setView`、`syncVisibility` |
-| `scene/quad.ts` | `buildQuad(ghost, {axes})` 程序化四轴：机头 +X、机体右 +Z、上 +Y |
+| `scene/quad.ts` | `buildQuad(ghost, {axes})` 程序化四轴（PBR 质感版）：RoundedBox 亮漆机身+云台球+锥形机臂+电机铃+前后航行灯（前青后红）+桨叶与半透明桨盘；ghost=EdgesGeometry 轮廓线；桨尖径向包络 ≤0.68（scenecheck 穿模断言守护） |
 | `scene/gimbal.ts` | 平衡环架：外环偏航（蓝）→ 中环俯仰（金）→ 内环横滚（绿）；枢轴销连接相邻环；环标签随环转动；环内嵌四轴 scale 1.15 |
 | `scene/quatview.ts` | 四元数视图（球面参考方案）：参考球+赤道环+极轴；Slerp 白 / 欧拉品红双 Tube 弧（r=0.012）+ 滑动 marker；起终点蓝/橙球；中央四轴 0.55 + 机头箭头 + 轴角青箭头；q/−q 并排组（X ±0.95）。`parts.slerpPoints/eulerPoints` 采样点数组供 scenecheck 断言。`SPHERE_RADIUS=0.85`。**4D 立体投影模式**（`projGroup`）：S³ 从南极 (−1,0,0,0) 投影 p=(x,y,z)/(1+w)，赤道 w=0 恰为参考球；青点 q（球内）/品红 −q（球外，倒易 |p(q)|·|p(−q)|=1）/轨迹线/i-j-k 基架/中央姿态四轴；lastDir 方向延续防极点跳变。API：`setInterpolation/setNegation/showNegation/setProjection/showProjection`；parts 增 `projGroup/projQPos/projNegPos` |
 | `scene/labels.ts` | `makeTextSprite(text, color, {size, bold, alwaysOnTop})` 通用文字标签 |
@@ -110,6 +110,15 @@
   - 文档页改「左栏大模块 / 右侧目录+章节」双栏：控制项手册、数学原理（零基础向：类比导入 + 数学工具箱 + 白话块）、滤波算法讲解（互补/Mahony/Madgwick/卡尔曼详解 + 对比选型表）
   - 新增 **KalmanEstimator**（ES-EKF）：误差状态 [δθ(3), δb(3)]，重力/磁场两组观测、40° 新息门控、零偏在线估计；UI 增卡尔曼 Q/R 滑块、曲线系列 #c084fc、玻璃盒零偏估计与新息读数
   - 术语全称化（陀螺仪/加速度计）、删副标题、favicon.svg、控制项列表化
+- **质感升级**（本轮）：
+  - 公式排版：katex 本地字体（仅用字体，无 CDN）；.formula 改 KaTeX_Main 衬线 16px、
+    去背景盒仅留淡竖线——融入正文流（用户反馈「割裂感」的解法）
+  - 渲染：RoomEnvironment PMREM IBL（environmentIntensity 0.35）+ 冷色轮廓补光；
+    万向环改 MeshPhysicalMaterial 阳极金属（envMapIntensity 1.35）；新四轴模型见上
+  - UI：面板/图表卡片渐变表面+分层阴影+hover 描边；主按钮内高光；滑杆轨道值填充
+    （--fill CSS 变量，bindSlider 维护）；chips 玻璃增强；seg/表头光效
+  - 四元数视图三演示组切换改 0.4s 淡入淡出+轻缩放（quatFades，材质基准透明度
+    记录于 userData.__quatBaseOp，可被安全打断并还原）
   - selftest 新增 3 项卡尔曼测试（静态收敛 / 抗零偏+零偏估计 / MARG 偏航收敛），共 47 项
 - **文档页重做 + 数学原理模块**（ec743c4）：
   - 侧边目录（sticky + 滚动跟随高亮）+ 9 个功能章节 + 9 节数学推导

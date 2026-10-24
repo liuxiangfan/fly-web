@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { buildQuad, type QuadModel } from "./quad";
 import { buildGimbal, type GimbalRig } from "./gimbal";
 import { buildQuatView, type QuatViewRig } from "./quatview";
@@ -55,13 +56,22 @@ export function createScene(container: HTMLElement): SceneHandles {
   scene.background = new THREE.Color(0x030712);
   scene.fog = new THREE.FogExp2(0x030712, 0.032);
 
+  // 环境光照（IBL）：程序化房间环境 → PMREM。所有 MeshStandard/Physical 材质
+  // 自动获得反射与 ambient，金属件立刻有了「质感」——无需外部 HDR 文件。
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  const envScene = new RoomEnvironment();
+  scene.environment = pmrem.fromScene(envScene, 0.04).texture;
+  scene.environmentIntensity = 0.35; // 深色舞台基调，反射作点缀而非主光
+  envScene.dispose();
+  pmrem.dispose();
+
   const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
   camera.position.set(1.9, 1.35, 2.4);
 
   // 光照：半球环境光 + 带阴影的方向光
   const hemi = new THREE.HemisphereLight(0x9db4d6, 0x1a1f29, 0.9);
   scene.add(hemi);
-  const sun = new THREE.DirectionalLight(0xffffff, 2.2);
+  const sun = new THREE.DirectionalLight(0xfff4e0, 2.4);
   sun.position.set(4, 6, 3);
   sun.castShadow = true;
   sun.shadow.mapSize.set(1024, 1024);
@@ -72,6 +82,11 @@ export function createScene(container: HTMLElement): SceneHandles {
   sun.shadow.camera.far = 20;
   scene.add(sun);
   scene.add(sun.target);
+  // 冷色轮廓补光（无阴影，便宜）：从左后勾出金属件边缘
+  const rim = new THREE.DirectionalLight(0x7aa8ff, 0.8);
+  rim.position.set(-5, 3, -4);
+  scene.add(rim);
+  scene.add(rim.target);
 
   // 地面 + 网格
   const ground = new THREE.Mesh(

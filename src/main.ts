@@ -1,3 +1,5 @@
+// KaTeX 数学字体（本地打包，无 CDN 依赖）：文档公式块用它的衬线字形
+import "katex/dist/katex.min.css";
 import "./style.css";
 import { createScene } from "./scene/setup";
 import { QUAT_POSE_PAIRS } from "./scene/quatview";
@@ -249,6 +251,8 @@ function bindSlider(
     input.value = String(v);
     if (num) num.value = String(v);
     if (out) out.textContent = fmt(v);
+    // 轨道填充比例（CSS 用 var(--fill) 画「已填充」段）
+    input.style.setProperty("--fill", `${(((v - min) / (max - min)) * 100).toFixed(2)}%`);
   };
 
   const commit = (raw: number): void => {
@@ -514,7 +518,9 @@ $("btn-quat-play").addEventListener("click", () => {
 });
 
 $("quat-neg-toggle").addEventListener("change", () => {
-  sceneHandles.quatView.showNegation(($("quat-neg-toggle") as HTMLInputElement).checked);
+  const on = ($("quat-neg-toggle") as HTMLInputElement).checked;
+  if (($("quat-mode") as HTMLSelectElement).value === "proj") return; // 投影模式下该开关不可见
+  enterQuatScene(on ? "neg" : "interp");
 });
 
 /** 插值播放推进（独立于仿真暂停状态） */
@@ -525,6 +531,81 @@ function stepQuatPlay(dt: number): void {
     quatState.playT = 0; // 循环播放
   }
   quatSlider.set(quatState.playT); // 内部会触发 apply 回调驱动 3D
+}
+
+// ---------- 四元数视图组切换过渡（淡入淡出 + 轻缩放，取代瞬切） ----------
+const quatFades = new Map<THREE.Group, { k: number; target: number }>();
+const QUAT_FADE_SEC = 0.4;
+
+/** 首次触碰时记录每个材质的基准透明度，淡入淡出后可精确还原 */
+function prepQuatMats(g: THREE.Group): void {
+  g.traverse((o) => {
+    const mats = (o as THREE.Mesh).material;
+    if (!mats) return;
+    for (const m of Array.isArray(mats) ? mats : [mats]) {
+      const mm = m as THREE.Material & { opacity: number; transparent: boolean };
+      if (mm.userData.__quatBaseOp === undefined) {
+        mm.userData.__quatBaseOp = mm.opacity;
+        mm.userData.__quatBaseTr = mm.transparent;
+      }
+    }
+  });
+}
+
+function quatGroupFade(g: THREE.Group, show: boolean): void {
+  let f = quatFades.get(g);
+  if (!f) {
+    f = { k: show ? 0 : g.visible ? 1 : 0, target: show ? 1 : 0 };
+    quatFades.set(g, f);
+  } else {
+    f.target = show ? 1 : 0;
+  }
+  if (show) g.visible = true;
+  prepQuatMats(g);
+}
+
+function applyQuatFade(g: THREE.Group, k: number, done: boolean): void {
+  const ease = k * k * (3 - 2 * k);
+  g.scale.setScalar(0.93 + 0.07 * ease);
+  g.traverse((o) => {
+    const mats = (o as THREE.Mesh).material;
+    if (!mats) return;
+    for (const m of Array.isArray(mats) ? mats : [mats]) {
+      const mm = m as THREE.Material & { opacity: number; transparent: boolean };
+      if (mm.userData.__quatBaseOp === undefined) continue;
+      if (done) {
+        mm.opacity = mm.userData.__quatBaseOp;
+        mm.transparent = mm.userData.__quatBaseTr;
+      } else {
+        mm.opacity = mm.userData.__quatBaseOp * ease;
+        mm.transparent = true;
+      }
+    }
+  });
+}
+
+function stepQuatFades(dt: number): void {
+  for (const [g, f] of quatFades) {
+    const dir = Math.sign(f.target - f.k);
+    if (dir !== 0) f.k = Math.max(0, Math.min(1, f.k + (dt / QUAT_FADE_SEC) * dir));
+    const done = f.k === f.target;
+    if (f.k <= 0) {
+      g.visible = false;
+      applyQuatFade(g, 0, true);
+    } else {
+      g.visible = true;
+      applyQuatFade(g, f.k, done);
+    }
+  }
+}
+
+/** 四元数视图三个演示组的互斥切换（带过渡） */
+function enterQuatScene(which: "interp" | "neg" | "proj"): void {
+  const parts = sceneHandles.quatView.parts;
+  quatGroupFade(parts.interpGroup, which === "interp");
+  quatGroupFade(parts.negGroup, which === "neg");
+  quatGroupFade(parts.projGroup, which === "proj");
+  sceneHandles.quatView.parts.sphere.visible = false; // 可见性交给 interpGroup 级淡入淡出
 }
 
 // ---------- 4D 立体投影模式 ----------
@@ -555,11 +636,10 @@ $("quat-mode").addEventListener("change", () => {
   document.querySelectorAll(".quat-interp-only").forEach((el) => el.classList.toggle("hidden", proj));
   $("quat-proj-group").classList.toggle("hidden", !proj);
   if (proj) {
-    sceneHandles.quatView.showProjection(true);
+    enterQuatScene("proj");
     projApply(projState.q);
   } else {
-    sceneHandles.quatView.showProjection(false);
-    sceneHandles.quatView.showNegation(($("quat-neg-toggle") as HTMLInputElement).checked);
+    enterQuatScene(($("quat-neg-toggle") as HTMLInputElement).checked ? "neg" : "interp");
   }
 });
 
@@ -965,6 +1045,7 @@ function frame(): void {
   stepDemo(dt);
   stepQuatPlay(dt);
   stepQuatProj(dt);
+  stepQuatFades(dt);
 
   if (state.playing) {
     simAcc += dt;
