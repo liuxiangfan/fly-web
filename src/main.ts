@@ -894,6 +894,7 @@ function frame(): void {
   const now = performance.now();
   const dt = Math.min((now - lastNow) / 1000, 0.05);
   lastNow = now;
+  if (compDemoRunning) stepCompDemo(dt);
 
   frames++;
   fpsAcc += dt;
@@ -965,16 +966,6 @@ let activeDocPage = "manual";
 /** 每个页面各自的滚动位置；退出/切页时保存，回来时恢复 */
 const docScrollMemory = new Map<string, number>();
 
-function setModuleActive(module: string, expandSub: boolean): void {
-  for (const b of docModuleBtns) {
-    const on = b.dataset.doc === module;
-    b.classList.toggle("active", on);
-    if (on && expandSub) b.classList.add("expanded");
-  }
-  const sub = document.querySelector<HTMLElement>(`.sub-list[data-sub-for="${module}"]`);
-  if (sub && expandSub) sub.hidden = false;
-}
-
 /** 右侧「本页目录」：由当前页的 section[id]（章）与 h3[id]（推导步骤）生成 */
 function buildChapterToc(page: HTMLElement): void {
   const anchors = [...page.querySelectorAll<HTMLElement>("section[id], h3[id]")];
@@ -1002,9 +993,10 @@ function showDocPage(id: string, restore = false): void {
   if (activeDocPage !== id) docScrollMemory.set(activeDocPage, docPagesEl.scrollTop);
   activeDocPage = id;
   for (const p of docPageEls) p.hidden = p !== page;
-  setModuleActive(docModuleOf(id), true);
+  for (const b of docModuleBtns) b.classList.toggle("active", b.dataset.doc === docModuleOf(id));
   buildChapterToc(page);
   docPagesEl.scrollTop = restore ? (docScrollMemory.get(id) ?? 0) : 0;
+  updateCompDemoRun();
 }
 
 function setDocsOpen(open: boolean): void {
@@ -1016,6 +1008,7 @@ function setDocsOpen(open: boolean): void {
     docScrollMemory.set(activeDocPage, docPagesEl.scrollTop);
     document.body.style.overflow = "";
   }
+  updateCompDemoRun();
 }
 $("btn-docs").addEventListener("click", () => setDocsOpen(true));
 $("btn-docs-close").addEventListener("click", () => setDocsOpen(false));
@@ -1039,28 +1032,10 @@ for (const container of [docPagesEl, chapterToc]) {
     jumpToHash(target);
   });
 }
-for (const a of document.querySelectorAll<HTMLAnchorElement>(".sub-list a")) {
-  a.addEventListener("click", (e) => {
-    e.preventDefault();
-    const target = document.getElementById(a.hash.slice(1));
-    if (target) jumpToHash(target);
-  });
-}
 
-// 左栏模块按钮：点箭头 = 开合子目录；点当前模块主体 = 开合子目录；点其它模块 = 切换并展开
+// 左栏模块按钮：点击即切换到该模块
 for (const btn of docModuleBtns) {
-  btn.addEventListener("click", (e) => {
-    const mod = btn.dataset.doc!;
-    const sub = document.querySelector<HTMLElement>(`.sub-list[data-sub-for="${mod}"]`);
-    const onArrow = (e.target as HTMLElement).closest(".mod-arrow") !== null;
-    const isActiveModule = docModuleOf(activeDocPage) === mod;
-    if (sub && (onArrow || isActiveModule)) {
-      sub.hidden = !sub.hidden;
-      btn.classList.toggle("expanded", !sub.hidden);
-      return;
-    }
-    showDocPage(mod);
-  });
+  btn.addEventListener("click", () => showDocPage(btn.dataset.doc!));
 }
 
 // 滚动跟随高亮：右栏目录中当前章节（隐藏页的元素不会相交，天然只作用于当前页）
@@ -1078,6 +1053,92 @@ const chapterObserver = new IntersectionObserver(
 );
 for (const p of docPageEls) {
   for (const el of p.querySelectorAll<HTMLElement>("section[id], h3[id]")) chapterObserver.observe(el);
+}
+
+// ---------- 文档页小演示：互补滤波三路信号实时对比 ----------
+const compDemoCanvas = document.getElementById("fig-comp-demo") as HTMLCanvasElement | null;
+const compDemoCtx = compDemoCanvas ? compDemoCanvas.getContext("2d") : null;
+let compDemoRunning = false;
+let compDemoT = 0;
+const cdState = { gyro: 0, fused: 0 };
+const cdBuf: number[][] = [[], [], [], []];
+const CD_N = 420;
+const CD_COLORS = ["#16202f", "#e5484d", "#94a3b8", "#d97706"];
+
+/** 仅当文档层打开且停留在滤波概览页时运转（主循环里每帧调用一次步进） */
+function updateCompDemoRun(): void {
+  compDemoRunning = !docsOverlay.hidden && activeDocPage === "filters" && compDemoCtx !== null;
+}
+
+function stepCompDemo(dt: number): void {
+  if (!compDemoCtx || !compDemoCanvas) return;
+  compDemoT += dt;
+  const truth = 16 * Math.sin(0.55 * compDemoT) + 7 * Math.sin(0.17 * compDemoT);
+  const dTruth =
+    16 * 0.55 * Math.cos(0.55 * compDemoT) + 7 * 0.17 * Math.cos(0.17 * compDemoT);
+  const gyroRate = dTruth + 0.8 + (Math.random() - 0.5) * 4; // 陀螺仪：零偏 0.8°/s + 噪声
+  const accel = truth + (Math.random() - 0.5) * 26; // 加速度计：重噪声、不漂
+  cdState.gyro += gyroRate * dt;
+  cdState.fused += gyroRate * dt + 1.4 * (accel - cdState.fused) * dt; // 互补 α=1.4
+  cdBuf[0].push(truth);
+  cdBuf[1].push(cdState.gyro);
+  cdBuf[2].push(accel);
+  cdBuf[3].push(cdState.fused);
+  if (cdBuf[0].length > CD_N) for (const b of cdBuf) b.shift();
+  drawCompDemo();
+}
+
+function drawCompDemo(): void {
+  if (!compDemoCtx || !compDemoCanvas) return;
+  const ctx = compDemoCtx;
+  const W = compDemoCanvas.width;
+  const H = compDemoCanvas.height;
+  const L = 40, T = 24, B = 16, R = 8;
+  const mid = T + (H - T - B) / 2;
+  const sc = (H - T - B) / 2 / 40;
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, W, H);
+  ctx.strokeStyle = "#e5eaf2";
+  ctx.lineWidth = 1;
+  for (const v of [-30, -15, 15, 30]) {
+    ctx.beginPath();
+    ctx.moveTo(L, mid - v * sc);
+    ctx.lineTo(W - R, mid - v * sc);
+    ctx.stroke();
+  }
+  ctx.strokeStyle = "#c9d4e4";
+  ctx.beginPath();
+  ctx.moveTo(L, mid);
+  ctx.lineTo(W - R, mid);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(L, T);
+  ctx.lineTo(L, H - B);
+  ctx.stroke();
+  const legend = ["真实角", "陀螺仪积分（漂移）", "加速度计（噪声）", "融合"];
+  ctx.font = "11px sans-serif";
+  legend.forEach((t, i) => {
+    ctx.fillStyle = CD_COLORS[i];
+    ctx.fillText(t, L + 8 + i * 150, 14);
+  });
+  ctx.fillStyle = "#64748c";
+  ctx.fillText("±30°", 6, mid - 28 * sc + 4);
+  const n = cdBuf[0].length;
+  if (n < 2) return;
+  const widths = [1.6, 1.5, 1, 2.6];
+  cdBuf.forEach((buf, k) => {
+    ctx.strokeStyle = CD_COLORS[k];
+    ctx.lineWidth = widths[k];
+    ctx.beginPath();
+    for (let i = 0; i < n; i++) {
+      const x = L + ((W - L - R) * i) / (CD_N - 1);
+      const y = mid - Math.max(-38, Math.min(38, buf[i])) * sc;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  });
 }
 
 // ---------- 初始化 ----------

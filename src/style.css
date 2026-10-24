@@ -946,18 +946,6 @@ body[data-view="quat"] .section-quat { display: block; }
   color: var(--text);
   transition: border-color var(--t-fast), background var(--t-fast), box-shadow var(--t-fast);
 }
-.docs-toc .mod-row { display: flex; align-items: center; gap: 6px; }
-.docs-toc .mod-arrow {
-  flex: none;
-  width: 15px;
-  font-size: 10px;
-  line-height: 1;
-  color: var(--text-faint);
-  cursor: pointer;
-  transition: transform var(--t-fast), color var(--t-fast);
-}
-.docs-toc .mod-arrow:hover { color: var(--accent); }
-.docs-toc .module-link.expanded .mod-arrow { transform: rotate(90deg); }
 .docs-toc .module-link:hover { border-color: var(--accent-line); background: var(--bg-hover); }
 .docs-toc .module-link.active {
   border-color: var(--accent);
@@ -967,24 +955,6 @@ body[data-view="quat"] .section-quat { display: block; }
 .docs-toc .mod-name { font-size: 12.5px; font-weight: 600; }
 .docs-toc .mod-desc { font-size: 10.5px; color: var(--text-faint); }
 
-.sub-list {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  margin: -1px 0 2px 13px;
-  padding: 3px 0 3px 8px;
-  border-left: 2px solid var(--border);
-}
-.sub-list a {
-  padding: 4px 8px;
-  font-size: 12px;
-  color: var(--text-faint);
-  text-decoration: none;
-  border-radius: var(--r-sm);
-  transition: color var(--t-fast), background var(--t-fast);
-}
-.sub-list a:hover { color: var(--text); background: var(--bg-hover); }
-.sub-list a.active { color: var(--accent); background: var(--accent-soft); font-weight: 600; }
 .toc-foot {
   margin-top: 8px;
   padding: 4px;
@@ -1134,6 +1104,33 @@ body[data-view="quat"] .section-quat { display: block; }
   overflow-x: auto;
 }
 .formula b { color: var(--accent); }
+
+/* ---- 图示与演示 ---- */
+.doc-fig {
+  margin: 16px 0;
+  padding: 12px 12px 8px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-card);
+}
+.doc-fig svg { width: 100%; height: auto; display: block; }
+.doc-fig text { font-family: var(--font-sans); }
+.doc-fig-demo canvas {
+  width: 100%;
+  height: auto;
+  display: block;
+  background: #ffffff;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+.fig-cap {
+  margin: 8px 4px 2px;
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: var(--text-faint);
+  text-align: center;
+}
 
 /* 白话解说块 */
 .doc-page p.plain {

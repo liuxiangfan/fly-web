@@ -60,12 +60,17 @@
   `#gimbal-compare.ok|.warn` `#gimbal-status.warn`。
 - **文档页（浅色三栏）**：`#docs-overlay` 局部覆盖设计变量为浅色主题（纸面 #eef1f6）；
   `.docs-shell` 三栏网格 208px | 内容 | 188px，三个面板各自独立滚动、零间隙。
-  左栏 `.module-link`（▶ 箭头/再点当前模块主体均可开合 `.sub-list` 子目录——子项只有算法名，无嵌套推导项）；
+  左栏 `.module-link` 纯模块按钮（子目录与箭头已按用户要求删除，点击即切换）；
   中栏 `.doc-pages` 内 7 个 `.doc-page` 分页（manual / math / filters / 4 个 `f-*-detail` 推导独立页，
   推导页由 h2 标题的「完整推导 →」胶囊进入、页内 `back-link` 返回、步骤 h3 带 `fd-*-{n}` id）；
   右栏 `#docs-chapter-toc`「本页目录」由 JS 按当前页 section[id]/h3[id] 动态生成 + IntersectionObserver 跟随高亮。
   滚动位置**按页**记忆（docScrollMemory），退出再进入回到上次页面与位置。锚点跳转统一走 jumpToHash
   （目标在其它页先 showDocPage 再平滑滚动）。顶部 `.doc-index` chips 已删除。
+  **图示**：9 个 figure = 8 幅内联 SVG（数学工具箱三联图/倾斜机体与加速度计读数/两个「下」与叉积误差/
+  Slerp 大圆对比/互补三信号/Mahony P-I 分工/Madgwick 梯度碗/卡尔曼增益自适应——曲线类 SVG 由脚本
+  预计算生成）+ 1 个 Canvas 实时演示（#fig-comp-demo 互补滤波三路信号，stepCompDemo 挂在主循环 frame()，
+  仅当文档开且在 filters 页时运转 updateCompDemoRun()）。浅色图色板：红 #e5484d 橙 #d97706
+  绿 #059669 紫 #7c3aed 品红 #c026a3 噪声灰 #94a3b8。
   控制项条目 `.ctl` 三段式 `.k1/.k2/.k3`；公式 `.formula` 纯 Unicode pre-wrap；对比表 `.docs-table`。
 - **字体**：Fira Sans / Fira Code 通过 `media="print" onload` 非阻塞加载；国内网络失败时自动降级系统字体。
 
