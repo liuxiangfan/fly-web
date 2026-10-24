@@ -58,11 +58,13 @@
 - **显隐机制**：`body[data-view=attitude|gimbal|quat]` 驱动 CSS（quat 视图隐藏 charts/scenario/view/telemetry/imu/algo/readout）。
   JS 依赖的类名钩子：`.hidden` `.active` `.num-input` `.step-input` `.section-*` `.legend-chip[data-est]`
   `#gimbal-compare.ok|.warn` `#gimbal-status.warn`。
-- **文档页（三模块双栏）**：`#docs-overlay` = `.docs-shell` 网格：左栏 `.docs-toc .module-link` 大模块
-  （控制项手册 / 数学原理 / 滤波算法讲解，`.toc-foot` 留扩展位），右栏 `.doc-pages > .doc-page[hidden]` 分页；
-  每页顶部 `.doc-index` 章节 chips（锚点跳转 + IntersectionObserver 滚动跟随高亮）。
-  控制项条目 `.ctl` 卡片三段式 `.k1 是什么 / .k2 起什么作用 / .k3 改了会怎样`，同类多项用 `ul` 单开一行。
-  公式块 `.formula` 纯 Unicode + `white-space: pre-wrap`，白话块 `p.plain`，对比表 `.docs-table`。无 KaTeX 依赖。
+- **文档页（浅色双栏 + 子目录树）**：`#docs-overlay` 局部覆盖设计变量为浅色主题（纸面 #eef1f6，正文深色，
+  强调青加深为 #0e7fa8 保证对比度）；`.docs-shell` 网格 208px + 内容列，左右面板**各自独立滚动**（overlay 不滚）。
+  左栏 `.module-link`（`.mod-arrow` ▶ 可展开 `.sub-list` 子目录树，子项点击切模块+scrollIntoView）；
+  右栏 `.doc-pages` 内 `.doc-page` 分页 + `.doc-index` chips。滚动位置按模块记忆（docsMemory），
+  退出再进入回到上次位置。滤波模块四个算法 h2 带 `has-detail` 跳转胶囊 → 各自 `f-*-detail` 完整公式推导节
+  （含推导步骤/白话块/与 Mahony 等价性等），`back-link` 返回概览。
+  控制项条目 `.ctl` 三段式 `.k1/.k2/.k3`；公式 `.formula` 纯 Unicode pre-wrap；对比表 `.docs-table`。
 - **字体**：Fira Sans / Fira Code 通过 `media="print" onload` 非阻塞加载；国内网络失败时自动降级系统字体。
 
 ## 已完成里程碑

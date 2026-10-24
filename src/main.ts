@@ -949,14 +949,47 @@ function frame(): void {
   }
 }
 
-// ---------- 文档页（左栏选大模块，右侧目录 + 章节） ----------
+// ---------- 文档页（左栏模块 + 右侧内容双栏；退出位置记忆） ----------
 const docsOverlay = document.getElementById("docs-overlay")!;
+const docPagesEl = document.querySelector<HTMLElement>(".doc-pages")!;
+const docModuleBtns = [...document.querySelectorAll<HTMLButtonElement>(".docs-toc .module-link")];
+const docPagesList = [...document.querySelectorAll<HTMLElement>(".doc-page")];
+let activeDocModule = "manual";
+/** 每个模块各自的滚动位置；下次打开回到上次退出的地方 */
+const docsMemory = {
+  module: "manual",
+  scroll: new Map<string, { page: number; overlay: number }>(),
+};
+function docsScrollPos(): { page: number; overlay: number } {
+  return { page: docPagesEl.scrollTop, overlay: docsOverlay.scrollTop };
+}
+function setDocModule(id: string, restore = false): void {
+  if (!restore && id !== activeDocModule) docsMemory.scroll.set(activeDocModule, docsScrollPos());
+  activeDocModule = id;
+  docsMemory.module = id;
+  for (const b of docModuleBtns) {
+    b.classList.toggle("active", b.dataset.doc === id);
+    // 当前模块的子目录自动展开，其余保持用户手动的开合状态
+    if (b.dataset.doc === id) b.classList.add("expanded");
+  }
+  const sub = document.querySelector<HTMLElement>(`.sub-list[data-sub-for="${id}"]`);
+  if (sub) sub.hidden = false;
+  for (const p of docPagesList) p.hidden = p.dataset.docPage !== id;
+  if (!restore) {
+    docPagesEl.scrollTop = 0;
+    docsOverlay.scrollTop = 0;
+  }
+}
 function setDocsOpen(open: boolean): void {
   docsOverlay.hidden = !open;
   if (open) {
-    docsOverlay.scrollTop = 0;
     document.body.style.overflow = "hidden";
+    setDocModule(docsMemory.module, true);
+    const pos = docsMemory.scroll.get(docsMemory.module) ?? { page: 0, overlay: 0 };
+    docPagesEl.scrollTop = pos.page;
+    docsOverlay.scrollTop = pos.overlay;
   } else {
+    docsMemory.scroll.set(activeDocModule, docsScrollPos());
     document.body.style.overflow = "";
   }
 }
@@ -966,31 +999,52 @@ window.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && !docsOverlay.hidden) setDocsOpen(false);
 });
 
-// 左栏大模块切换
-const docModules = [...document.querySelectorAll<HTMLButtonElement>(".docs-toc .module-link")];
-const docPages = [...document.querySelectorAll<HTMLElement>(".doc-page")];
-function setDocModule(id: string): void {
-  for (const b of docModules) b.classList.toggle("active", b.dataset.doc === id);
-  for (const p of docPages) p.hidden = p.dataset.docPage !== id;
-  docsOverlay.scrollTop = 0;
+// 模块点击：点箭头 = 展开收起子目录；点其它区域 = 切换模块（并展开其子目录）
+for (const btn of docModuleBtns) {
+  btn.addEventListener("click", (e) => {
+    const onArrow = (e.target as HTMLElement).classList.contains("mod-arrow");
+    const sub = document.querySelector<HTMLElement>(`.sub-list[data-sub-for="${btn.dataset.doc}"]`);
+    if (onArrow && sub) {
+      sub.hidden = !sub.hidden;
+      btn.classList.toggle("expanded", !sub.hidden);
+      return;
+    }
+    setDocModule(btn.dataset.doc!);
+  });
 }
-for (const b of docModules) b.addEventListener("click", () => setDocModule(b.dataset.doc!));
+// 子目录链接：切换到所属模块并平滑滚到对应章节
+for (const a of document.querySelectorAll<HTMLAnchorElement>(".sub-list a")) {
+  a.addEventListener("click", (e) => {
+    e.preventDefault();
+    const moduleId = a.closest(".sub-list")!.getAttribute("data-sub-for")!;
+    setDocModule(moduleId);
+    document.getElementById(a.hash.slice(1))?.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+}
 
-// 目录滚动跟随：进入视口中部带宽的章节点亮对应目录项（隐藏模块的章节不会相交，天然跳过）
-const tocLinks = [...document.querySelectorAll<HTMLAnchorElement>(".doc-index a")];
-const tocById = new Map(tocLinks.map((a) => [`#${a.hash.slice(1)}`, a]));
+// 目录滚动跟随：进入视口中部带宽的章节点亮对应目录项（目录盒 chips + 左栏子目录，隐藏模块天然跳过）
+const tocLinks = [...document.querySelectorAll<HTMLAnchorElement>(".doc-index a, .sub-list a")];
+const tocById = new Map<string, HTMLAnchorElement[]>();
+for (const a of tocLinks) {
+  const key = `#${a.hash.slice(1)}`;
+  const list = tocById.get(key) ?? [];
+  list.push(a);
+  tocById.set(key, list);
+}
 const tocObserver = new IntersectionObserver(
   (entries) => {
     for (const en of entries) {
       if (!en.isIntersecting) continue;
-      const key = `#${en.target.id}`;
-      tocById.forEach((link, hash) => link.classList.toggle("active", hash === key));
+      const key = `#${(en.target as HTMLElement).id}`;
+      tocById.forEach((links, hash) => {
+        for (const link of links) link.classList.toggle("active", hash === key);
+      });
     }
   },
-  { root: docsOverlay, rootMargin: "-20% 0px -65% 0px" },
+  { root: docPagesEl, rootMargin: "-20% 0px -65% 0px" },
 );
-for (const link of tocLinks) {
-  const target = document.getElementById(link.hash.slice(1));
+for (const [key] of tocById) {
+  const target = document.getElementById(key.slice(1));
   if (target) tocObserver.observe(target);
 }
 
