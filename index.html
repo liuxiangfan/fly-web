@@ -244,20 +244,42 @@
       <section class="panel-section section-quat">
         <h2>四元数可视化</h2>
         <div class="row">
+          <label for="quat-mode">演示模式</label>
+          <select id="quat-mode">
+            <option value="interp" selected>插值对比（Slerp vs 欧拉）</option>
+            <option value="proj">4D 立体投影（q 活在超球上）</option>
+          </select>
+        </div>
+        <div class="row quat-interp-only">
           <label for="quat-pair-select">姿态对</label>
           <select id="quat-pair-select"></select>
         </div>
-        <div class="slider-row with-inputs">
+        <div class="slider-row with-inputs quat-interp-only">
           <label>插值进度 t</label>
           <input type="range" id="quat-t" min="0" max="1" step="0.01" value="0" />
           <input type="number" class="num-input" data-num="quat-t" step="any" />
           <input type="number" class="step-input" data-step="quat-t" min="0.01" max="1" title="滑杆步距" />
         </div>
-        <div class="row btn-row">
+        <div class="row btn-row quat-interp-only">
           <button class="btn primary" id="btn-quat-play">播放插值</button>
         </div>
-        <div class="row check-row">
+        <div class="row check-row quat-interp-only">
           <label><input type="checkbox" id="quat-neg-toggle" /> 演示 q 与 −q（同一旋转）</label>
+        </div>
+        <div id="quat-proj-group" class="sub-group hidden">
+          <div class="row btn-row">
+            <button class="btn" id="btn-proj-i">左乘 i</button>
+            <button class="btn" id="btn-proj-j">左乘 j</button>
+          </div>
+          <div class="row btn-row">
+            <button class="btn" id="btn-proj-k">左乘 k</button>
+            <button class="btn" id="btn-proj-reset">重置</button>
+          </div>
+          <p class="hint">
+            球面 = 4D 超球的「赤道」；青点 = q（球内），品红点 = −q（球外）。
+            连按同一按钮两次：q 走到 −q、3D 姿态却不变——双重覆盖的活演示。
+            详见文档·数学原理「立体投影」。
+          </p>
         </div>
         <div class="row check-row quat-only-extra hidden">
           <label>当前四元数分量 <span class="mono dim" id="quat-readout">—</span></label>
@@ -798,6 +820,60 @@
   <text x="560" y="184" font-size="10.5" fill="#64748c" text-anchor="middle">右手定则定方向；长度 = ‖a‖‖b‖·sinθ</text>
 </svg><figcaption class="fig-cap">图 1 · 数学工具箱三件套（从左到右 ①→②→③）：向量（方向+长度）、点积（同向程度）、叉积（垂直转轴）——后面所有推导反复使用的只有这三样。</figcaption></figure>
         </section>
+        <section id="m-why" class="math-section">
+          <h2>为什么恰好是四个数</h2>
+          <p>
+            欧拉角三个数就够描述姿态了，四元数却用四个——多出来的这个数不是浪费，
+            而是<b>把弯曲的旋转空间摊平</b>所付的「摊平费」。这件事从最简单的平面旋转就能看清楚。
+          </p>
+          <h3>台阶一：平面转角——角度会跳变，圆不会</h3>
+          <p>
+            平面里转一个角度 θ，看起来一个数就够。但它有个隐患：θ 本身在 ±180° 处断开——
+            转 +179° 与转 −179° 明明只差 2°，数值上却差 358°；两个角度相加也不封闭
+            （170°+170° = 340°，等价的应是 −20°）。解决办法是把角度「裹」到圆上：
+            用 <b>(cosθ, sinθ) 两个数</b>表示——这就是复数。复数乘法 = 转角相加，
+            处处连续、永不跳变。<b>1 个旋转自由度，贴上 2 维的圆 S¹，用 2 个数。</b>
+          </p>
+          <h3>台阶二：空间姿态——贴上 4 维超球</h3>
+          <p>
+            3D 姿态有 3 个旋转自由度，同样的病同样的药：旋转空间本身是弯曲的（欧拉角的奇点、
+            插值的扭曲都是弯曲的症状），要把它摊平，得贴到一个<b>更高一维的球面</b>上。
+            地图铺在平面上必然在边缘撕裂，裹成地球仪就处处光滑——旋转空间需要的「地球仪」
+            是 4 维球面 S³：<b>4 个数 + 单位约束（‖q‖=1）= 3 个自由度</b>。
+            在这张 4D 球面上，姿态相乘是光滑的乘法、姿态插值是球面上的大圆（Slerp）——
+            一切病都治好了。
+          </p>
+          <figure class="doc-fig"><svg viewBox="0 0 660 235" role="img">
+  <defs><marker id="m1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0e7fa8"/></marker><marker id="m2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#16202f"/></marker></defs>
+  <text x="160" y="26" font-size="12" fill="#16202f" text-anchor="middle" font-weight="600">平面旋转：1 个自由度 → 圆 S¹（2 个数）</text>
+  <circle cx="150" cy="120" r="70" fill="#f1f5fa" stroke="#c3cfdf" stroke-width="1.5"/>
+  <line x1="150" y1="120" x2="150" y2="50" stroke="#64748c" stroke-dasharray="3 3"/>
+  <circle cx="205.2" cy="76.9" r="5" fill="#0e7fa8"/>
+  <path d="M 150 58 A 62 62 0 0 1 205.2 76.9" fill="none" stroke="#0e7fa8" stroke-width="2.2" marker-end="url(#m1)"/>
+  <text x="168" y="62" font-size="13" fill="#0e7fa8" text-anchor="start">θ</text>
+  <text x="215.16075275247056" y="80.90369672720394" font-size="11.5" fill="#16202f" text-anchor="start" font-weight="600">(cosθ, sinθ)</text>
+  <text x="160" y="205" font-size="10.5" fill="#64748c" text-anchor="middle">角度本身在 ±180° 跳变；裹到圆上后处处连续</text>
+  <text x="160" y="222" font-size="10.5" fill="#64748c" text-anchor="middle">乘一个复数 = 转角相加——1 个数换成 2 个数的收益</text>
+  <text x="496" y="26" font-size="12" fill="#16202f" text-anchor="middle" font-weight="600">空间旋转：3 个自由度 → 超球 S³（4 个数）</text>
+  <circle cx="496" cy="118" r="66" fill="#f1f5fa" stroke="#c3cfdf" stroke-width="1.5"/>
+  <ellipse cx="496" cy="118" rx="66" ry="17" fill="none" stroke="#b9c6d8" stroke-dasharray="5 4"/>
+  <circle cx="542" cy="92" r="5.5" fill="#7c3aed"/>
+  <path d="M 496 52 A 74 74 0 0 1 542 92" fill="none" stroke="#7c3aed" stroke-width="2.2" marker-end="url(#m2)"/>
+  <text x="552" y="88" font-size="11.5" fill="#7c3aed" text-anchor="start" font-weight="600">(w, x, y, z)</text>
+  <text x="468" y="122" font-size="10.5" fill="#64748c" text-anchor="middle">单位约束</text>
+  <text x="496" y="205" font-size="10.5" fill="#64748c" text-anchor="middle">旋转空间是弯曲的，贴在 4D 球面上才处处光滑</text>
+  <text x="496" y="222" font-size="10.5" fill="#64748c" text-anchor="middle">多出的 1 个数是「摊平费」：换来无奇点 + 乘法封闭</text>
+</svg><figcaption class="fig-cap">图 9 · 维度阶梯：平面旋转 1 个自由度贴圆 S¹（复数，2 个数）；空间旋转 3 个自由度贴超球 S³（四元数，4 个数）。多出的 1 个数是「摊平费」，换来无奇点与乘法封闭。</figcaption></figure>
+          <h3>彩蛋：为什么没有「三元数」</h3>
+          <p>
+            2 个自由度对应的球面是 S²，那 3 个数（一个方向 + 一个角度）为什么不行？
+            因为 S² 上<b>无法定义无奇点的乘法</b>——拓扑学里的「毛球定理」说：
+            球面上的毛发（向量场）不可能处处梳理光滑，总有一个旋涡。所以 3 分量的数系不存在——
+            哈密顿为寻找它苦思十年，1843 年 10 月 16 日在都柏林布鲁姆桥上豁然开朗，刻下
+            <b>i² = j² = k² = ijk = −1</b>——放弃三元数、接受第四个数的瞬间，就是四元数诞生的瞬间。
+          </p>
+        </section>
+
 <section id="m-repr" class="math-section">
           <h2>姿态的数学表示：为什么是四元数</h2>
 
@@ -866,7 +942,100 @@
           </p>
         </section>
 
-                <section id="m-sensor" class="math-section">
+                        <section id="m-reps" class="math-section">
+          <h2>四种姿态表示：一个都不能少</h2>
+          <p>
+            工程与惯导讲义（如武汉大学 i2Nav《惯性导航姿态算法》）把姿态表示总结为四种。
+            它们不是竞争关系，而是各管一段：<b>四元数做主表示、矩阵做投影、旋转矢量做差值、欧拉角做人机界面。</b>
+          </p>
+          <h3>① 欧拉角 (φ, θ, ψ)：三个数，直观，有奇点</h3>
+          <p>按固定顺序三次旋转（ZYX）。三个数、人人看得懂；代价是 ±90° 俯仰奇点（万向节锁）与
+            更新方程里的 tanθ 发散项。它最适合出现在屏幕上给人看，不适合出现在算法里被积分。</p>
+          <h3>② 方向余弦矩阵 DCM：九个数，天生是「查表器」</h3>
+          <p>3×3 矩阵 C，满足 CᵀC = I、det C = 1。它就是本页姿态表示一章里那张 R(q) 表——
+            作用向量就是一次矩阵乘（本装置加计投影 Rᵀ(q)·g 用的正是 DCM 的列）。更新方程
+            Ċ = C·[ω]× 线性无奇点，但 9 个数背 6 个约束（冗余），插值与存储都不方便——
+            它是「计算的工具」，不是「保存的姿态」。</p>
+          <h3>③ 等效旋转矢量 φ = θ·n̂：三个数，「最小」的表示</h3>
+          <p>方向 = 旋转轴 n̂，长度 = 转角 θ。3 个数、零冗余、无奇点，是姿态「差值」的天然语言：
+            两个姿态的差 q₁⁻¹⊗q₂ 取其向量部分就是旋转矢量。高精度捷联惯导的姿态更新以它为标准
+            （圆锥补偿理论使单周期转动误差最小）。本装置四元数视图的「轴角箭头」演示，
+            用的就是它拆开的形式（单位轴 + 角度）。</p>
+          <h3>④ 四元数：四个数，工程主流</h3>
+          <p>单位约束 ‖q‖=1 压回 3 个自由度；乘法封闭、更新方程线性（q̇ = ½q⊗ω）、插值走大圆。
+            代价只有双重覆盖（q 与 −q 同姿态，Slerp 需短路径处理）与一步归一化维护——
+            本装置全部估计器以它为主表示。</p>
+          <table class="docs-table">
+            <thead><tr><th>表示</th><th>分量数</th><th>奇点</th><th>冗余</th><th>插值</th><th>典型岗位</th></tr></thead>
+            <tbody>
+              <tr><td>欧拉角</td><td>3</td><td>有（±90°）</td><td>无</td><td>会扭曲</td><td>人机界面显示</td></tr>
+              <tr><td>DCM 矩阵</td><td>9</td><td>无</td><td>6 约束</td><td>不便</td><td>向量投影/坐标变换</td></tr>
+              <tr><td>旋转矢量</td><td>3</td><td>无</td><td>无</td><td>小角度可加</td><td>姿态差值/高精度更新</td></tr>
+              <tr><td>四元数</td><td>4</td><td>无</td><td>单位约束</td><td>Slerp 大圆</td><td>主表示/积分/融合</td></tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section id="m-ijk" class="math-section">
+          <h2>i、j、k 到底是什么</h2>
+          <h3>从虚数 i 说起：i 就是「转 90°」的记号</h3>
+          <p>
+            中学里「i 是 −1 的平方根」其实隐藏了它的几何身份：把平面上的数乘以 i，
+            等于把它的方向逆时针转 90°。连乘两次 i（= i²）转 180°——一个向量转 180°
+            恰好变成自己的相反数，所以 i² = −1 不是怪谈，而是「转半圈 = 掉头」的代数写法。
+          </p>
+          <h3>搬到空间：i、j、k 是三根轴上的「转 180°」</h3>
+          <p>
+            四元数把这套记号搬到三维：i、j、k 分别表示<b>绕 x、y、z 轴转 180°</b>。
+            于是 i² = −1 的空间含义是：绕 x 轴转 360°，机体回到原样，
+            但四元数却整体变号（q → −q）——<b>转一圈不等于没转，转两圈才真正回位</b>。
+            这正是双重覆盖的机理，也是物理里「4π 才恢复」种种现象（狄拉克皮带戏法）的数学根源。
+          </p>
+          <p>三个记号之间的乘法（顺序敏感）：</p>
+          <div class="formula">i×j = k　　j×k = i　　k×i = j
+j×i = −k　 k×j = −i　 i×k = −j　　（交换顺序 = 结果变号 = 转动顺序不可交换）
+i² = j² = k² = i·j·k = −1</div>
+          <figure class="doc-fig"><svg viewBox="0 0 660 240" role="img">
+  <defs><marker id="m3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0e7fa8"/></marker><marker id="m4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c026a3"/></marker><marker id="m5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#45566e"/></marker></defs>
+  <circle cx="150" cy="118" r="66" fill="none" stroke="#e2e8f2" stroke-width="1.6"/>
+  <path d="M 158 64 A 58 58 0 0 1 201.15767664977295 143.0" fill="none" stroke="#0e7fa8" stroke-width="2.2" marker-end="url(#m3)"/>
+  <path d="M 201.15767664977295 159.0 A 58 58 0 0 1 98.84232335022705 143.0" fill="none" stroke="#0e7fa8" stroke-width="2.2" marker-end="url(#m3)"/>
+  <path d="M 100.84232335022705 141.0 A 58 58 0 0 1 140 62" fill="none" stroke="#0e7fa8" stroke-width="2.2" marker-end="url(#m3)"/>
+  <circle cx="150" cy="52" r="16" fill="#ffffff" stroke="#16202f" stroke-width="1.6"/><text x="150" y="57" font-size="15" fill="#16202f" text-anchor="middle" font-weight="600">i</text>
+  <circle cx="207.2" cy="151.0" r="16" fill="#ffffff" stroke="#16202f" stroke-width="1.6"/><text x="207.15767664977295" y="156.0" font-size="15" fill="#16202f" text-anchor="middle" font-weight="600">j</text>
+  <circle cx="92.8" cy="151.0" r="16" fill="#ffffff" stroke="#16202f" stroke-width="1.6"/><text x="92.84232335022705" y="156.0" font-size="15" fill="#16202f" text-anchor="middle" font-weight="600">k</text>
+  <text x="150" y="122" font-size="11" fill="#45566e" text-anchor="middle" font-weight="600">i²=j²=k²</text><text x="150" y="138" font-size="11" fill="#45566e" text-anchor="middle" font-weight="600">= −1</text>
+  <text x="216" y="74" font-size="11" fill="#0e7fa8" text-anchor="start">i×j = k</text>
+  <text x="216" y="164" font-size="11" fill="#0e7fa8" text-anchor="start">j×k = i</text>
+  <text x="22" y="164" font-size="11" fill="#0e7fa8" text-anchor="start">k×i = j</text>
+  <text x="110" y="214" font-size="10.5" fill="#64748c" text-anchor="start">顺着箭头乘得正；逆着乘变号（ji = −k）——不可交换</text>
+  <text x="490" y="26" font-size="12" fill="#16202f" text-anchor="middle" font-weight="600">同一个三明治，差一个共轭</text>
+  <line x1="360" y1="120" x2="452" y2="120" stroke="#64748c" stroke-width="2" stroke-dasharray="5 4"/>
+  <text x="406" y="110" font-size="10.5" fill="#64748c" text-anchor="middle">镜面</text>
+  <line x1="400" y1="160" x2="430" y2="92" stroke="#c026a3" stroke-width="2.2" marker-end="url(#m4)"/><line x1="400" y1="160" x2="370" y2="92" stroke="#c026a3" stroke-width="2.2" marker-end="url(#m4)"/>
+  <text x="438" y="150" font-size="12" fill="#c026a3" text-anchor="start">v</text><text x="360" y="150" font-size="12" fill="#c026a3" text-anchor="start">v′</text>
+  <text x="406" y="182" font-size="11.5" fill="#c026a3" text-anchor="middle" font-weight="600">q v q → 反射</text>
+  <line x1="540" y1="150" x2="610" y2="122" stroke="#16202f" stroke-width="2.2" marker-end="url(#m5)"/>
+  <path d="M 560 138 A 26 26 0 0 1 594 132" fill="none" stroke="#0e7fa8" stroke-width="1.8" marker-end="url(#m3)"/>
+  <text x="530" y="162" font-size="12" fill="#16202f" text-anchor="start">v</text><text x="606" y="134" font-size="12" fill="#16202f" text-anchor="start">v′</text>
+  <text x="574" y="182" font-size="11.5" fill="#0e7fa8" text-anchor="middle" font-weight="600">q v q* → 旋转</text>
+  <text x="490" y="214" font-size="10.5" fill="#64748c" text-anchor="middle">反射把世界镜像（左右互换）；旋转保持手性。</text>
+</svg><figcaption class="fig-cap">图 10 · 左：乘法环——顺着箭头乘得正、逆着变号；右：同一个「三明治」差一个共轭——q v q 是反射（河面成像），q v q* 才是旋转。</figcaption></figure>
+          <h3>反射 vs 旋转：一个共轭的差别</h3>
+          <p>
+            三明治乘法有两种包法：<b>q v q*</b> 是旋转（保持长度与手性）；
+            <b>q v q</b>（两边同号）是<b>反射</b>——把向量镜像过一张平面，该平面的法向量就是 q 的虚部。
+            反射会把世界左右互换（镜子里的小人用左手）。一个巧妙的实际应用：
+            河面倒影测深（UIUC 笔记的场景）——把河面当作镜面，用反射四元数直接把相机观测折算到
+            水下景物的对称位置。两次反射复合 = 一次旋转，这也是旋转三明治公式的另一种来历。
+          </p>
+          <p class="plain">
+            进阶：四元数还能写成 2×2 复矩阵（w+iz 与 ix+y 等），单位四元数恰好构成矩阵群 SU(2)；
+            「q 与 −q 是同一旋转」用代数说就是 SO(3) 是 SU(2) 除以 ±1 的商群——双重覆盖的正式表述。
+          </p>
+        </section>
+
+<section id="m-sensor" class="math-section">
           <h2>传感器测量模型：每个传感器到底测到什么</h2>
           <p>推导融合之前必须先弄清输入。<b>每个传感器 = 一个「理想观测量」+ 一串误差项</b>，写成方程一目了然。先看它们各自的物理原理：</p>
           <ul>
@@ -1181,7 +1350,34 @@ m<sub>y</sub>' = m<sub>y</sub>·cos φ − m<sub>z</sub>·sin φ
           </p>
         </section>
 
-        <section id="m-frame" class="math-section">
+                <section id="m-4d" class="math-section">
+          <h2>立体投影：把 4D 超球压进 3D</h2>
+          <p>
+            四元数活在 4 维超球面 S³ 上，人眼看不见 4D——但有一个经典技巧能把整个超球「压」进 3D：
+            <b>立体投影</b>（eater.net 可视化教程的核心手法）。想象从超球的「南极」(−1,0,0,0)
+            打一盏灯，S³ 上每个点 q 的影子落在 w=0 的三维屏幕上：
+          </p>
+          <div class="formula">p(q) = (x, y, z) / (1 + w)　　　（从南极投影到 w=0 超平面）</div>
+          <p>三条关键性质（都可以在「四元数」视图的 <b>4D 立体投影</b> 模式里亲眼验证）：</p>
+          <ul>
+            <li><b>赤道 = 参考球面</b>：w=0 的四元数（如基向量 i、j、k）投影后恰好落在单位球面上——视图里的半透明球就是 4D 超球的「赤道圈」。</li>
+            <li><b>内外有别</b>：w&gt;0 的点投在球内（单位 q 在球心），w&lt;0 的点投在球外——「北半球」被压进球里、「南半球」被翻到球外。</li>
+            <li><b>q 与 −q 是一对倒易点</b>：|p(q)|·|p(−q)| = 1——一个离球心多近，另一个就离球心多远，方向大致相对。它们是 4D 球面上的对径点（连线过 4D 球心），投影后变成「内外呼应」的一对。</li>
+          </ul>
+          <p>
+            <b>玩法</b>：切到「四元数」视图 → 演示模式选「4D 立体投影」，点「左乘 i」。
+            每按一次，q 沿超球面上的大圆走 180°，投影点划出一条弧线；
+            <b>连按两次 i：q 精确走到 −q</b>（青点跳到球外、品红点换进球内），而中央 3D 四轴的姿态纹丝不动——
+            4D 球上走了一整圈、3D 世界只转了 360° 的一半效果。这就是双重覆盖最直观的形态，
+            也是「转 360° 不等于没转」的几何现场。
+          </p>
+          <p class="plain">
+            同一手法反过来用就是「4D 里的乘法可视化」：左乘 i 是 4D 空间里的一次刚性旋转，
+            整个超球在转、我们看到的投影是它的影子在变形——影子世界里的曲线运动，全是 4D 直线/圆周运动的投影。
+          </p>
+        </section>
+
+<section id="m-frame" class="math-section">
           <h2>一帧之内：完整算法流程</h2>
           <p>把所有推导串起来，就是 500 Hz 循环里每 2 ms 发生的事：</p>
           <div class="formula">读入　ω ← 陀螺仪（含零偏+噪声）　a ← 加速度计　m ← 磁力计（MARG 开时）
@@ -1215,6 +1411,27 @@ m<sub>y</sub>' = m<sub>y</sub>·cos φ − m<sub>z</sub>·sin φ
             对照本文逐行观察这套流水线的实时运转。
           </p>
         </section>
+        <section id="m-practice" class="math-section">
+          <h2>工程实践备忘：面板滑块背后的真实世界</h2>
+          <p>以下是真实飞控与组合导航（参考北航 Rfly 课程、武大 i2Nav KF-GINS 架构）里与本装置各滑块对应的工程惯例。</p>
+          <h3>传感器标定：三条默认流水线</h3>
+          <ul>
+            <li><b>陀螺仪零偏</b>——上电静置数十秒取三轴均值（本装置卡尔曼滤波在线估计 |b| 是它的「运行时版本」；Mahony 的 Ki 积分项同理）。温度漂移明显时先预热再标。</li>
+            <li><b>加速度计</b>——六面标定：沿 ±x/±y/±z 各面静置，取均值解出零偏与刻度因子（对应「加速度计噪声」背后的系统性误差项）。</li>
+            <li><b>磁力计</b>——整机水平慢转几圈采样：硬铁偏移表现为点云整体平移（椭球中心偏离原点），软铁畸变表现为椭球轴向伸缩；拟合椭球即可补偿——这正是「磁干扰强度」滑块模拟、且文档反复强调「实际飞控需要磁强计校准」的那件事。</li>
+          </ul>
+          <h3>初始对准：冷启动的姿态从哪来</h3>
+          <p>静止时加速度计直接给出横滚/俯仰（atan2 公式），磁力计经倾斜补偿给出偏航——
+            这就是「对准」，与本装置互补滤波的公式完全同源。对准之后才切到积分+修正的运行模式。</p>
+          <h3>实际飞控的 ESKF 长什么样</h3>
+          <p>组合导航级（如 KF-GINS）的误差状态卡尔曼滤波状态向量扩展为
+            <b>[姿态误差 δθ, 速度, 位置, 陀螺零偏, 加速度计零偏]</b>，观测来自 GNSS/里程计等；
+            还有杆臂效应、地球自转补偿等高阶项。本装置的 6 维 [δθ, δb] 是它的姿态-零偏子集，
+            教学取舍是合理的：结构相同、维度更小。</p>
+          <p class="plain">一句话：面板上每个「误差滑块」，在真实工程里都对应一条成熟的标定/估计流水线——演示装置把流水线简化成滑块，正是为了让「病」可以随手调出来看。</p>
+        </section>
+
+
       </article>
 
       <article class="doc-page" data-doc-page="filters" hidden>

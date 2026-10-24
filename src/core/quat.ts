@@ -162,3 +162,17 @@ export function qSlerp(a: Quat, b: Quat, t: number): Quat {
     z: a.z * wa + bb.z * wb,
   };
 }
+
+/**
+ * 四元数 → 方向余弦矩阵（DCM，行主序 3×3）：C = R(q)，机体系→世界系，
+ * 即 world = C · body（与 qRot 严格一致，qRotInv 等价于 Cᵀ·v）。
+ * DCM 是惯性导航里与四元数并列的标准姿态表示（见文档·四种姿态表示）。
+ */
+export function qToMatrix(q: Quat): number[] {
+  const { w, x, y, z } = q;
+  return [
+    1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y),
+    2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x),
+    2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y),
+  ];
+}

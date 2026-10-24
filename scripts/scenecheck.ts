@@ -364,5 +364,42 @@ const rig = buildGimbal();
   );
 }
 
+// 9. 4D 立体投影：单位 q 投到原点、基向量投到球面、q/−q 为倒易点对（|p|·|p'|=1）
+{
+  const qv = buildQuatView();
+  const R = SPHERE_RADIUS;
+  // a) q = 单位 → 投影在原点
+  qv.setProjection({ w: 1, x: 0, y: 0, z: 0 });
+  const idOk = qv.parts.projQPos.length() < 1e-9;
+  // b) 基向量 i（w=0）→ 投影恰在球面上
+  qv.setProjection({ w: 0, x: 1, y: 0, z: 0 });
+  const basisOk = Math.abs(qv.parts.projQPos.length() - R) < 1e-9;
+  // c) 随机 q（w>0）：q 在球内、−q 在球外，且 |p(q)|·|p(−q)| = R²（倒易点对）
+  let maxInvErr = 0;
+  let inOutOk = true;
+  for (let i = 0; i < 30; i++) {
+    // 直接以归一化后的 w ∈ [0.2, 0.6] 构造（配 |v| = √(1−w²)）：
+    // −q 投影长度 ≤ √(1.6/0.4) = 2R，远离 3R 钳制
+    const wn = 0.2 + 0.4 * ((i * 37) % 11) / 10;
+    const sc = Math.sqrt(1 - wn * wn);
+    const vn = Math.hypot(Math.sin(i * 1.7), Math.cos(i * 2.3), Math.sin(i * 0.9));
+    qv.setProjection({
+      w: wn,
+      x: (sc * Math.sin(i * 1.7)) / vn,
+      y: (sc * Math.cos(i * 2.3)) / vn,
+      z: (sc * Math.sin(i * 0.9)) / vn,
+    });
+    const pq = qv.parts.projQPos.length();
+    const pn = qv.parts.projNegPos.length();
+    maxInvErr = Math.max(maxInvErr, Math.abs(pq * pn - R * R));
+    if (!(pq < R && pn > R)) inOutOk = false;
+  }
+  check(
+    "四元数视图：4D 立体投影几何",
+    idOk && basisOk && inOutOk && maxInvErr < 1e-6,
+    `单位q→原点=${idOk}；基向量i→球面=${basisOk}；q内/−q外=${inOutOk}；倒易性 |p|·|p′| 最大偏差 ${maxInvErr.toExponential(1)}`,
+  );
+}
+
 console.log(failures === 0 ? "\n场景图校验全部通过 ✅" : `\n${failures} 项失败 ❌`);
 process.exit(failures === 0 ? 0 : 1);

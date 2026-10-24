@@ -1,13 +1,13 @@
 # 项目状态 · 四元数姿态解算学习演示装置
 
 > **本文件是项目的恢复锚点。** 会话上下文被压缩后，从这里可以快速接续全部关键信息。
-> 最后更新：2026-10-24（第五次大改：卡尔曼滤波估计器 + 文档页三模块双栏 + 术语全称化 + favicon）
+> 最后更新：2026-10-25（参考资料驱动的内容丰富：四种姿态表示/i-j-k/立体投影新章 + 四元数视图 4D 投影模式）
 
 ## 一句话
 
 纯前端（无后端）的四轴无人机四元数姿态解算教学演示装置：Three.js 3D 姿态可视化 +
 模拟 IMU（含磁力计）+ 五种解算算法（含卡尔曼）实时对比 + 万向节锁平衡环架 + 四元数插值视图 +
-应用内文档页（控制项百科 + 完整数学推导）。
+应用内文档页（控制项百科 + 完整数学推导 + 滤波算法讲解 + 工程实践）。
 **已部署**：GitHub Actions → Cloudflare Workers，域名 `fly_web.070616.xyz`
 （备用 quaternion-attitude-demo.liu06167492.workers.dev），push 即自动上线。
 
@@ -15,7 +15,7 @@
 
 - Vite + TypeScript（无框架）+ Three.js（three ^0.170）
 - `npm run dev` / `npm run build`（= `tsc --noEmit && vite build` → `dist/`）/ `npm run preview`
-- `npm run check` = `selftest`（Node 数值自检）+ `scenecheck`（Node 下构建真实 three.js 场景图做几何校验），共 47 项
+- `npm run check` = `selftest`（Node 数值自检）+ `scenecheck`（Node 下构建真实 three.js 场景图做几何校验），共 50 项
 - 诊断脚本：`scripts/diag.ts`（收敛时间线）、`scripts/diag-violent.ts`（剧烈机动复现）
 - 源码改动后必须 `npm run build` 并在浏览器 **Ctrl+F5 强刷**（preview 服务的是构建产物）
 - 部署：`.github/workflows/deploy.yml`（wrangler v4），依赖 GitHub secrets 里的 Cloudflare 凭据
@@ -26,7 +26,7 @@
 
 | 文件 | 职责 |
 |---|---|
-| `core/quat.ts` | 纯 TS 四元数库：qMul/qConj/qDot/qNorm/qIntegrate/qFromEuler(ZYX)/qToEuler/qAngleBetween/qRot/qRotInv/qSlerp（短路径+小角分支）/qFromAxisAngle/**qToAxisAngle**/**eulerLerp**；NED 航空约定 |
+| `core/quat.ts` | 纯 TS 四元数库：qMul/qConj/qDot/qNorm/qIntegrate/qFromEuler(ZYX)/qToEuler/qAngleBetween/qRot/qRotInv/qSlerp（短路径+小角分支）/qFromAxisAngle/**qToAxisAngle**/**eulerLerp**/**qToMatrix**（四元数→DCM，与 qRot 严格一致）；NED 航空约定 | |
 | `core/gimbal.ts` | 万向环纯数学：`gimbalInnerQuat`、`gimbalAxisAlign`=sin(pitch)、`gimbalLocked`、`gimbalDemo(t)`（9 相位 14 秒）、`toDisplayQ`（NED→显示，S=Rx(90°)）；向量转换 `toDisplayVec`：(x,y,z)→(x,−z,y) |
 | `core/imu.ts` | IMU 模拟：accel = Rᵀ·(0,0,g) + 线加速度扰动 + 振动 + 白噪声；陀螺零偏方向 [1,−0.7,0.5]；**磁链**：`MAG_WORLD_NED`（磁倾角 49°，~50μT）+ `simulateMag`（投影→硬铁→交变干扰→噪声），磁参数全零时不消耗 gauss.next() |
 | `core/scenarios.ts` | 6 种机动剧本（hover/manual/roll360/pitch/composite/violent）+ 共享 `manualTarget`；`setScenario` 对未知 id 回落 hover |
@@ -35,7 +35,7 @@
 | `scene/setup.ts` | 渲染器/相机/灯光/地面/网格/罗盘/主四轴+幻影/万向环架；`toDisplay`、`setView`、`syncVisibility` |
 | `scene/quad.ts` | `buildQuad(ghost, {axes})` 程序化四轴：机头 +X、机体右 +Z、上 +Y |
 | `scene/gimbal.ts` | 平衡环架：外环偏航（蓝）→ 中环俯仰（金）→ 内环横滚（绿）；枢轴销连接相邻环；环标签随环转动；环内嵌四轴 scale 1.15 |
-| `scene/quatview.ts` | 四元数视图（球面参考方案）：参考球+赤道环+极轴；Slerp 白 / 欧拉品红双 Tube 弧（r=0.012）+ 滑动 marker；起终点蓝/橙球；中央四轴 0.55 + 机头箭头 + 轴角青箭头；q/−q 并排组（X ±0.95）。`parts.slerpPoints/eulerPoints` 采样点数组供 scenecheck 断言。`SPHERE_RADIUS=0.85`。API：`setInterpolation/setNegation/showNegation` |
+| `scene/quatview.ts` | 四元数视图（球面参考方案）：参考球+赤道环+极轴；Slerp 白 / 欧拉品红双 Tube 弧（r=0.012）+ 滑动 marker；起终点蓝/橙球；中央四轴 0.55 + 机头箭头 + 轴角青箭头；q/−q 并排组（X ±0.95）。`parts.slerpPoints/eulerPoints` 采样点数组供 scenecheck 断言。`SPHERE_RADIUS=0.85`。**4D 立体投影模式**（`projGroup`）：S³ 从南极 (−1,0,0,0) 投影 p=(x,y,z)/(1+w)，赤道 w=0 恰为参考球；青点 q（球内）/品红 −q（球外，倒易 |p(q)|·|p(−q)|=1）/轨迹线/i-j-k 基架/中央姿态四轴；lastDir 方向延续防极点跳变。API：`setInterpolation/setNegation/showNegation/setProjection/showProjection`；parts 增 `projGroup/projQPos/projNegPos` |
 | `scene/labels.ts` | `makeTextSprite(text, color, {size, bold, alwaysOnTop})` 通用文字标签 |
 | `ui/mode.ts` | 视图策略（纯函数）+ `narrateGimbal`；**精简模式已删除** |
 | `ui/chart.ts` | `RollingChart` 手绘 canvas 时序图；系列构造时固定 |
@@ -80,6 +80,14 @@
   控制项条目 `.ctl` 三段式 `.k1/.k2/.k3`；公式 `.formula` 纯 Unicode pre-wrap；对比表 `.docs-table`。
 - **字体**：Fira Sans / Fira Code 通过 `media="print" onload` 非阻塞加载；国内网络失败时自动降级系统字体。
 
+## 参考资料（2026-10-25 内容丰富轮）
+
+- [i2Nav《惯性导航姿态算法》讲义](http://i2nav.com/ueditor/jsp/upload/file/20220419/1650373794259063852.pdf)（四种姿态表示框架）与 [KF-GINS](https://github.com/i2Nav-WHU/KF-GINS)（ESKF 架构）
+- [eater.net 可视化四元数](https://eater.net/quaternions)（4D 立体投影交互思路）
+- [euclideanspace 四元数](https://www.euclideanspace.com/maths/algebra/realNormedAlgebra/quaternions/index.htm)（为什么四个数/球面直觉/i-j-k 旋转解释）
+- [UIUC 四元数笔记](https://new.math.uiuc.edu/oldnew/math595/2015/miller7/index.html)（反射三明治/2×2 复矩阵）
+- [Rfly 课程](https://rfly.buaa.edu.cn/course.html)（传感器标定等工程实践要点）
+
 ## 已完成里程碑
 
 - **M1 + M2**（`0315075`）：3D 可视化、模拟 IMU、四算法、双图表、6 种机动、手动控制
@@ -90,7 +98,15 @@
 - **四元数视图视觉重做 + 文档页 v1**（`7ea40b6`）：球面参考方案（Tube 弧/滑动 marker/q−q 并排）；
   应用内文档层；面板「原理速览」迁移删除
 - **M4 部署**：GitHub Actions → Cloudflare Workers，`fly_web.070616.xyz` 上线；Release v0.1.0
-- **文档页三模块 + 卡尔曼滤波**（本轮 ec743c4 后）：
+- **参考资料内容丰富**（本轮）：
+  - 数学原理新章 ×5：「为什么恰好是四个数」（维度阶梯+毛球定理/布鲁姆桥彩蛋，图 9）、
+    「四种姿态表示」（欧拉角/DCM/等效旋转矢量/四元数 + 对比表）、「i、j、k 到底是什么」
+    （乘法环图 10 + 反射/旋转三明治 + SU(2) 进阶框）、「立体投影」（投影公式/倒易点对/玩法）、
+    「工程实践备忘」（标定三流水线/初始对准/ESKF 架构）
+  - 四元数视图新增 **4D 立体投影模式**：模式下拉切换；左乘 i/j/k 按钮以 nlerp 弦插值动画
+    （保证终点精确，连按两次 i 演示 q→−q 双重覆盖）；scenecheck 新增投影几何断言
+  - core 新增 `qToMatrix`（DCM）；selftest 新增 DCM 正交性/旋转矢量往返（共 50 项检查）
+- **文档页三模块 + 卡尔曼滤波**（ec743c4 后）：
   - 文档页改「左栏大模块 / 右侧目录+章节」双栏：控制项手册、数学原理（零基础向：类比导入 + 数学工具箱 + 白话块）、滤波算法讲解（互补/Mahony/Madgwick/卡尔曼详解 + 对比选型表）
   - 新增 **KalmanEstimator**（ES-EKF）：误差状态 [δθ(3), δb(3)]，重力/磁场两组观测、40° 新息门控、零偏在线估计；UI 增卡尔曼 Q/R 滑块、曲线系列 #c084fc、玻璃盒零偏估计与新息读数
   - 术语全称化（陀螺仪/加速度计）、删副标题、favicon.svg、控制项列表化

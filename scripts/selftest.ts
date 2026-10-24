@@ -15,6 +15,7 @@ import {
 } from "../src/estimators";
 import {
   DEG,
+  qDot,
   RAD,
   eulerLerp,
   qAngleBetween,
@@ -22,9 +23,12 @@ import {
   qFromEuler,
   qId,
   qIntegrate,
+  qNorm,
+  qRot,
   qSlerp,
   qToAxisAngle,
   qToEuler,
+  qToMatrix,
 } from "../src/core/quat";
 import {
   GIMBAL_DEMO_DURATION,
@@ -622,6 +626,65 @@ const dirty: ImuParams = { gyroBiasDps: 1, gyroNoiseDps: 0.2, accelNoise: 0.15, 
     yawErr < 5,
     `12s 偏航误差 ${yawErr.toFixed(2)}°（应 <5°）`,
   );
+}
+
+// 23. DCM（qToMatrix）：正交性 + 行列式 1 + 与 qRot 一致 + 与 R(−q) 恒等
+{
+  const rnd = mulberry32(99);
+  let maxOrthoErr = 0;
+  let detErr = 0;
+  let maxRotErr = 0;
+  let maxNegErr = 0;
+  for (let i = 0; i < 60; i++) {
+    const q = qNorm({ w: rnd() * 2 - 1, x: rnd() * 2 - 1, y: rnd() * 2 - 1, z: rnd() * 2 - 1 });
+    const C = qToMatrix(q);
+    for (let r = 0; r < 3; r++) {
+      for (let c = 0; c < 3; c++) {
+        let dot = 0;
+        for (let k = 0; k < 3; k++) dot += C[k * 3 + r] * C[k * 3 + c];
+        const target = r === c ? 1 : 0;
+        maxOrthoErr = Math.max(maxOrthoErr, Math.abs(dot - target));
+      }
+    }
+    const det =
+      C[0] * (C[4] * C[8] - C[5] * C[7]) -
+      C[1] * (C[3] * C[8] - C[5] * C[6]) +
+      C[2] * (C[3] * C[7] - C[4] * C[6]);
+    detErr = Math.max(detErr, Math.abs(det - 1));
+    const v: [number, number, number] = [rnd() * 2 - 1, rnd() * 2 - 1, rnd() * 2 - 1];
+    const cv: [number, number, number] = [
+      C[0] * v[0] + C[1] * v[1] + C[2] * v[2],
+      C[3] * v[0] + C[4] * v[1] + C[5] * v[2],
+      C[6] * v[0] + C[7] * v[1] + C[8] * v[2],
+    ];
+    const rv = qRot(q, v);
+    maxRotErr = Math.max(maxRotErr, Math.hypot(cv[0] - rv[0], cv[1] - rv[1], cv[2] - rv[2]));
+    const Cn = qToMatrix({ w: -q.w, x: -q.x, y: -q.y, z: -q.z });
+    for (let k = 0; k < 9; k++) maxNegErr = Math.max(maxNegErr, Math.abs(C[k] - Cn[k]));
+  }
+  check("DCM 正交且与 qRot 一致", maxOrthoErr < 1e-12 && detErr < 1e-12 && maxRotErr < 1e-12 && maxNegErr < 1e-12,
+    `60 组随机姿态：正交性 ${maxOrthoErr.toExponential(1)}；det ${detErr.toExponential(1)}；C·v vs qRot ${maxRotErr.toExponential(1)}；R(−q)=R(q) ${maxNegErr.toExponential(1)}`,
+  );
+}
+
+// 24. 等效旋转矢量：φ = θ·n̂，与四元数往返一致（与 DCM/四元数并列的标准表示）
+{
+  const rnd = mulberry32(123);
+  let maxErr = 0;
+  for (let i = 0; i < 60; i++) {
+    const q = qNorm({ w: rnd() * 2 - 1, x: rnd() * 2 - 1, y: rnd() * 2 - 1, z: rnd() * 2 - 1 });
+    const { axis, angle } = qToAxisAngle(q);
+    const phi: [number, number, number] = [axis[0] * angle, axis[1] * angle, axis[2] * angle];
+    const th = Math.hypot(phi[0], phi[1], phi[2]);
+    const rebuilt = qFromAxisAngle([phi[0] / th, phi[1] / th, phi[2] / th], th);
+    const d = qDot(q, rebuilt) < 0 ? -1 : 1;
+    const err = Math.max(
+      Math.abs(q.w - d * rebuilt.w), Math.abs(q.x - d * rebuilt.x),
+      Math.abs(q.y - d * rebuilt.y), Math.abs(q.z - d * rebuilt.z),
+    );
+    maxErr = Math.max(maxErr, err);
+  }
+  check("等效旋转矢量往返一致", maxErr < 1e-9, `60 组随机姿态 q → φ=θ·n̂ → q 最大分量偏差 ${maxErr.toExponential(2)}`);
 }
 
 console.log(failures === 0 ? "\n全部通过 ✅" : `\n${failures} 项失败 ❌`);

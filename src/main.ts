@@ -13,7 +13,7 @@ import {
   PureGyroEstimator,
   type Estimator,
 } from "./estimators";
-import { DEG, qAngleBetween, qFromEuler, qSlerp, qToEuler, RAD } from "./core/quat";
+import { DEG, qAngleBetween, qFromEuler, qId, qMul, qNorm, qSlerp, qToEuler, RAD, type Quat } from "./core/quat";
 import { gimbalDemo, gimbalInnerQuat, toDisplayVec } from "./core/gimbal";
 import * as THREE from "three";
 import { applyViewDom, narrateGimbal, type UiView } from "./ui/mode";
@@ -527,6 +527,63 @@ function stepQuatPlay(dt: number): void {
   quatSlider.set(quatState.playT); // 内部会触发 apply 回调驱动 3D
 }
 
+// ---------- 4D 立体投影模式 ----------
+const projState = {
+  q: qId() as Quat,
+  anim: null as null | { from: Quat; to: Quat; t: number; dur: number },
+};
+const PROJ_I: Quat = { w: 0, x: 1, y: 0, z: 0 };
+const PROJ_J: Quat = { w: 0, x: 0, y: 1, z: 0 };
+const PROJ_K: Quat = { w: 0, x: 0, y: 0, z: 1 };
+
+function projApply(q: Quat): void {
+  $("quat-readout").textContent = `[${[q.w, q.x, q.y, q.z].map((a) => a.toFixed(3)).join(", ")}]`;
+  sceneHandles.quatView.setProjection(q);
+}
+
+function projAnimateTo(target: Quat): void {
+  // 弦上的归一化插值（nlerp）：不取短路径，保证终点恰为目标四元数（连按两次精确到 −q）
+  projState.anim = { from: { ...projState.q }, to: target, t: 0, dur: 0.7 };
+}
+$("btn-proj-i").addEventListener("click", () => projAnimateTo(qMul(projState.q, PROJ_I)));
+$("btn-proj-j").addEventListener("click", () => projAnimateTo(qMul(projState.q, PROJ_J)));
+$("btn-proj-k").addEventListener("click", () => projAnimateTo(qMul(projState.q, PROJ_K)));
+$("btn-proj-reset").addEventListener("click", () => projAnimateTo(qId()));
+
+$("quat-mode").addEventListener("change", () => {
+  const proj = ($("quat-mode") as HTMLSelectElement).value === "proj";
+  document.querySelectorAll(".quat-interp-only").forEach((el) => el.classList.toggle("hidden", proj));
+  $("quat-proj-group").classList.toggle("hidden", !proj);
+  if (proj) {
+    sceneHandles.quatView.showProjection(true);
+    projApply(projState.q);
+  } else {
+    sceneHandles.quatView.showProjection(false);
+    sceneHandles.quatView.showNegation(($("quat-neg-toggle") as HTMLInputElement).checked);
+  }
+});
+
+/** 投影动画推进（独立于仿真暂停） */
+function stepQuatProj(dt: number): void {
+  const a = projState.anim;
+  if (!a) return;
+  a.t += dt / a.dur;
+  const u = a.t >= 1 ? 1 : a.t * a.t * (3 - 2 * a.t);
+  const mid = qNorm({
+    w: a.from.w + (a.to.w - a.from.w) * u,
+    x: a.from.x + (a.to.x - a.from.x) * u,
+    y: a.from.y + (a.to.y - a.from.y) * u,
+    z: a.from.z + (a.to.z - a.from.z) * u,
+  });
+  if (a.t >= 1) {
+    projState.q = a.to;
+    projState.anim = null;
+    projApply(a.to);
+  } else {
+    projApply(mid);
+  }
+}
+
 /** 万向环读数、死锁警告、比对结果与高亮（每 0.1s 调一次） */
 function updateGimbalUi(): void {
   if (state.view !== "gimbal") return;
@@ -907,6 +964,7 @@ function frame(): void {
   // 万向节锁演示独立于仿真，暂停时也能演示
   stepDemo(dt);
   stepQuatPlay(dt);
+  stepQuatProj(dt);
 
   if (state.playing) {
     simAcc += dt;
