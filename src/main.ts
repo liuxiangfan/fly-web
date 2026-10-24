@@ -940,20 +940,39 @@ function frame(): void {
 }
 
 // ---------- 使用说明文档页 ----------
-$("btn-docs").addEventListener("click", () => {
-  const overlay = document.getElementById("docs-overlay")!;
-  overlay.hidden = !overlay.hidden;
-  if (!overlay.hidden) {
-    overlay.scrollTop = 0;
+const docsOverlay = document.getElementById("docs-overlay")!;
+function setDocsOpen(open: boolean): void {
+  docsOverlay.hidden = !open;
+  if (open) {
+    docsOverlay.scrollTop = 0;
     document.body.style.overflow = "hidden";
   } else {
     document.body.style.overflow = "";
   }
+}
+$("btn-docs").addEventListener("click", () => setDocsOpen(true));
+$("btn-docs-close").addEventListener("click", () => setDocsOpen(false));
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !docsOverlay.hidden) setDocsOpen(false);
 });
-$("btn-docs-close").addEventListener("click", () => {
-  document.getElementById("docs-overlay")!.hidden = true;
-  document.body.style.overflow = "";
-});
+
+// 目录滚动跟随：进入视口中部带宽的章节点亮对应目录项
+const tocLinks = [...document.querySelectorAll<HTMLAnchorElement>(".docs-toc a")];
+const tocById = new Map(tocLinks.map((a) => [`#${a.hash.slice(1)}`, a]));
+const tocObserver = new IntersectionObserver(
+  (entries) => {
+    for (const en of entries) {
+      if (!en.isIntersecting) continue;
+      const key = `#${en.target.id}`;
+      tocById.forEach((link, hash) => link.classList.toggle("active", hash === key));
+    }
+  },
+  { root: docsOverlay, rootMargin: "-20% 0px -65% 0px" },
+);
+for (const link of tocLinks) {
+  const target = document.getElementById(link.hash.slice(1));
+  if (target) tocObserver.observe(target);
+}
 
 // ---------- 初始化 ----------
 updateSourceChip();
