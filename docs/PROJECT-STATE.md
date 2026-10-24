@@ -58,12 +58,14 @@
 - **显隐机制**：`body[data-view=attitude|gimbal|quat]` 驱动 CSS（quat 视图隐藏 charts/scenario/view/telemetry/imu/algo/readout）。
   JS 依赖的类名钩子：`.hidden` `.active` `.num-input` `.step-input` `.section-*` `.legend-chip[data-est]`
   `#gimbal-compare.ok|.warn` `#gimbal-status.warn`。
-- **文档页（浅色双栏 + 子目录树）**：`#docs-overlay` 局部覆盖设计变量为浅色主题（纸面 #eef1f6，正文深色，
-  强调青加深为 #0e7fa8 保证对比度）；`.docs-shell` 网格 208px + 内容列，左右面板**各自独立滚动**（overlay 不滚）。
-  左栏 `.module-link`（`.mod-arrow` ▶ 可展开 `.sub-list` 子目录树，子项点击切模块+scrollIntoView）；
-  右栏 `.doc-pages` 内 `.doc-page` 分页 + `.doc-index` chips。滚动位置按模块记忆（docsMemory），
-  退出再进入回到上次位置。滤波模块四个算法 h2 带 `has-detail` 跳转胶囊 → 各自 `f-*-detail` 完整公式推导节
-  （含推导步骤/白话块/与 Mahony 等价性等），`back-link` 返回概览。
+- **文档页（浅色三栏）**：`#docs-overlay` 局部覆盖设计变量为浅色主题（纸面 #eef1f6）；
+  `.docs-shell` 三栏网格 208px | 内容 | 188px，三个面板各自独立滚动、零间隙。
+  左栏 `.module-link`（▶ 箭头/再点当前模块主体均可开合 `.sub-list` 子目录——子项只有算法名，无嵌套推导项）；
+  中栏 `.doc-pages` 内 7 个 `.doc-page` 分页（manual / math / filters / 4 个 `f-*-detail` 推导独立页，
+  推导页由 h2 标题的「完整推导 →」胶囊进入、页内 `back-link` 返回、步骤 h3 带 `fd-*-{n}` id）；
+  右栏 `#docs-chapter-toc`「本页目录」由 JS 按当前页 section[id]/h3[id] 动态生成 + IntersectionObserver 跟随高亮。
+  滚动位置**按页**记忆（docScrollMemory），退出再进入回到上次页面与位置。锚点跳转统一走 jumpToHash
+  （目标在其它页先 showDocPage 再平滑滚动）。顶部 `.doc-index` chips 已删除。
   控制项条目 `.ctl` 三段式 `.k1/.k2/.k3`；公式 `.formula` 纯 Unicode pre-wrap；对比表 `.docs-table`。
 - **字体**：Fira Sans / Fira Code 通过 `media="print" onload` 非阻塞加载；国内网络失败时自动降级系统字体。
 

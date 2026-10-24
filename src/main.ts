@@ -949,47 +949,71 @@ function frame(): void {
   }
 }
 
-// ---------- 文档页（左栏模块 + 右侧内容双栏；退出位置记忆） ----------
+// ---------- 文档页（左模块导航 + 中内容 + 右「本页目录」；按页记忆滚动位置） ----------
 const docsOverlay = document.getElementById("docs-overlay")!;
 const docPagesEl = document.querySelector<HTMLElement>(".doc-pages")!;
+const chapterToc = document.getElementById("docs-chapter-toc")!;
 const docModuleBtns = [...document.querySelectorAll<HTMLButtonElement>(".docs-toc .module-link")];
-const docPagesList = [...document.querySelectorAll<HTMLElement>(".doc-page")];
-let activeDocModule = "manual";
-/** 每个模块各自的滚动位置；下次打开回到上次退出的地方 */
-const docsMemory = {
-  module: "manual",
-  scroll: new Map<string, { page: number; overlay: number }>(),
-};
-function docsScrollPos(): { page: number; overlay: number } {
-  return { page: docPagesEl.scrollTop, overlay: docsOverlay.scrollTop };
+const docPageEls = [...document.querySelectorAll<HTMLElement>(".doc-page")];
+
+/** 页面 → 所属大模块（「完整推导」独立页归滤波算法讲解模块） */
+function docModuleOf(page: string): string {
+  return page.endsWith("-detail") ? "filters" : page;
 }
-function setDocModule(id: string, restore = false): void {
-  if (!restore && id !== activeDocModule) docsMemory.scroll.set(activeDocModule, docsScrollPos());
-  activeDocModule = id;
-  docsMemory.module = id;
+
+let activeDocPage = "manual";
+/** 每个页面各自的滚动位置；退出/切页时保存，回来时恢复 */
+const docScrollMemory = new Map<string, number>();
+
+function setModuleActive(module: string, expandSub: boolean): void {
   for (const b of docModuleBtns) {
-    b.classList.toggle("active", b.dataset.doc === id);
-    // 当前模块的子目录自动展开，其余保持用户手动的开合状态
-    if (b.dataset.doc === id) b.classList.add("expanded");
+    const on = b.dataset.doc === module;
+    b.classList.toggle("active", on);
+    if (on && expandSub) b.classList.add("expanded");
   }
-  const sub = document.querySelector<HTMLElement>(`.sub-list[data-sub-for="${id}"]`);
-  if (sub) sub.hidden = false;
-  for (const p of docPagesList) p.hidden = p.dataset.docPage !== id;
-  if (!restore) {
-    docPagesEl.scrollTop = 0;
-    docsOverlay.scrollTop = 0;
-  }
+  const sub = document.querySelector<HTMLElement>(`.sub-list[data-sub-for="${module}"]`);
+  if (sub && expandSub) sub.hidden = false;
 }
+
+/** 右侧「本页目录」：由当前页的 section[id]（章）与 h3[id]（推导步骤）生成 */
+function buildChapterToc(page: HTMLElement): void {
+  const anchors = [...page.querySelectorAll<HTMLElement>("section[id], h3[id]")];
+  const items: Array<{ id: string; text: string; sub: boolean }> = [];
+  for (const el of anchors) {
+    if (el.tagName === "SECTION") {
+      const head = el.querySelector("h2, h3");
+      if (head) items.push({ id: el.id, text: head.textContent!.trim(), sub: head.tagName === "H3" });
+    } else {
+      items.push({ id: el.id, text: el.textContent!.trim(), sub: true });
+    }
+  }
+  chapterToc.innerHTML =
+    `<div class="ct-title">本页目录</div>` +
+    (items.length
+      ? items
+          .map((it) => `<a href="#${it.id}"${it.sub ? ' class="ct-sub"' : ""}>${it.text}</a>`)
+          .join("")
+      : `<div class="ct-empty">（本页无小节）</div>`);
+}
+
+function showDocPage(id: string, restore = false): void {
+  const page = docPageEls.find((p) => p.dataset.docPage === id);
+  if (!page) return;
+  if (activeDocPage !== id) docScrollMemory.set(activeDocPage, docPagesEl.scrollTop);
+  activeDocPage = id;
+  for (const p of docPageEls) p.hidden = p !== page;
+  setModuleActive(docModuleOf(id), true);
+  buildChapterToc(page);
+  docPagesEl.scrollTop = restore ? (docScrollMemory.get(id) ?? 0) : 0;
+}
+
 function setDocsOpen(open: boolean): void {
   docsOverlay.hidden = !open;
   if (open) {
     document.body.style.overflow = "hidden";
-    setDocModule(docsMemory.module, true);
-    const pos = docsMemory.scroll.get(docsMemory.module) ?? { page: 0, overlay: 0 };
-    docPagesEl.scrollTop = pos.page;
-    docsOverlay.scrollTop = pos.overlay;
+    showDocPage(activeDocPage, true);
   } else {
-    docsMemory.scroll.set(activeDocModule, docsScrollPos());
+    docScrollMemory.set(activeDocPage, docPagesEl.scrollTop);
     document.body.style.overflow = "";
   }
 }
@@ -999,53 +1023,61 @@ window.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && !docsOverlay.hidden) setDocsOpen(false);
 });
 
-// 模块点击：点箭头 = 展开收起子目录；点其它区域 = 切换模块（并展开其子目录）
+/** 统一的文档内锚点跳转：目标在当前页 → 平滑滚动；在别的页 → 先切页再滚 */
+function jumpToHash(target: HTMLElement): void {
+  const page = target.closest(".doc-page") as HTMLElement | null;
+  if (page && page.dataset.docPage !== activeDocPage) showDocPage(page.dataset.docPage!);
+  target.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+for (const container of [docPagesEl, chapterToc]) {
+  container.addEventListener("click", (e) => {
+    const a = (e.target as HTMLElement).closest("a");
+    if (!a || !a.hash) return;
+    const target = document.getElementById(a.hash.slice(1));
+    if (!target) return;
+    e.preventDefault();
+    jumpToHash(target);
+  });
+}
+for (const a of document.querySelectorAll<HTMLAnchorElement>(".sub-list a")) {
+  a.addEventListener("click", (e) => {
+    e.preventDefault();
+    const target = document.getElementById(a.hash.slice(1));
+    if (target) jumpToHash(target);
+  });
+}
+
+// 左栏模块按钮：点箭头 = 开合子目录；点当前模块主体 = 开合子目录；点其它模块 = 切换并展开
 for (const btn of docModuleBtns) {
   btn.addEventListener("click", (e) => {
-    const onArrow = (e.target as HTMLElement).classList.contains("mod-arrow");
-    const sub = document.querySelector<HTMLElement>(`.sub-list[data-sub-for="${btn.dataset.doc}"]`);
-    if (onArrow && sub) {
+    const mod = btn.dataset.doc!;
+    const sub = document.querySelector<HTMLElement>(`.sub-list[data-sub-for="${mod}"]`);
+    const onArrow = (e.target as HTMLElement).closest(".mod-arrow") !== null;
+    const isActiveModule = docModuleOf(activeDocPage) === mod;
+    if (sub && (onArrow || isActiveModule)) {
       sub.hidden = !sub.hidden;
       btn.classList.toggle("expanded", !sub.hidden);
       return;
     }
-    setDocModule(btn.dataset.doc!);
-  });
-}
-// 子目录链接：切换到所属模块并平滑滚到对应章节
-for (const a of document.querySelectorAll<HTMLAnchorElement>(".sub-list a")) {
-  a.addEventListener("click", (e) => {
-    e.preventDefault();
-    const moduleId = a.closest(".sub-list")!.getAttribute("data-sub-for")!;
-    setDocModule(moduleId);
-    document.getElementById(a.hash.slice(1))?.scrollIntoView({ behavior: "smooth", block: "start" });
+    showDocPage(mod);
   });
 }
 
-// 目录滚动跟随：进入视口中部带宽的章节点亮对应目录项（目录盒 chips + 左栏子目录，隐藏模块天然跳过）
-const tocLinks = [...document.querySelectorAll<HTMLAnchorElement>(".doc-index a, .sub-list a")];
-const tocById = new Map<string, HTMLAnchorElement[]>();
-for (const a of tocLinks) {
-  const key = `#${a.hash.slice(1)}`;
-  const list = tocById.get(key) ?? [];
-  list.push(a);
-  tocById.set(key, list);
-}
-const tocObserver = new IntersectionObserver(
+// 滚动跟随高亮：右栏目录中当前章节（隐藏页的元素不会相交，天然只作用于当前页）
+const chapterObserver = new IntersectionObserver(
   (entries) => {
     for (const en of entries) {
       if (!en.isIntersecting) continue;
-      const key = `#${(en.target as HTMLElement).id}`;
-      tocById.forEach((links, hash) => {
-        for (const link of links) link.classList.toggle("active", hash === key);
+      const id = (en.target as HTMLElement).id;
+      chapterToc.querySelectorAll("a").forEach((a) => {
+        a.classList.toggle("active", a.hash === "#" + id);
       });
     }
   },
-  { root: docPagesEl, rootMargin: "-20% 0px -65% 0px" },
+  { root: docPagesEl, rootMargin: "-15% 0px -70% 0px" },
 );
-for (const [key] of tocById) {
-  const target = document.getElementById(key.slice(1));
-  if (target) tocObserver.observe(target);
+for (const p of docPageEls) {
+  for (const el of p.querySelectorAll<HTMLElement>("section[id], h3[id]")) chapterObserver.observe(el);
 }
 
 // ---------- 初始化 ----------

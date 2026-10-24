@@ -359,13 +359,9 @@
         <div class="sub-list" data-sub-for="filters" hidden>
           <a href="#f-intro">总览：共同框架</a>
           <a href="#f-comp">互补滤波</a>
-          <a href="#f-comp-detail">　└ 互补 · 完整推导</a>
           <a href="#f-mahony">Mahony</a>
-          <a href="#f-mahony-detail">　└ Mahony · 完整推导</a>
           <a href="#f-madg">Madgwick</a>
-          <a href="#f-madg-detail">　└ Madgwick · 完整推导</a>
           <a href="#f-kalman">卡尔曼滤波</a>
-          <a href="#f-kalman-detail">　└ 卡尔曼 · 完整推导</a>
           <a href="#f-compare">对比与选型</a>
         </div>
         <div class="toc-foot">更多模块待补充……</div>
@@ -378,17 +374,6 @@
           页面里每个滑块、开关、标记的百科条目：<b>是什么 · 起什么作用 · 改了会怎样</b>。
           建议对照演示界面边读边调。其他模块：数学原理（推导）、滤波算法讲解（选型）。
         </p>
-        <nav class="doc-index">
-          <a href="#d-start">快速上手</a>
-          <a href="#d-scenario">数据源与机动</a>
-          <a href="#d-imu">IMU 传感器模拟</a>
-          <a href="#d-algo">解算算法</a>
-          <a href="#d-display">3D 显示与读数</a>
-          <a href="#d-glass">玻璃盒：算法内部</a>
-          <a href="#d-gimbal">万向节锁视图</a>
-          <a href="#d-quat">四元数视图</a>
-          <a href="#d-coords">坐标系与约定</a>
-        </nav>
 
         <section id="d-start">
           <h2>快速上手</h2>
@@ -734,18 +719,6 @@
           面向零基础读者的完整推导链：只用五件高中数学工具（见「数学工具箱」），从三个传感器的物理原理出发，
           一步步推出四元数姿态解算的全过程。每节先给直觉、再给推导。
         </p>
-        <nav class="doc-index">
-          <a href="#m-overview">总览</a>
-          <a href="#m-tools">数学工具箱</a>
-          <a href="#m-repr">姿态的数学表示</a>
-          <a href="#m-sensor">传感器测量模型</a>
-          <a href="#m-integral">陀螺仪积分方程</a>
-          <a href="#m-error">误差：叉积</a>
-          <a href="#m-fusion">修正律</a>
-          <a href="#m-mag">磁力计与 MARG</a>
-          <a href="#m-slerp">Slerp 与 q/−q</a>
-          <a href="#m-frame">一帧之内</a>
-        </nav>
 
         <section id="m-overview" class="math-section">
           <div class="math-banner">数学原理</div>
@@ -1180,18 +1153,10 @@ m<sub>y</sub>' = m<sub>y</sub>·cos φ − m<sub>z</sub>·sin φ
         <h1>滤波算法讲解</h1>
         <p class="docs-lede">
           本模块逐个拆解本装置运行的五种解算算法：核心思想一句话、数据怎么流动、参数怎么调、优缺点与适用场景。
-          <b>点击任一算法的标题（带 ↓ 标记）可跳到该算法的完整公式推导</b>——面向零基础读者的逐步讲解；
+          <b>点击各算法标题旁的「完整推导 →」胶囊进入该算法的<b>独立推导页</b>（面向零基础读者的逐步讲解，页内可随时返回）；
           深层通识（四元数、叉积、传感器模型）在「数学原理」模块。
         </p>
 
-        <nav class="doc-index">
-          <a href="#f-intro">总览</a>
-          <a href="#f-comp">互补滤波</a>
-          <a href="#f-mahony">Mahony</a>
-          <a href="#f-madg">Madgwick</a>
-          <a href="#f-kalman">卡尔曼</a>
-          <a href="#f-compare">对比与选型</a>
-        </nav>
 
         <section id="f-intro">
           <h2>全景：所有算法共享同一个框架</h2>
@@ -1219,48 +1184,7 @@ m<sub>y</sub>' = m<sub>y</sub>·cos φ − m<sub>z</sub>·sin φ
           </div>
         </section>
 
-        <section id="f-comp-detail" class="detail-section">
-          <p class="back-link"><a href="#f-comp">↑ 返回互补滤波概览</a></p>
-          <h2>互补滤波完整推导：从两条路的缺陷说起</h2>
-
-          <h3>第一步：单轴模型与两条观测路径</h3>
-          <p>只看俯仰角 θ（其余两轴同理）。真实动力学只有一行：θ̇ = ω（俯仰角速度）。两条路各自估计它：</p>
-          <div class="formula">路径 A（陀螺仪积分）　θ̂<sub>g,n</sub> = θ̂<sub>g,n−1</sub> + ω<sub>g</sub>·dt
-　　把 ω<sub>g</sub> = ω + b + n 代入并累加：θ̂<sub>g,n</sub> = θ(t) + b·t + Σn·dt
-　　→ 误差 = b·t（线性漂移）+ 随机游走：<b>越久越差</b>
-
-路径 B（加速度计反解）　θ<sub>a</sub> = atan2(−f<sub>x</sub>, √(f<sub>y</sub>² + f<sub>z</sub>²))
-　　静止时严格等于真值加小噪声：误差方差恒定，<b>不随时间增长</b>；机动时被运动加速度污染</div>
-          <p class="plain">白话：路径 A 是「好动态、坏直流」——它知道每一步怎么变，但起点和积累全靠记忆；路径 B 是「好直流、坏动态」——它每次都现场量，量得慢还容易被骗。融合就是让 A 管高频、B 管低频。</p>
-
-          <h3>第二步：融合公式与两种等价形式</h3>
-          <div class="formula">形式 A（先积分，再整体拉回）　θ̂<sub>n</sub> = θ̂<sub>g,n</sub> + k·(θ<sub>a</sub> − θ̂<sub>g,n</sub>)
-形式 B（拉回量并入积分速度）　θ̂<sub>n</sub> = θ̂<sub>n−1</sub> + ω·dt + α·(θ<sub>a</sub> − θ̂<sub>n−1</sub>)·dt</div>
-          <p>把形式 A 的积分展开：</p>
-          <div class="formula">θ̂<sub>n</sub> = (1−k)·(θ̂<sub>n−1</sub> + ω·dt) + k·θ<sub>a</sub>
-　　　 = θ̂<sub>n−1</sub> + ω·dt + k·(θ<sub>a</sub> − θ̂<sub>n−1</sub> − ω·dt)
-　　　 ≈ 形式 B（k·ω·dt 是二阶小量，小 k 小 dt 时可忽略）</div>
-          <p>
-            两种形式在 k = α·dt 下一致。本装置实现形式 B：拉回量以「角速度」的身份进入积分通道，
-            与后续 Mahony 的结构完全同构——理解了互补，Mahony 就只差一个积分项。
-          </p>
-
-          <h3>第三步：为什么叫「互补」——频域视角</h3>
-          <p>对形式 A 做直觉频域分析：</p>
-          <ul>
-            <li>θ̂<sub>g</sub> 是「过去所有陀螺仪读数的累积和」——积分器。缓慢变化（直流/低频）的误差被忠实的累进去（漂移），所以它对<b>低频不可信、高频可信</b>：等效高通。</li>
-            <li>θ<sub>a</sub> 是每帧独立的现场测量——高频抖动大、均值准：等效低通。</li>
-            <li>融合权重 (1−k) 与 k 之和恒等于 1——两个滤波器的频率响应加起来恒为全通，<b>刚好互补</b>，这就是名字的由来。交叉频率 ≈ α（rad/s）。</li>
-          </ul>
-
-          <h3>第四步：偏航为什么丢失，以及欧拉角的死穴</h3>
-          <p>
-            θ<sub>a</sub> 的公式里只有 f<sub>x</sub>、f<sub>y</sub>、f<sub>z</sub>——绕重力轴旋转时这三个数都不变，
-            所以互补滤波<b>天生测不出偏航</b>（MARG 模式用倾斜补偿磁航向 ψ<sub>mag</sub> 替换，见数学原理·磁力计）。
-            另外当 θ → ±90° 时 atan2 的两个输入 √(f<sub>y</sub>²+f<sub>z</sub>²) 与自身都趋近退化，
-            倾角解算病态——这是欧拉角域实现的原罪，也是四元数算法存在的理由。
-          </p>
-        </section>
+        
 
         <section id="f-mahony">
           <h2 class="has-detail"><a href="#f-mahony-detail">Mahony：飞控里最常用的经典方案</a></h2>
@@ -1273,39 +1197,7 @@ m<sub>y</sub>' = m<sub>y</sub>·cos φ − m<sub>z</sub>·sin φ
           </div>
         </section>
 
-        <section id="f-mahony-detail" class="detail-section">
-          <p class="back-link"><a href="#f-mahony">↑ 返回 Mahony 概览</a></p>
-          <h2>Mahony 完整推导：误差反馈 + 自动学零偏</h2>
-
-          <h3>第一步：误差信号的小角度形态</h3>
-          <p>数学原理·误差一节已给出 e = a × ĝ。小角度时它可写成：</p>
-          <div class="formula">e ≈ θ<sub>err</sub>·n̂　　（误差角 × 旋转轴方向）</div>
-          <p>把它加进角速度再积分，效果恰好是「把姿态朝观测方向转 θ<sub>err</sub>」——误差信号天然就是修正角速度，这是 Mahony 一切简洁性的来源。</p>
-
-          <h3>第二步：闭环误差动力学——Kp 就是带宽</h3>
-          <p>把修正代入误差的传播（忽略旋转耦合的二阶项），得到一阶线性系统：</p>
-          <div class="formula">δθ̇ ≈ −Kp·δθ − δb　⇒　δθ(t) ≈ δθ(0)·e<sup>−Kp·t</sup> + (零偏引起的稳态项)</div>
-          <p class="plain">白话：误差像弹簧一样指数衰减，时间常数 = 1/Kp。Kp = 1 → 约 1 秒收敛；Kp 调大收敛快、但把加速度计的噪声也放大了同样倍数——这就是「快而抖」的数学形式。</p>
-
-          <h3>第三步：Ki 消零偏——一本慢慢记账的账本</h3>
-          <p>只有 Kp 时，稳态下修正必须恰好抵消零偏 b：Kp·δθ<sub>∞</sub> = b，即姿态永远差着 δθ<sub>∞</sub> = b/Kp。引入积分项后：</p>
-          <div class="formula">记 z = ∫e dt（账本），则 ω<sub>修正</sub> = Kp·e + Ki·z
-稳态推理：若姿态误差 δθ 不归零 → z 持续增长 → 修正持续增大 → 误差被继续压缩
-最终 δθ → 0，此时修正全部由 Ki·z 提供，而它必须恰好等于 b：
-　　Ki·z<sub>∞</sub> = b　⇒　z<sub>∞</sub> = b / Ki</div>
-          <p class="plain">白话：账本 z 最终「记下了零偏的大小」。此后哪怕误差归零，账本上的补偿依然在——陀螺仪零偏被静悄悄地学走了。玻璃盒 P-I 占比条里 I 的份额逐渐升高，就是这个收敛过程的现场直播。</p>
-
-          <h3>第四步：MARG——磁场补上偏航通道</h3>
-          <p>
-            重力误差 e 对绕重力轴的旋转严格不敏感（叉积的 z 分量不含偏航信息）。
-            磁场提供第二个方向：预测磁向量 m̂ = Rᵀ(q)·m<sub>world</sub>，磁误差 (m × m̂) 的 z 分量
-            只反映「机头绕 z 轴转了多少」——并入 e 的 z 通道后，偏航被磁场约束。横滚俯仰仍由重力主导，两向量各司其职、互不打架。
-          </p>
-
-          <h3>第五步：与互补滤波的关系</h3>
-          <p>Mahony 就是「搬到四元数域、多一个积分项的互补滤波」：Kp 对应互补 α 的角色，Ki 是全新的零偏学习通道。
-            因为工作在四元数域，它在任意姿态下都无奇点；因为误差沿机体系注入积分通道，它与四元数运动方程严丝合缝。</p>
-        </section>
+        
 
         <section id="f-madg">
           <h2 class="has-detail"><a href="#f-madg-detail">Madgwick：单参数的优化视角</a></h2>
@@ -1318,40 +1210,7 @@ m<sub>y</sub>' = m<sub>y</sub>·cos φ − m<sub>z</sub>·sin φ
           </div>
         </section>
 
-        <section id="f-madg-detail" class="detail-section">
-          <p class="back-link"><a href="#f-madg">↑ 返回 Madgwick 概览</a></p>
-          <h2>Madgwick 完整推导：把姿态解算变成下山</h2>
-
-          <h3>第一步：目标函数的逐分量展开</h3>
-          <p>「预测重力」用四元数旋转公式展开（数学原理·姿态表示），减去实测，得到三个残差分量：</p>
-          <div class="formula">f(q) = ⎡ 2(xz − wy) − a<sub>x</sub> ⎤
-　　　⎢ 2(wx + yz) − a<sub>y</sub> ⎥
-　　　⎣ 2(0.5 − x² − y²) − a<sub>z</sub> ⎦　　f(q) = ‖f‖²</div>
-          <p class="plain">白话：第三行 2(0.5 − x² − y²) 就是预测重力的 z 分量 1−2(x²+y²) 的另一半——三个分量都是 q 的二次函数，所以 f 对 q 求导毫不费力。</p>
-
-          <h3>第二步：梯度与「下山方向」</h3>
-          <p>目标函数的梯度 ∇f = Jᵀ·f，其中 J 的每一行是各残差对 w/x/y/z 的偏导。将上式逐项求导并整理，本装置实现的解析形式为：</p>
-          <div class="formula">∇f 的四元数形式　s = [ −2y·f₁ + 2x·f₂,
-　　　　　　　2z·f₁ + 2w·f₂ − 4x·f₃,
-　　　　　　−2w·f₁ + 2z·f₂ − 4y·f₃,
-　　　　　　　2x·f₁ + 2y·f₂ ]</div>
-          <p>
-            关键观察：<b>这个梯度方向与 Mahony 的叉积误差 e = a × ĝ 是同一个几何对象</b>——都是「从预测重力转向实测重力」的旋转在各自坐标系里的表达。
-            两种算法的差异不在「看什么误差」，而在「怎么用这个误差」：Mahony 用它造角速度，Madgwick 用它定义下降方向。
-          </p>
-
-          <h3>第三步：下降步与陀螺项的合成</h3>
-          <div class="formula">q̇ = q̇<sub>gyro</sub> − β · ∇f / ‖∇f‖　　（预测走大步，修正走小步）</div>
-          <p>归一化 ∇f 让 β 的量纲是「rad/s」——它直接就是修正角速度的上限：β = 0.1 意味着每秒最多拉回约 0.1 rad ≈ 5.7°。这与 Kp·e 在小误差下等价（e ≈ θ<sub>err</sub> 时 Kp·e 的量级也由 Kp 决定）。</p>
-
-          <h3>第四步：无积分项的代价——稳态误差公式</h3>
-          <p>恒定零偏 b 下，Madgwick 收敛到的平衡点由「下降步恰好抵消漂移」决定：</p>
-          <div class="formula">β · ‖∇f(q<sub>稳态</sub>)‖ ≈ b　⇒　稳态姿态误差 ≈ b / β（小角度）</div>
-          <p class="plain">白话：零偏每小时推着你走 b 度，下降步每小时只能拉回 β 度，两力平衡时姿态就停在差 b/β 的地方。Mahony 用账本（积分项）最终把 b 记下来，Madgwick 没有账本，只能停在平衡点——这就是两者稳态精度的差别。</p>
-
-          <h3>第五步：磁修正为什么是「独立方向分量」</h3>
-          <p>绕机体 z 轴的小旋转 δ 对四元数导数的贡献是 ½·q⊗(0, 0, δ)——与陀螺项的形态完全同构，所以可以按方向并列叠加进 (dw,dx,dy,dz)，再随整帧一起积分。本装置据此让磁场只管偏航、重力只管横滚俯仰，避免大倾斜时两个梯度目标互相抵消。</p>
-        </section>
+        
 
         <section id="f-kalman">
           <h2 class="has-detail"><a href="#f-kalman-detail">卡尔曼滤波：按不确定度最优加权</a></h2>
@@ -1364,48 +1223,7 @@ m<sub>y</sub>' = m<sub>y</sub>·cos φ − m<sub>z</sub>·sin φ
           </div>
         </section>
 
-        <section id="f-kalman-detail" class="detail-section">
-          <p class="back-link"><a href="#f-kalman">↑ 返回卡尔曼概览</a></p>
-          <h2>卡尔曼滤波完整推导：从两台秤说起</h2>
-
-          <h3>第一步：一维卡尔曼——最优加权就是方差的反比</h3>
-          <p>用两台精度不同的秤称同一物体：估计值 x̂（方差 P）与新测量 z（方差 R）。最优融合（最小方差线性无偏）只有一个解：</p>
-          <div class="formula">x̂⁺ = x̂ + K·(z − x̂)　，　K = P / (P + R)
-P 很小（自信）→ K→0 → 几乎不信新测量；P 很大（心虚）→ K→1 → 几乎全信测量</div>
-          <p class="plain">白话：卡尔曼增益 K 就是「此刻该信观测几成」。整部卡尔曼滤波 = 每帧自动更新这个「自信程度」的账本 P。这一行公式就是全部灵魂，后面只是把它搬到姿态上。</p>
-
-          <h3>第二步：为什么不能直接对四元数用线性卡尔曼</h3>
-          <p>两个障碍：① 四元数必须满足 ‖q‖=1，活在四维球面上，线性高斯假设不成立；② 观测（重力方向）是 q 的非线性函数。硬套会把 q 推出球面。</p>
-          <p class="plain">白话解法（MEKF 的核心思想）：把「大头」留给非线性方法——姿态照常用四元数积分；只把「小误差」拿出来做线性卡尔曼。小误差近似为 0，线性化成立，算完再把小误差贴回去。</p>
-
-          <h3>第三步：误差状态与它的运动方程</h3>
-          <div class="formula">误差定义　q<sub>真</sub> ≈ q ⊗ [1, δθ/2]　（δθ：机体系小角误差）　误差状态　x = [δθ, δb]
-运动方程线性化　δθ̇ = −ω×δθ − δb − n<sub>g</sub>　；　δḃ = n<sub>b</sub></div>
-          <p>
-            两项来历：−[ω]×δθ 是「误差向量随机体旋转而转动」（坐标系耦合）；<b>−δb 是关键项</b>——
-            零偏估计误差会一比一冒充角速度误差，这正是「卡尔曼能学零偏」的通道：姿态误差里含有零偏的痕迹，滤波器顺着痕迹把 b 估计出来。
-          </p>
-
-          <h3>第四步：预测——方差怎么长大</h3>
-          <div class="formula">P⁻ = Φ·P·Φᵀ + Q·dt　，　Φ = I + A·dt　，　A = ⎡−[ω]×　−I⎤
-　　　　　　　　　　　　　　　　　⎣　0　　 0⎦</div>
-          <p class="plain">白话三项：① P 对角线上的姿态方差被陀螺仪噪声 n<sub>g</sub> 每秒吹大一点（Q·dt）；② 姿态与零偏之间产生<b>负相关</b>——「零偏估小了」意味着「预测转少了」，两者此消彼长；③ 零偏自身的方差按随机游走缓慢增长（它可能慢漂）。协方差矩阵就是这三种不确定性的记账簿。</p>
-
-          <h3>第五步：更新——观测方程与增益</h3>
-          <div class="formula">观测方程（数学原理·误差一节的线性化）　z = a − ĝ ≈ [ĝ]×·δθ + v　→　H = [[ĝ]×, 0]
-增益　K = P⁻Hᵀ(H·P⁻·Hᵀ + R)⁻¹
-回填　δx = K·z：姿态 ← q ⊗ [1, δθ/2]；零偏估计 ← b + δb；P ← (I−KH)P（不确定度收缩）</div>
-          <p>磁场观测完全同构：把 ĝ 换成预测磁方向 m̂ 即可。本装置设 <b>40° 新息门控</b>——观测与预测夹角过大直接丢弃，防止机动野值把状态拽飞。</p>
-
-          <h3>第六步：与 Mahony 的关系——自动调增益的滤波器</h3>
-          <p>
-            收敛后 P 趋于稳态，K 也随之趋于常数——此时卡尔曼的更新形式与固定增益的 Mahony 几乎一样。
-            区别在<b>过渡过程</b>：机动中 P 大 → K 自动升 → 更信观测；观测被门控 → P 继续涨但无更新 → 纯预测；
-            静止后 K 自动回落。可以说：<b>卡尔曼 = 增益随不确定度自动调度的 Mahony + 显式的零偏估计器</b>。
-          </p>
-          <div class="formula">调参对照　Q ↔ 陀螺仪真实噪声水平（「过程有多不可信」）　R ↔ 加速度计噪声（「观测有多不可信」）
-带宽 ≈ 由 Q/R 比值决定：比值大 → 信观测多 → 跟随快而抖；比值小 → 平滑而慢</div>
-        </section>
+        
 
         <section id="f-compare">
           <h2>对比与选型</h2>
@@ -1425,9 +1243,165 @@ P 很小（自信）→ K→0 → 几乎不信新测量；P 很大（心虚）�
             ② 设陀螺仪零偏 2°/s 观察卡尔曼面板的 |b| 收敛过程；③ 把 R 拉到最大，观察它退化成「准纯积分」。</p>
         </section>
       </article>
+      <article id="f-comp-detail" class="doc-page" data-doc-page="f-comp-detail" hidden>
+        <p class="back-link"><a href="#f-comp">↑ 返回滤波算法讲解</a></p>
+        <h1>互补滤波完整推导</h1>
+        <p class="docs-lede">从两条路的缺陷说起</p>
+<h3 id="fd-comp-1">第一步：单轴模型与两条观测路径</h3>
+          <p>只看俯仰角 θ（其余两轴同理）。真实动力学只有一行：θ̇ = ω（俯仰角速度）。两条路各自估计它：</p>
+          <div class="formula">路径 A（陀螺仪积分）　θ̂<sub>g,n</sub> = θ̂<sub>g,n−1</sub> + ω<sub>g</sub>·dt
+　　把 ω<sub>g</sub> = ω + b + n 代入并累加：θ̂<sub>g,n</sub> = θ(t) + b·t + Σn·dt
+　　→ 误差 = b·t（线性漂移）+ 随机游走：<b>越久越差</b>
+
+路径 B（加速度计反解）　θ<sub>a</sub> = atan2(−f<sub>x</sub>, √(f<sub>y</sub>² + f<sub>z</sub>²))
+　　静止时严格等于真值加小噪声：误差方差恒定，<b>不随时间增长</b>；机动时被运动加速度污染</div>
+          <p class="plain">白话：路径 A 是「好动态、坏直流」——它知道每一步怎么变，但起点和积累全靠记忆；路径 B 是「好直流、坏动态」——它每次都现场量，量得慢还容易被骗。融合就是让 A 管高频、B 管低频。</p>
+
+          <h3 id="fd-comp-2">第二步：融合公式与两种等价形式</h3>
+          <div class="formula">形式 A（先积分，再整体拉回）　θ̂<sub>n</sub> = θ̂<sub>g,n</sub> + k·(θ<sub>a</sub> − θ̂<sub>g,n</sub>)
+形式 B（拉回量并入积分速度）　θ̂<sub>n</sub> = θ̂<sub>n−1</sub> + ω·dt + α·(θ<sub>a</sub> − θ̂<sub>n−1</sub>)·dt</div>
+          <p>把形式 A 的积分展开：</p>
+          <div class="formula">θ̂<sub>n</sub> = (1−k)·(θ̂<sub>n−1</sub> + ω·dt) + k·θ<sub>a</sub>
+　　　 = θ̂<sub>n−1</sub> + ω·dt + k·(θ<sub>a</sub> − θ̂<sub>n−1</sub> − ω·dt)
+　　　 ≈ 形式 B（k·ω·dt 是二阶小量，小 k 小 dt 时可忽略）</div>
+          <p>
+            两种形式在 k = α·dt 下一致。本装置实现形式 B：拉回量以「角速度」的身份进入积分通道，
+            与后续 Mahony 的结构完全同构——理解了互补，Mahony 就只差一个积分项。
+          </p>
+
+          <h3 id="fd-comp-3">第三步：为什么叫「互补」——频域视角</h3>
+          <p>对形式 A 做直觉频域分析：</p>
+          <ul>
+            <li>θ̂<sub>g</sub> 是「过去所有陀螺仪读数的累积和」——积分器。缓慢变化（直流/低频）的误差被忠实的累进去（漂移），所以它对<b>低频不可信、高频可信</b>：等效高通。</li>
+            <li>θ<sub>a</sub> 是每帧独立的现场测量——高频抖动大、均值准：等效低通。</li>
+            <li>融合权重 (1−k) 与 k 之和恒等于 1——两个滤波器的频率响应加起来恒为全通，<b>刚好互补</b>，这就是名字的由来。交叉频率 ≈ α（rad/s）。</li>
+          </ul>
+
+          <h3 id="fd-comp-4">第四步：偏航为什么丢失，以及欧拉角的死穴</h3>
+          <p>
+            θ<sub>a</sub> 的公式里只有 f<sub>x</sub>、f<sub>y</sub>、f<sub>z</sub>——绕重力轴旋转时这三个数都不变，
+            所以互补滤波<b>天生测不出偏航</b>（MARG 模式用倾斜补偿磁航向 ψ<sub>mag</sub> 替换，见数学原理·磁力计）。
+            另外当 θ → ±90° 时 atan2 的两个输入 √(f<sub>y</sub>²+f<sub>z</sub>²) 与自身都趋近退化，
+            倾角解算病态——这是欧拉角域实现的原罪，也是四元数算法存在的理由。
+          </p>
+      </article>
+
+      <article id="f-mahony-detail" class="doc-page" data-doc-page="f-mahony-detail" hidden>
+        <p class="back-link"><a href="#f-mahony">↑ 返回滤波算法讲解</a></p>
+        <h1>Mahony 完整推导</h1>
+        <p class="docs-lede">误差反馈 + 自动学零偏</p>
+<h3 id="fd-mahony-1">第一步：误差信号的小角度形态</h3>
+          <p>数学原理·误差一节已给出 e = a × ĝ。小角度时它可写成：</p>
+          <div class="formula">e ≈ θ<sub>err</sub>·n̂　　（误差角 × 旋转轴方向）</div>
+          <p>把它加进角速度再积分，效果恰好是「把姿态朝观测方向转 θ<sub>err</sub>」——误差信号天然就是修正角速度，这是 Mahony 一切简洁性的来源。</p>
+
+          <h3 id="fd-mahony-2">第二步：闭环误差动力学——Kp 就是带宽</h3>
+          <p>把修正代入误差的传播（忽略旋转耦合的二阶项），得到一阶线性系统：</p>
+          <div class="formula">δθ̇ ≈ −Kp·δθ − δb　⇒　δθ(t) ≈ δθ(0)·e<sup>−Kp·t</sup> + (零偏引起的稳态项)</div>
+          <p class="plain">白话：误差像弹簧一样指数衰减，时间常数 = 1/Kp。Kp = 1 → 约 1 秒收敛；Kp 调大收敛快、但把加速度计的噪声也放大了同样倍数——这就是「快而抖」的数学形式。</p>
+
+          <h3 id="fd-mahony-3">第三步：Ki 消零偏——一本慢慢记账的账本</h3>
+          <p>只有 Kp 时，稳态下修正必须恰好抵消零偏 b：Kp·δθ<sub>∞</sub> = b，即姿态永远差着 δθ<sub>∞</sub> = b/Kp。引入积分项后：</p>
+          <div class="formula">记 z = ∫e dt（账本），则 ω<sub>修正</sub> = Kp·e + Ki·z
+稳态推理：若姿态误差 δθ 不归零 → z 持续增长 → 修正持续增大 → 误差被继续压缩
+最终 δθ → 0，此时修正全部由 Ki·z 提供，而它必须恰好等于 b：
+　　Ki·z<sub>∞</sub> = b　⇒　z<sub>∞</sub> = b / Ki</div>
+          <p class="plain">白话：账本 z 最终「记下了零偏的大小」。此后哪怕误差归零，账本上的补偿依然在——陀螺仪零偏被静悄悄地学走了。玻璃盒 P-I 占比条里 I 的份额逐渐升高，就是这个收敛过程的现场直播。</p>
+
+          <h3 id="fd-mahony-4">第四步：MARG——磁场补上偏航通道</h3>
+          <p>
+            重力误差 e 对绕重力轴的旋转严格不敏感（叉积的 z 分量不含偏航信息）。
+            磁场提供第二个方向：预测磁向量 m̂ = Rᵀ(q)·m<sub>world</sub>，磁误差 (m × m̂) 的 z 分量
+            只反映「机头绕 z 轴转了多少」——并入 e 的 z 通道后，偏航被磁场约束。横滚俯仰仍由重力主导，两向量各司其职、互不打架。
+          </p>
+
+          <h3 id="fd-mahony-5">第五步：与互补滤波的关系</h3>
+          <p>Mahony 就是「搬到四元数域、多一个积分项的互补滤波」：Kp 对应互补 α 的角色，Ki 是全新的零偏学习通道。
+            因为工作在四元数域，它在任意姿态下都无奇点；因为误差沿机体系注入积分通道，它与四元数运动方程严丝合缝。</p>
+      </article>
+
+      <article id="f-madg-detail" class="doc-page" data-doc-page="f-madg-detail" hidden>
+        <p class="back-link"><a href="#f-madg">↑ 返回滤波算法讲解</a></p>
+        <h1>Madgwick 完整推导</h1>
+        <p class="docs-lede">把姿态解算变成下山</p>
+<h3 id="fd-madg-1">第一步：目标函数的逐分量展开</h3>
+          <p>「预测重力」用四元数旋转公式展开（数学原理·姿态表示），减去实测，得到三个残差分量：</p>
+          <div class="formula">f(q) = ⎡ 2(xz − wy) − a<sub>x</sub> ⎤
+　　　⎢ 2(wx + yz) − a<sub>y</sub> ⎥
+　　　⎣ 2(0.5 − x² − y²) − a<sub>z</sub> ⎦　　f(q) = ‖f‖²</div>
+          <p class="plain">白话：第三行 2(0.5 − x² − y²) 就是预测重力的 z 分量 1−2(x²+y²) 的另一半——三个分量都是 q 的二次函数，所以 f 对 q 求导毫不费力。</p>
+
+          <h3 id="fd-madg-2">第二步：梯度与「下山方向」</h3>
+          <p>目标函数的梯度 ∇f = Jᵀ·f，其中 J 的每一行是各残差对 w/x/y/z 的偏导。将上式逐项求导并整理，本装置实现的解析形式为：</p>
+          <div class="formula">∇f 的四元数形式　s = [ −2y·f₁ + 2x·f₂,
+　　　　　　　2z·f₁ + 2w·f₂ − 4x·f₃,
+　　　　　　−2w·f₁ + 2z·f₂ − 4y·f₃,
+　　　　　　　2x·f₁ + 2y·f₂ ]</div>
+          <p>
+            关键观察：<b>这个梯度方向与 Mahony 的叉积误差 e = a × ĝ 是同一个几何对象</b>——都是「从预测重力转向实测重力」的旋转在各自坐标系里的表达。
+            两种算法的差异不在「看什么误差」，而在「怎么用这个误差」：Mahony 用它造角速度，Madgwick 用它定义下降方向。
+          </p>
+
+          <h3 id="fd-madg-3">第三步：下降步与陀螺项的合成</h3>
+          <div class="formula">q̇ = q̇<sub>gyro</sub> − β · ∇f / ‖∇f‖　　（预测走大步，修正走小步）</div>
+          <p>归一化 ∇f 让 β 的量纲是「rad/s」——它直接就是修正角速度的上限：β = 0.1 意味着每秒最多拉回约 0.1 rad ≈ 5.7°。这与 Kp·e 在小误差下等价（e ≈ θ<sub>err</sub> 时 Kp·e 的量级也由 Kp 决定）。</p>
+
+          <h3 id="fd-madg-4">第四步：无积分项的代价——稳态误差公式</h3>
+          <p>恒定零偏 b 下，Madgwick 收敛到的平衡点由「下降步恰好抵消漂移」决定：</p>
+          <div class="formula">β · ‖∇f(q<sub>稳态</sub>)‖ ≈ b　⇒　稳态姿态误差 ≈ b / β（小角度）</div>
+          <p class="plain">白话：零偏每小时推着你走 b 度，下降步每小时只能拉回 β 度，两力平衡时姿态就停在差 b/β 的地方。Mahony 用账本（积分项）最终把 b 记下来，Madgwick 没有账本，只能停在平衡点——这就是两者稳态精度的差别。</p>
+
+          <h3 id="fd-madg-5">第五步：磁修正为什么是「独立方向分量」</h3>
+          <p>绕机体 z 轴的小旋转 δ 对四元数导数的贡献是 ½·q⊗(0, 0, δ)——与陀螺项的形态完全同构，所以可以按方向并列叠加进 (dw,dx,dy,dz)，再随整帧一起积分。本装置据此让磁场只管偏航、重力只管横滚俯仰，避免大倾斜时两个梯度目标互相抵消。</p>
+      </article>
+
+      <article id="f-kalman-detail" class="doc-page" data-doc-page="f-kalman-detail" hidden>
+        <p class="back-link"><a href="#f-kalman">↑ 返回滤波算法讲解</a></p>
+        <h1>卡尔曼滤波完整推导</h1>
+        <p class="docs-lede">从两台秤说起</p>
+<h3 id="fd-kalman-1">第一步：一维卡尔曼——最优加权就是方差的反比</h3>
+          <p>用两台精度不同的秤称同一物体：估计值 x̂（方差 P）与新测量 z（方差 R）。最优融合（最小方差线性无偏）只有一个解：</p>
+          <div class="formula">x̂⁺ = x̂ + K·(z − x̂)　，　K = P / (P + R)
+P 很小（自信）→ K→0 → 几乎不信新测量；P 很大（心虚）→ K→1 → 几乎全信测量</div>
+          <p class="plain">白话：卡尔曼增益 K 就是「此刻该信观测几成」。整部卡尔曼滤波 = 每帧自动更新这个「自信程度」的账本 P。这一行公式就是全部灵魂，后面只是把它搬到姿态上。</p>
+
+          <h3 id="fd-kalman-2">第二步：为什么不能直接对四元数用线性卡尔曼</h3>
+          <p>两个障碍：① 四元数必须满足 ‖q‖=1，活在四维球面上，线性高斯假设不成立；② 观测（重力方向）是 q 的非线性函数。硬套会把 q 推出球面。</p>
+          <p class="plain">白话解法（MEKF 的核心思想）：把「大头」留给非线性方法——姿态照常用四元数积分；只把「小误差」拿出来做线性卡尔曼。小误差近似为 0，线性化成立，算完再把小误差贴回去。</p>
+
+          <h3 id="fd-kalman-3">第三步：误差状态与它的运动方程</h3>
+          <div class="formula">误差定义　q<sub>真</sub> ≈ q ⊗ [1, δθ/2]　（δθ：机体系小角误差）　误差状态　x = [δθ, δb]
+运动方程线性化　δθ̇ = −ω×δθ − δb − n<sub>g</sub>　；　δḃ = n<sub>b</sub></div>
+          <p>
+            两项来历：−[ω]×δθ 是「误差向量随机体旋转而转动」（坐标系耦合）；<b>−δb 是关键项</b>——
+            零偏估计误差会一比一冒充角速度误差，这正是「卡尔曼能学零偏」的通道：姿态误差里含有零偏的痕迹，滤波器顺着痕迹把 b 估计出来。
+          </p>
+
+          <h3 id="fd-kalman-4">第四步：预测——方差怎么长大</h3>
+          <div class="formula">P⁻ = Φ·P·Φᵀ + Q·dt　，　Φ = I + A·dt　，　A = ⎡−[ω]×　−I⎤
+　　　　　　　　　　　　　　　　　⎣　0　　 0⎦</div>
+          <p class="plain">白话三项：① P 对角线上的姿态方差被陀螺仪噪声 n<sub>g</sub> 每秒吹大一点（Q·dt）；② 姿态与零偏之间产生<b>负相关</b>——「零偏估小了」意味着「预测转少了」，两者此消彼长；③ 零偏自身的方差按随机游走缓慢增长（它可能慢漂）。协方差矩阵就是这三种不确定性的记账簿。</p>
+
+          <h3 id="fd-kalman-5">第五步：更新——观测方程与增益</h3>
+          <div class="formula">观测方程（数学原理·误差一节的线性化）　z = a − ĝ ≈ [ĝ]×·δθ + v　→　H = [[ĝ]×, 0]
+增益　K = P⁻Hᵀ(H·P⁻·Hᵀ + R)⁻¹
+回填　δx = K·z：姿态 ← q ⊗ [1, δθ/2]；零偏估计 ← b + δb；P ← (I−KH)P（不确定度收缩）</div>
+          <p>磁场观测完全同构：把 ĝ 换成预测磁方向 m̂ 即可。本装置设 <b>40° 新息门控</b>——观测与预测夹角过大直接丢弃，防止机动野值把状态拽飞。</p>
+
+          <h3 id="fd-kalman-6">第六步：与 Mahony 的关系——自动调增益的滤波器</h3>
+          <p>
+            收敛后 P 趋于稳态，K 也随之趋于常数——此时卡尔曼的更新形式与固定增益的 Mahony 几乎一样。
+            区别在<b>过渡过程</b>：机动中 P 大 → K 自动升 → 更信观测；观测被门控 → P 继续涨但无更新 → 纯预测；
+            静止后 K 自动回落。可以说：<b>卡尔曼 = 增益随不确定度自动调度的 Mahony + 显式的零偏估计器</b>。
+          </p>
+          <div class="formula">调参对照　Q ↔ 陀螺仪真实噪声水平（「过程有多不可信」）　R ↔ 加速度计噪声（「观测有多不可信」）
+带宽 ≈ 由 Q/R 比值决定：比值大 → 信观测多 → 跟随快而抖；比值小 → 平滑而慢</div>
+      </article>
+
 
 
       </div>
+      <aside class="docs-chapter-toc" id="docs-chapter-toc" aria-label="本页目录"></aside>
     </div>
   </div>
 
