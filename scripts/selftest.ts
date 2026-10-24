@@ -8,6 +8,7 @@ import { simulateImu, type ImuParams } from "../src/core/imu";
 import { Gauss, mulberry32 } from "../src/core/rng";
 import {
   ComplementaryEstimator,
+  KalmanEstimator,
   MadgwickEstimator,
   MahonyEstimator,
   PureGyroEstimator,
@@ -563,6 +564,63 @@ const dirty: ImuParams = { gyroBiasDps: 1, gyroNoiseDps: 0.2, accelNoise: 0.15, 
     "磁干扰下 MARG 退化但仍有价值",
     onErr < offErr,
     `干扰下：磁开偏航误差 ${onErr.toFixed(1)}° < 磁关 ${offErr.toFixed(1)}°（磁扰使精度下降但不至于失控，磁强计校准是实际工程课题）`,
+  );
+}
+
+// 21. 卡尔曼滤波：静态收敛 + 抗零偏 + 零偏估计（ES-EKF 的独门能力）
+{
+  const qTrue = qFromEuler(15 * RAD, 25 * RAD, 40 * RAD);
+
+  // 干净静态：8s 倾角收敛
+  const kal1 = new KalmanEstimator();
+  const g1 = new Gauss(mulberry32(31));
+  for (let i = 0; i < Math.round(8 / H); i++) {
+    const s = simulateImu(qTrue, [0, 0, 0], i * H, clean, g1, 1);
+    kal1.update(s.gyro, s.accel, s.mag, H);
+  }
+  const eu1 = qToEuler(kal1.q);
+  const tilt1 = Math.max(Math.abs(eu1.roll - 15 * RAD), Math.abs(eu1.pitch - 25 * RAD)) * DEG;
+
+  // 脏数据（1°/s 零偏，磁关）：倾角有界，且零偏估计应收敛到真值附近
+  const kal2 = new KalmanEstimator();
+  const g2 = new Gauss(mulberry32(32));
+  for (let i = 0; i < Math.round(20 / H); i++) {
+    const s = simulateImu(qTrue, [0, 0, 0], i * H, dirty, g2, 1);
+    kal2.update(s.gyro, s.accel, s.mag, H);
+  }
+  const eu2 = qToEuler(kal2.q);
+  const tilt2 = Math.max(Math.abs(eu2.roll - 15 * RAD), Math.abs(eu2.pitch - 25 * RAD)) * DEG;
+  const biasEst = kal2.telemetry.detail.biasNormDps as number;
+  const biasErr = Math.abs(biasEst - 1);
+
+  check(
+    "卡尔曼静态收敛",
+    tilt1 < 1,
+    `8s 倾角误差 ${tilt1.toFixed(3)}°`,
+  );
+  check(
+    "卡尔曼抗零偏并估计出零偏",
+    tilt2 < 5 && biasErr < 0.4,
+    `20s 倾角误差 ${tilt2.toFixed(2)}°；零偏估计 ${biasEst.toFixed(3)}°/s（真值 1，误差 ${biasErr.toFixed(3)}）`,
+  );
+}
+
+// 22. MARG 卡尔曼：磁开 → 偏航收敛（1°/s 零偏下）
+{
+  const qTrue = qFromEuler(15 * RAD, 25 * RAD, 40 * RAD);
+  const pWithMag: ImuParams = { ...dirty, magNoise: 0.8, hardIron: 0, disturbMag: 0 };
+  const kal = new KalmanEstimator();
+  kal.magEnabled = true;
+  const g = new Gauss(mulberry32(33));
+  for (let i = 0; i < Math.round(12 / H); i++) {
+    const s = simulateImu(qTrue, [0, 0, 0], i * H, pWithMag, g, 1);
+    kal.update(s.gyro, s.accel, s.mag, H);
+  }
+  const yawErr = Math.abs(qToEuler(kal.q).yaw - 40 * RAD) * DEG;
+  check(
+    "MARG 卡尔曼：磁开偏航收敛",
+    yawErr < 5,
+    `12s 偏航误差 ${yawErr.toFixed(2)}°（应 <5°）`,
   );
 }
 

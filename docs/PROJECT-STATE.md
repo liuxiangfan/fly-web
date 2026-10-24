@@ -1,12 +1,12 @@
 # 项目状态 · 四元数姿态解算学习演示装置
 
 > **本文件是项目的恢复锚点。** 会话上下文被压缩后，从这里可以快速接续全部关键信息。
-> 最后更新：2026-10-24（文档页重做：侧边目录 + 控制项百科 + 数学原理模块）
+> 最后更新：2026-10-24（第五次大改：卡尔曼滤波估计器 + 文档页三模块双栏 + 术语全称化 + favicon）
 
 ## 一句话
 
 纯前端（无后端）的四轴无人机四元数姿态解算教学演示装置：Three.js 3D 姿态可视化 +
-模拟 IMU（含磁力计）+ 四种解算算法实时对比 + 万向节锁平衡环架 + 四元数插值视图 +
+模拟 IMU（含磁力计）+ 五种解算算法（含卡尔曼）实时对比 + 万向节锁平衡环架 + 四元数插值视图 +
 应用内文档页（控制项百科 + 完整数学推导）。
 **已部署**：GitHub Actions → Cloudflare Workers，域名 `fly_web.070616.xyz`
 （备用 quaternion-attitude-demo.liu06167492.workers.dev），push 即自动上线。
@@ -15,7 +15,7 @@
 
 - Vite + TypeScript（无框架）+ Three.js（three ^0.170）
 - `npm run dev` / `npm run build`（= `tsc --noEmit && vite build` → `dist/`）/ `npm run preview`
-- `npm run check` = `selftest`（Node 数值自检）+ `scenecheck`（Node 下构建真实 three.js 场景图做几何校验），共 44 项
+- `npm run check` = `selftest`（Node 数值自检）+ `scenecheck`（Node 下构建真实 three.js 场景图做几何校验），共 47 项
 - 诊断脚本：`scripts/diag.ts`（收敛时间线）、`scripts/diag-violent.ts`（剧烈机动复现）
 - 源码改动后必须 `npm run build` 并在浏览器 **Ctrl+F5 强刷**（preview 服务的是构建产物）
 - 部署：`.github/workflows/deploy.yml`（wrangler v4），依赖 GitHub secrets 里的 Cloudflare 凭据
@@ -31,7 +31,7 @@
 | `core/imu.ts` | IMU 模拟：accel = Rᵀ·(0,0,g) + 线加速度扰动 + 振动 + 白噪声；陀螺零偏方向 [1,−0.7,0.5]；**磁链**：`MAG_WORLD_NED`（磁倾角 49°，~50μT）+ `simulateMag`（投影→硬铁→交变干扰→噪声），磁参数全零时不消耗 gauss.next() |
 | `core/scenarios.ts` | 6 种机动剧本（hover/manual/roll360/pitch/composite/violent）+ 共享 `manualTarget`；`setScenario` 对未知 id 回落 hover |
 | `core/world.ts` | 真实姿态积分 + 姿态跟踪控制器（K=5，ω_max=4.2 rad/s）+ IMU 生成 |
-| `estimators/index.ts` | 四估计器统一 `Estimator` 接口：`update(gyro,accel,mag,dt)` + `magEnabled` + `telemetry`（rate/rawGyro/correction/predictedGravity/measuredGravity/accelNorm/accelValid/magValid/detail）。Mahony MARG：磁误差 z 分量并入；Madgwick：独立偏航方向分量；互补：`tiltCompensatedYaw` |
+| `estimators/index.ts` | 五估计器统一 `Estimator` 接口：`update(gyro,accel,mag,dt)` + `magEnabled` + `telemetry`（rate/rawGyro/correction/predictedGravity/measuredGravity/accelNorm/accelValid/magValid/detail）。Mahony MARG：磁误差 z 分量并入；Madgwick：独立偏航方向分量；互补：`tiltCompensatedYaw`；**KalmanEstimator**：ES-EKF/MEKF（6 维误差状态 [δθ,δb]，重力+磁场观测，40° 新息门控，可估计陀螺仪零偏，参数 Q=gyroNoiseDps / R=obsNoise） |
 | `scene/setup.ts` | 渲染器/相机/灯光/地面/网格/罗盘/主四轴+幻影/万向环架；`toDisplay`、`setView`、`syncVisibility` |
 | `scene/quad.ts` | `buildQuad(ghost, {axes})` 程序化四轴：机头 +X、机体右 +Z、上 +Y |
 | `scene/gimbal.ts` | 平衡环架：外环偏航（蓝）→ 中环俯仰（金）→ 内环横滚（绿）；枢轴销连接相邻环；环标签随环转动；环内嵌四轴 scale 1.15 |
@@ -53,13 +53,16 @@
   读数由数值输入框承担，**不要再引入 `<output>`**（曾被批量转换脚本删光，导致 14 个滑块初始化中断）。
 - **事件回调**：不能直接写 `addEventListener("input", stopDemo)`——事件对象会误入 `keepConclusion` 参数，
   必须包一层 `() => stopDemo()`。
+- **术语**：界面与文档一律用全称「陀螺仪」「加速度计」，不用「陀螺」「加计」简称（用户明确要求）。
+- **图标**：`public/favicon.svg`（四轴俯视 X 机架 + 四色旋翼环 + 机头向量），由 index.html `<link rel=icon>` 引用。
 - **显隐机制**：`body[data-view=attitude|gimbal|quat]` 驱动 CSS（quat 视图隐藏 charts/scenario/view/telemetry/imu/algo/readout）。
   JS 依赖的类名钩子：`.hidden` `.active` `.num-input` `.step-input` `.section-*` `.legend-chip[data-est]`
   `#gimbal-compare.ok|.warn` `#gimbal-status.warn`。
-- **文档页**：`#docs-overlay` 全屏层 = `.docs-shell` 网格（`.docs-toc` sticky 目录 + `.docs-body` 章节）。
-  控制项条目用 `.ctl` 卡片，三段式 `.k1 是什么 / .k2 起什么作用 / .k3 改了会怎样`。
-  公式块 `.formula` 用**纯 Unicode + `white-space: pre-wrap`**，无 KaTeX/外部渲染依赖（国内网络友好）。
-  目录高亮由 IntersectionObserver（root=overlay，rootMargin -20%/-65% 带）驱动，锚点 href=#id 直接跳转。
+- **文档页（三模块双栏）**：`#docs-overlay` = `.docs-shell` 网格：左栏 `.docs-toc .module-link` 大模块
+  （控制项手册 / 数学原理 / 滤波算法讲解，`.toc-foot` 留扩展位），右栏 `.doc-pages > .doc-page[hidden]` 分页；
+  每页顶部 `.doc-index` 章节 chips（锚点跳转 + IntersectionObserver 滚动跟随高亮）。
+  控制项条目 `.ctl` 卡片三段式 `.k1 是什么 / .k2 起什么作用 / .k3 改了会怎样`，同类多项用 `ul` 单开一行。
+  公式块 `.formula` 纯 Unicode + `white-space: pre-wrap`，白话块 `p.plain`，对比表 `.docs-table`。无 KaTeX 依赖。
 - **字体**：Fira Sans / Fira Code 通过 `media="print" onload` 非阻塞加载；国内网络失败时自动降级系统字体。
 
 ## 已完成里程碑
@@ -72,7 +75,12 @@
 - **四元数视图视觉重做 + 文档页 v1**（`7ea40b6`）：球面参考方案（Tube 弧/滑动 marker/q−q 并排）；
   应用内文档层；面板「原理速览」迁移删除
 - **M4 部署**：GitHub Actions → Cloudflare Workers，`fly_web.070616.xyz` 上线；Release v0.1.0
-- **文档页重做 + 数学原理模块**（本轮）：
+- **文档页三模块 + 卡尔曼滤波**（本轮 ec743c4 后）：
+  - 文档页改「左栏大模块 / 右侧目录+章节」双栏：控制项手册、数学原理（零基础向：类比导入 + 数学工具箱 + 白话块）、滤波算法讲解（互补/Mahony/Madgwick/卡尔曼详解 + 对比选型表）
+  - 新增 **KalmanEstimator**（ES-EKF）：误差状态 [δθ(3), δb(3)]，重力/磁场两组观测、40° 新息门控、零偏在线估计；UI 增卡尔曼 Q/R 滑块、曲线系列 #c084fc、玻璃盒零偏估计与新息读数
+  - 术语全称化（陀螺仪/加速度计）、删副标题、favicon.svg、控制项列表化
+  - selftest 新增 3 项卡尔曼测试（静态收敛 / 抗零偏+零偏估计 / MARG 偏航收敛），共 47 项
+- **文档页重做 + 数学原理模块**（ec743c4）：
   - 侧边目录（sticky + 滚动跟随高亮）+ 9 个功能章节 + 9 节数学推导
   - 功能章改为**控制项百科**：每个滑块/开关/标记三段式「是什么 / 起什么作用 / 改了会怎样」
   - 数学章完整推导链：数据流水线总览 → SO(3) 与四元数（乘法/旋转公式/R(q) 矩阵/双重覆盖）→

@@ -7,6 +7,7 @@ import { scenarios } from "./core/scenarios";
 import type { ImuParams, ImuSample } from "./core/imu";
 import {
   ComplementaryEstimator,
+  KalmanEstimator,
   MahonyEstimator,
   MadgwickEstimator,
   PureGyroEstimator,
@@ -43,10 +44,12 @@ const ests: Estimator[] = [
   new ComplementaryEstimator(),
   new MahonyEstimator(),
   new MadgwickEstimator(),
+  new KalmanEstimator(),
 ];
 const comp = ests[1] as ComplementaryEstimator;
 const mahony = ests[2] as MahonyEstimator;
 const madg = ests[3] as MadgwickEstimator;
+const kalman = ests[4] as KalmanEstimator;
 
 const imuParams: ImuParams = {
   gyroBiasDps: 1,
@@ -63,8 +66,8 @@ const state = {
   playing: true,
   source: "mahony" as "truth" | Estimator["id"],
   channel: 0,
-  attVisible: [true, true, true, true, true],
-  errVisible: [true, true, true, true],
+  attVisible: [true, true, true, true, true, true],
+  errVisible: [true, true, true, true, true],
   lastImu: null as ImuSample | null,
   /** 视图：四轴姿态 / 万向节锁（不持久化，每次从四轴姿态开始） */
   view: "attitude" as UiView,
@@ -82,12 +85,12 @@ const errChart = new RollingChart($("err-canvas"), estSeries, { windowSec: CHART
 // 原始记录（切换通道时不丢历史）
 interface LogRow {
   t: number;
-  euler: number[][]; // [真实, pure, comp, mahony, madg] × [φ,θ,ψ]（度，原始值）
+  euler: number[][]; // [真实, pure, comp, mahony, madg, kalman] × [φ,θ,ψ]（度，原始值）
   err: number[]; // 总误差（度）
 }
 const logRows: LogRow[] = [];
 // 解卷绕历史：按 数据源×通道 分开记录
-const attPrev = new Array<number | undefined>(15).fill(undefined);
+const attPrev = new Array<number | undefined>(18).fill(undefined);
 
 function unwrap(slot: number, v: number): number {
   const p = attPrev[slot];
@@ -318,6 +321,8 @@ bindSlider("mahony-kp", (v) => (mahony.kp = v), (v) => v.toFixed(2));
 bindSlider("mahony-ki", (v) => (mahony.ki = v), (v) => v.toFixed(2));
 bindSlider("madg-beta", (v) => (madg.beta = v), (v) => v.toFixed(2));
 bindSlider("comp-alpha", (v) => (comp.alpha = v), (v) => v.toFixed(2));
+bindSlider("kalman-proc", (v) => (kalman.gyroNoiseDps = v), (v) => `${v.toFixed(2)}°/s`);
+bindSlider("kalman-obs", (v) => (kalman.obsNoise = v), (v) => v.toFixed(3) + "g");
 
 // 磁力计总开关：同时切换三个融合算法的 MARG 路径
 $("mag-enable").addEventListener("change", () => {
@@ -684,7 +689,7 @@ function updateReadouts(): void {
   if (imu) {
     const gyroDps: [number, number, number] = [imu.gyro[0] * DEG, imu.gyro[1] * DEG, imu.gyro[2] * DEG];
     $("readout-imu").innerHTML =
-      `陀螺 ${fmtVec(gyroDps)} °/s<br />加计 ${fmtVec(imu.accel)} m/s²`;
+      `陀螺仪 ${fmtVec(gyroDps)} °/s<br />加速度计 ${fmtVec(imu.accel)} m/s²`;
   }
   $("clock").textContent = `t = ${world.t.toFixed(1)} s`;
 }
@@ -745,7 +750,7 @@ function updateMagLegend(): void {
   const legend = $("mag-legend");
   if (!magOn) {
     legend.innerHTML =
-      `<span class="lg-item"><span class="lg-dot" style="background:#ffb454"></span>磁航向指示（MARG 已关：会随陀螺漂移偏离真北）</span>`;
+      `<span class="lg-item"><span class="lg-dot" style="background:#ffb454"></span>磁航向指示（MARG 已关：会随陀螺仪漂移偏离真北）</span>`;
   } else {
     legend.innerHTML =
       `<span class="lg-item"><span class="lg-dot" style="background:#ffb454"></span>磁航向指示（MARG 开：被磁场约束，与罗盘箭头保持一致）</span>`;
@@ -769,8 +774,8 @@ function detailRows(est: (typeof ests)[number]): string {
   switch (est.id) {
     case "comp": {
       const w = d.accelWeight ?? 0;
-      return `<div class="tel-line"><span class="dim">本帧加计权重</span><span>${(w * 100).toFixed(1)}%</span></div>` +
-        `<div class="tel-line"><span class="dim">加计倾角 φ/θ</span><span>${fmtSigned(d.rollAccDeg ?? 0)}° ${fmtSigned(d.pitchAccDeg ?? 0)}°</span></div>` +
+      return `<div class="tel-line"><span class="dim">本帧加速度计权重</span><span>${(w * 100).toFixed(1)}%</span></div>` +
+        `<div class="tel-line"><span class="dim">加速度计倾角 φ/θ</span><span>${fmtSigned(d.rollAccDeg ?? 0)}° ${fmtSigned(d.pitchAccDeg ?? 0)}°</span></div>` +
         magRow;
     }
     case "mahony": {
@@ -785,6 +790,11 @@ function detailRows(est: (typeof ests)[number]): string {
     case "madg":
       return `<div class="tel-line"><span class="dim">目标残差 ‖f‖</span><span>${(d.residual ?? 0).toFixed(3)}</span></div>` +
         `<div class="tel-line"><span class="dim">梯度步长</span><span>${((d.stepNorm ?? 0) * 1e3).toFixed(2)} m°/s⁻¹</span></div>` +
+        magRow;
+    case "kalman":
+      return `<div class="tel-line"><span class="dim">零偏估计 |b|</span><span>${(d.biasNormDps ?? 0).toFixed(3)}°/s</span></div>` +
+        `<div class="tel-line"><span class="dim">零偏分量 x/y/z</span><span>${fmtSigned(d.biasXDps ?? 0, 2)} ${fmtSigned(d.biasYDps ?? 0, 2)} ${fmtSigned(d.biasZDps ?? 0, 2)}°/s</span></div>` +
+        `<div class="tel-line"><span class="dim">重力新息角</span><span>${fmtSigned(d.innoAccelDeg ?? 0)}°</span></div>` +
         magRow;
     default:
       return "";
@@ -826,13 +836,13 @@ function updateTelemetry(): void {
     st.textContent = "无修正项——预测与实测的偏差只增不减";
     st.classList.remove("warn");
   } else if (failed) {
-    st.textContent = "加计失效（近似自由落体）：已忽略实测方向";
+    st.textContent = "加速度计失效（近似自由落体）：已忽略实测方向";
     st.classList.add("warn");
   } else if (disturbed) {
-    st.textContent = "加计受扰中（‖a‖ 偏离 g 超过 35%）：实测方向不可信";
+    st.textContent = "加速度计受扰中（‖a‖ 偏离 g 超过 35%）：实测方向不可信";
     st.classList.add("warn");
   } else if (inHold) {
-    st.textContent = "加计刚从受扰中恢复——机动时加计会被线加速度污染";
+    st.textContent = "加速度计刚从受扰中恢复——机动时加速度计会被线加速度污染";
     st.classList.add("warn");
   } else {
     st.textContent = "";
@@ -939,7 +949,7 @@ function frame(): void {
   }
 }
 
-// ---------- 使用说明文档页 ----------
+// ---------- 文档页（左栏选大模块，右侧目录 + 章节） ----------
 const docsOverlay = document.getElementById("docs-overlay")!;
 function setDocsOpen(open: boolean): void {
   docsOverlay.hidden = !open;
@@ -956,8 +966,18 @@ window.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && !docsOverlay.hidden) setDocsOpen(false);
 });
 
-// 目录滚动跟随：进入视口中部带宽的章节点亮对应目录项
-const tocLinks = [...document.querySelectorAll<HTMLAnchorElement>(".docs-toc a")];
+// 左栏大模块切换
+const docModules = [...document.querySelectorAll<HTMLButtonElement>(".docs-toc .module-link")];
+const docPages = [...document.querySelectorAll<HTMLElement>(".doc-page")];
+function setDocModule(id: string): void {
+  for (const b of docModules) b.classList.toggle("active", b.dataset.doc === id);
+  for (const p of docPages) p.hidden = p.dataset.docPage !== id;
+  docsOverlay.scrollTop = 0;
+}
+for (const b of docModules) b.addEventListener("click", () => setDocModule(b.dataset.doc!));
+
+// 目录滚动跟随：进入视口中部带宽的章节点亮对应目录项（隐藏模块的章节不会相交，天然跳过）
+const tocLinks = [...document.querySelectorAll<HTMLAnchorElement>(".doc-index a")];
 const tocById = new Map(tocLinks.map((a) => [`#${a.hash.slice(1)}`, a]));
 const tocObserver = new IntersectionObserver(
   (entries) => {
