@@ -104,7 +104,11 @@
     `AB_TARGETS`/通道 5+4/errVisibleB 4 长）+ **B 曲线半透明**（8 位 hex alpha 0.6，重合也可分层次）
   - 曲线区**可折叠面板**：三面板标题栏加 `fold-btn` 箭头，点击 toggle collapsed（canvas+图例 display:none，
     ResizeObserver 展开自动重绘）；IMU 面板默认收起；d-display/d-algo 文案同步
-  - 验证：浏览器断言（B 芯片 4 个带 alpha、A/B 改参分化 2.10° vs 0.95°、折叠切换、零错误）+ 60 项自检
+- 验证：浏览器断言（B 芯片 4 个带 alpha、A/B 改参分化 2.10° vs 0.95°、折叠切换、零错误）+ 60 项自检
+- **坑（用户实测抓出）**：折叠规则 `.chart-block.collapsed canvas { display:none }` 被画布的
+  `#att-canvas {... display:block}` ID 规则压过（优先级 100 vs 21）——类切换成功但画布不隐藏，
+  「折叠没有收起图表」。修复：画布尺寸规则改类选择器 `.chart-block canvas`。教训：
+  **类切换断言 ≠ 视觉断言**（getBoundingClientRect 才算数）；ID 选择器给后续覆盖规则埋雷
 - **真实 IMU 串口接入**（2026-10-25，用户硬件 STM32F4 + GY-87，固件由用户自行编写并已在 SerialWeb 验证）：
   - **帧协议**（`firmware/gy87.h` 规格表 + 用户固件对齐）：0xAA 0x55 | len=24 | seq u16 | tick u32 |
     gyro i16×3 (0.1°/s) | accel i16×3 (0.01m/s²) | mag i16×3 (0.01μT) | CRC8(0x07)，28 字节小端

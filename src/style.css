@@ -578,7 +578,8 @@ body:not([data-ab="on"]) #err-legend-b { display: none; }
 .legend-chip.off { opacity: 0.3; }
 .legend-chip .val { color: var(--text-dim); min-width: 48px; }
 
-#att-canvas, #err-canvas, #imu-canvas { width: 100%; height: 150px; display: block; }
+/* 图表画布：用类选择器（ID 优先级会压过 .collapsed 的 display:none 折叠规则） */
+.chart-block canvas { width: 100%; height: 150px; display: block; }
 
 /* ==========================================================================
    底栏
