@@ -20,6 +20,7 @@
 </head>
 <body>
   <header id="app-header">
+    <i class="boot-sweep" aria-hidden="true"></i>
     <div class="title-block">
       <h1>四元数姿态解算<span>学习演示装置</span></h1>
     </div>
@@ -202,7 +203,7 @@
         <p class="hint">纯积分只用陀螺仪，其姿态不受任何滑块影响——这正是演示漂移的关键。</p>
       </section>
 
-      <section class="panel-section section-view">
+      <section class="panel-section section-secondary section-view">
         <h2>3D 显示</h2>
         <div class="row">
           <label for="source-select">模型姿态来源</label>
@@ -223,7 +224,7 @@
         </div>
       </section>
 
-      <section class="panel-section section-telemetry" id="telemetry-section">
+      <section class="panel-section section-secondary section-telemetry" id="telemetry-section">
         <h2>算法内部（玻璃盒）</h2>
         <div class="tel-status" id="tel-status"></div>
         <div class="tel-block mono" id="tel-rate">

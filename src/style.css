@@ -145,22 +145,44 @@ button:disabled { cursor: default; }
   background: linear-gradient(90deg, transparent, rgba(34, 211, 238, 0.55) 22%, rgba(34, 211, 238, 0.55) 78%, transparent);
   opacity: 0.85;
 }
+/* 仪表上电扫光：一道亮段沿线扫过——页面加载与切换视图时各一次（动作反馈） */
+#app-header .boot-sweep {
+  position: absolute;
+  left: 0;
+  bottom: -1px;
+  height: 1px;
+  width: 32%;
+  background: linear-gradient(90deg, transparent, #9ff2ff 50%, transparent);
+  opacity: 0;
+  pointer-events: none;
+}
+#app-header .boot-sweep.run {
+  animation: hdr-sweep 0.9s cubic-bezier(0.3, 0.6, 0.3, 1);
+}
+@keyframes hdr-sweep {
+  0% { transform: translateX(-45%); opacity: 0; }
+  12% { opacity: 0.95; }
+  85% { opacity: 0.95; }
+  100% { transform: translateX(345%); opacity: 0; }
+}
 
+/* 仪表铭牌：阴刻标题 + 细字距代号（机载设备面板的招牌气质） */
 .title-block h1 {
   margin: 0;
-  font-size: 17px;
+  font-size: 18.5px;
   font-weight: 600;
-  letter-spacing: 0.01em;
+  letter-spacing: 0.03em;
   color: var(--text);
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.05), 0 -1px 1px rgba(0, 0, 0, 0.6);
 }
 .title-block h1 span {
-  margin-left: 10px;
-  padding-left: 10px;
+  margin-left: 11px;
+  padding-left: 11px;
   border-left: 1px solid var(--border-strong);
-  font-size: 12.5px;
+  font-size: 12px;
   font-weight: 400;
-  color: var(--text-dim);
-  letter-spacing: 0.02em;
+  color: var(--text-faint);
+  letter-spacing: 0.14em;
 }
 .subtitle {
   margin: 3px 0 0;
@@ -291,9 +313,7 @@ button:disabled { cursor: default; }
     0 1px 2px rgba(0, 0, 0, 0.45),
     0 4px 14px rgba(2, 6, 18, 0.35),
     inset 0 1px 0 rgba(255, 255, 255, 0.035);
-  transition: border-color var(--t-base);
 }
-.panel-section:hover { border-color: var(--border-strong); }
 /* 每节标题左侧的强调短竖条，形成统一的节奏 */
 .panel-section h2 {
   display: flex;
@@ -313,6 +333,15 @@ button:disabled { cursor: default; }
   background: var(--accent);
   box-shadow: 0 0 8px rgba(34, 211, 238, 0.45);
   flex: none;
+}
+/* 次级面板（显示选项类）：标题与强调条整体调暗——与主控制区拉开信息层级 */
+.section-secondary h2 { color: var(--text-dim); }
+.section-secondary h2::before {
+  background: #5d7c94;
+  box-shadow: 0 0 5px rgba(93, 124, 148, 0.3);
+}
+.section-secondary {
+  background: linear-gradient(180deg, #0c1424 0%, var(--bg-card) 46%);
 }
 
 /* ---- 下拉框 ---- */
