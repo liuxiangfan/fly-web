@@ -663,7 +663,7 @@ const projState = {
   q: qId() as Quat,
   /** 当前画面上实际显示的 q（动画中途连按时从这里无缝续接，不跳变） */
   current: qId() as Quat,
-  anim: null as null | { from: Quat; to: Quat; t: number; dur: number },
+  anim: null as null | { from: Quat; to: Quat; t: number; dur: number; reset?: boolean },
 };
 const PROJ_I: Quat = { w: 0, x: 1, y: 0, z: 0 };
 const PROJ_J: Quat = { w: 0, x: 0, y: 1, z: 0 };
@@ -675,15 +675,15 @@ function projApply(q: Quat): void {
   sceneHandles.quatView.setProjection(q);
 }
 
-function projAnimateTo(target: Quat): void {
+function projAnimateTo(target: Quat, isReset = false): void {
   // 弦上的归一化插值（nlerp）：不取短路径，保证终点恰为目标四元数（连按两次精确到 −q）
   // 起点取「当前显示帧」——动画中途再按按钮时从画面位置无缝续接
-  projState.anim = { from: { ...projState.current }, to: target, t: 0, dur: 0.7 };
+  projState.anim = { from: { ...projState.current }, to: target, t: 0, dur: 0.7, reset: isReset };
 }
 $("btn-proj-i").addEventListener("click", () => projAnimateTo(qMul(projState.q, PROJ_I)));
 $("btn-proj-j").addEventListener("click", () => projAnimateTo(qMul(projState.q, PROJ_J)));
 $("btn-proj-k").addEventListener("click", () => projAnimateTo(qMul(projState.q, PROJ_K)));
-$("btn-proj-reset").addEventListener("click", () => projAnimateTo(qId()));
+$("btn-proj-reset").addEventListener("click", () => projAnimateTo(qId(), true));
 
 $("quat-mode").addEventListener("change", () => {
   const proj = ($("quat-mode") as HTMLSelectElement).value === "proj";
@@ -714,6 +714,7 @@ function stepQuatProj(dt: number): void {
     projState.current = { ...a.to };
     projState.anim = null;
     projApply(a.to);
+    if (a.reset) sceneHandles.quatView.clearProjectionTrails(); // 重置=干净画面：清空 q 与 −q 轨迹
   } else {
     projApply(mid);
   }

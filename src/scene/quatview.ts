@@ -44,6 +44,8 @@ export interface QuatViewRig {
   showNegation(show: boolean): void;
   /** 4D 立体投影演示：把单位四元数 q 投到 3D（q 球内青点 / −q 球外品红点 + 轨迹） */
   setProjection(q: Quat): void;
+  /** 清空 q 与 −q 的投影轨迹（重置时调用，回到干净画面） */
+  clearProjectionTrails(): void;
   /** 切换 4D 投影组与其它组的可见性 */
   showProjection(show: boolean): void;
   /** 供 scenecheck 检视的内部结构 */
@@ -208,6 +210,7 @@ export function buildQuatView(): QuatViewRig {
   const project4d = (w: number, x: number, y: number, z: number): THREE.Vector3 => {
     const n = Math.hypot(x, y, z);
     if (n > 1e-9) lastDir = [x / n, y / n, z / n];
+    else lastDir = [1, 0, 0]; // 恰在极点（单位/负单位姿态）：钳制方向规范化——重置后 −q 落点永远一致
     const dir = lastDir;
     const denom = 1 + w; // 南极 w=−1 为投影极点
     const len = denom < 1e-6 ? Infinity : n / denom;
@@ -390,6 +393,14 @@ export function buildQuatView(): QuatViewRig {
         projTrailNeg.geometry = new THREE.BufferGeometry().setFromPoints(projTrailNegPts);
       }
       applyDisplayQuat(projQuad.group, { w: qw, x: qx, y: qy, z: qz });
+    },
+    clearProjectionTrails() {
+      projTrailPts.length = 0;
+      projTrailNegPts.length = 0;
+      projTrail.geometry.dispose();
+      projTrail.geometry = new THREE.BufferGeometry();
+      projTrailNeg.geometry.dispose();
+      projTrailNeg.geometry = new THREE.BufferGeometry();
     },
     showProjection(show) {
       projGroup.visible = show;
