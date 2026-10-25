@@ -747,7 +747,7 @@ function updateGimbalUi(): void {
   if (demoState.diffDeg !== null) {
     const same = demoState.diffDeg < 0.05;
     cmp.textContent = same
-      ? `✔ 两次操作得到的姿态完全相同（夹角 ${demoState.diffDeg.toFixed(3)}°）——横滚与偏航其实是同一个自由度`
+      ? `两次操作得到的姿态完全相同（夹角 ${demoState.diffDeg.toFixed(3)}°）——横滚与偏航其实是同一个自由度`
       : `姿态夹角 ${demoState.diffDeg.toFixed(2)}°`;
     cmp.classList.toggle("ok", same);
     cmp.classList.toggle("warn", !same);
@@ -803,17 +803,7 @@ function syncSeg(containerId: string, dataKey: string, active: string): void {
 }
 
 /** 应用视图：显隐模型与面板、重置相机取景 */
-/** 仪表上电扫光：页面加载与视图切换时沿线扫一次（reduced-motion 由 CSS 全局关闭） */
-function runBootSweep(): void {
-  const el = document.querySelector<HTMLElement>("#app-header .boot-sweep");
-  if (!el) return;
-  el.classList.remove("run");
-  void el.offsetWidth; // 强制 reflow，确保动画可重启
-  el.classList.add("run");
-}
-
 function applyView(view: UiView): void {
-  runBootSweep();
   state.view = view;
   applyViewDom(view);
   sceneHandles.setView(view, ($("ghost-toggle") as HTMLInputElement).checked);

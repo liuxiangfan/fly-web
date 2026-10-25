@@ -436,7 +436,7 @@ function obsMatrix(v: V3): number[] {
 export class KalmanEstimator implements Estimator {
   id = "kalman" as const;
   label = "卡尔曼滤波";
-  color = "#c084fc";
+  color = "#e05fb0";
   q = qId();
   /** 过程噪声：陀螺仪角速度噪声 σ（°/s）——预测有多不可信 */
   gyroNoiseDps = 0.2;

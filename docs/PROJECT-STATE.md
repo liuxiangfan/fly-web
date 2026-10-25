@@ -178,6 +178,19 @@
   - README 全量同步现状（五算法/四元数视图/4D 投影/文档三模块/50 项检查/favicon）
 - **排版 v3/v4**（c4a04bd/3b49350）：
 
+- **taste-skill（tasteskill v2）data-terminal 重饰**（本轮）：
+  - 风格表 seed 887383732（data-terminal，devtools/dark）；face = Fira Code 全数值 mono + 青色 1px 选中线
+  - 动作：所有选中态（视图 seg/图表 tab）= 1px 强调线；主按钮=反白（#eef2f8 底深字）；
+    面板/图表卡平涂仅留 1px 边（边影不并存）；chips 不透明（无 backdrop blur）；
+    滑杆拇指中性平涂无辉光、轨道硬切填充；图例点/进度条去辉光；复选框中性色
+  - 卡尔曼数据色 紫 #c084fc → 玫瑰 #e05fb0（violet 禁用；全链同步：估计器/文档图 7·8·9/文案「品红」）
+  - 删除上电扫光与标题阴刻（frontend-design 轮引入的装饰动效/影——app-screen 规则禁止入场表演）
+  - 全页 sub/sup ≥11px；.tel-line .dim 与 .ctl-range 10.5→11px；圆角收紧 4/6/8
+  - 豁免（lint taste-skill-ignore / 报告说明）：mono=风格 face 选项；em-dash=中文破折号；
+    滑杆硬切填充与键盘焦点环=功能性；对比图 6 系列=产品核心问题（同主题同色全站一致）
+  - 门禁：lint --app 0 FAIL；inspect --app 1440/768/390 = **0 FAIL 0 WARN**（before 4 FAIL）
+  - `.taste-skill/`（方向表+前后对照截图）已加入 .gitignore
+
 ## 已知坑
 
 - 批量改 DOM 时务必全量回归滑块（历史事故：`<output>` 被删导致绑定中断）。
