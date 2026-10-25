@@ -114,7 +114,11 @@
   - 公式排版 v2：katex 本地字体（仅用字体，无 CDN）；.formula = KaTeX_Main 衬线 16px +
     **盒子包裹**（bg-card + 左强调线，与正文区分）；配套三件套：`.frac` 堆叠分数（分割线上分子下分母，
     9 处）、`.mtx` CSS 括号矩阵（左右竖线+端帽+grid 单元格，3 处：R(q)/f(q)/A 矩阵）、
-    `.fvars` 变量含义表（公式后注释行，14 处）；全部公式按「一句一行」重排，｜分隔行已拆散
+    `.fvars` 变量含义表（公式后注释行，14 处）；全部公式按「一句一行」重排，｜分隔行已拆散；
+    数学工具箱章新增「记号一览」表（顶部点/尖帽/δ/范数/转置逆/⊗×·/∫Σ/∇/lim 十行）；
+    分数全量上下式（32 处 .frac，含 θ/2、ω·dt/2 等内嵌小分数与 K=P·Hᵀ/(H·P·Hᵀ+R) 这类逆序括号→分数）；
+    全部 SVG 箭头由实心三角改为开口 V 形（chevron marker），marker id 按图唯一化（修复跨图 id 冲突）；
+    图 7 重做为 7 大步之字 + 3 枚切向小箭头（去掉逐点 marker-mid 的杂乱）
   - 渲染：RoomEnvironment PMREM IBL（environmentIntensity 0.35）+ 冷色轮廓补光；
     万向环改 MeshPhysicalMaterial 阳极金属（envMapIntensity 1.35）；新四轴模型见上
   - UI：面板/图表卡片渐变表面+分层阴影+hover 描边；主按钮内高光；滑杆轨道值填充
