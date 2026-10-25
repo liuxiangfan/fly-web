@@ -477,6 +477,21 @@ button:disabled { cursor: default; }
 .chart-block.att { grid-area: att; }
 .chart-block.err { grid-area: err; }
 .chart-block.imu { grid-area: imu; }
+/* 折叠面板：点标题栏箭头收起/展开 canvas（IMU 面板默认收起） */
+.fold-btn {
+  background: none;
+  border: none;
+  color: var(--text-faint);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 2px 6px;
+  line-height: 1;
+  transition: transform 0.18s ease, color 0.15s ease;
+}
+.fold-btn:hover { color: var(--accent); }
+.chart-block.collapsed .fold-btn { transform: rotate(-90deg); }
+.chart-block.collapsed canvas,
+.chart-block.collapsed .chart-legend { display: none; }
 /* 真实 IMU 串口行与状态提示 */
 .serial-row { display: flex; gap: 8px; align-items: center; margin: 6px 0; }
 .serial-row select { flex: 1; }

@@ -408,8 +408,9 @@
   </main>
 
   <section id="charts">
-    <div class="chart-block att">
+    <div class="chart-block att" id="block-att">
       <div class="chart-header">
+        <button class="fold-btn" data-fold="att" title="折叠 / 展开此面板">▾</button>
         <div class="chart-tabs" id="att-tabs">
           <button data-ch="0" class="tab active">横滚 φ</button>
           <button data-ch="1" class="tab">俯仰 θ</button>
@@ -419,16 +420,18 @@
       </div>
       <canvas id="att-canvas"></canvas>
     </div>
-    <div class="chart-block err">
+    <div class="chart-block err" id="block-err">
       <div class="chart-header">
+        <button class="fold-btn" data-fold="err" title="折叠 / 展开此面板">▾</button>
         <div class="chart-title" id="err-title">姿态总误差（解算 vs 真实）</div>
         <div class="chart-legend" id="err-legend"></div>
         <div class="chart-legend" id="err-legend-b"></div>
       </div>
       <canvas id="err-canvas"></canvas>
     </div>
-    <div class="chart-block imu">
+    <div class="chart-block imu collapsed" id="block-imu">
       <div class="chart-header">
+        <button class="fold-btn" data-fold="imu" title="折叠 / 展开此面板">▾</button>
         <div class="chart-tabs" id="imu-tabs">
           <button data-tab="0" class="tab active">陀螺仪 °/s</button>
           <button data-tab="1" class="tab">加速度计 m/s²</button>
@@ -657,9 +660,9 @@
 
           <div class="ctl">
             <div class="ctl-name">A/B 参数对比 <span class="ctl-range">开关 + 快照按钮</span></div>
-            <p><span class="k k1">是什么</span>调参教学的对照组：勾选瞬间，五种算法各克隆一个「B 组」——参数冻结为当前值、姿态重置为当前估计；之后 A 组随滑块实时变化，B 组原地不动。</p>
+            <p><span class="k k1">是什么</span>调参教学的对照组：勾选瞬间，四种融合算法各克隆一个「B 组」——参数冻结为当前值、姿态重置为当前估计；之后 A 组随滑块实时变化，B 组原地不动。纯陀螺仪积分没有参数，不进 B 组（否则它与 A 逐点重合，看起来像「取消不掉」）。B 曲线为<b>半透明虚线</b>，与 A 同色系但层次可分。</p>
             <p><span class="k k2">起什么作用</span>误差图上 A 实线 / B 虚线同图：把 Kp 从 1 拉到 5，B 虚线还停在旧参数的表现上——「快而抖 vs 慢而稳」不用嘴说。点「把当前参数存入 B 组」可随时重新快照。</p>
-            <p><span class="k k3">改了会怎样</span>B 组只进误差图（虚线，图例第二行可单独开关），不进 3D 与姿态图。细节：B 组的卡尔曼零偏从快照时刻重新学习（状态重置、参数冻结）；磁力计开关对 A/B 同步生效。</p>
+            <p><span class="k k3">改了会怎样</span>B 组只进误差图（图例第二行可单独开关），不进 3D 与姿态图。细节：B 组的卡尔曼零偏从快照时刻重新学习（状态重置、参数冻结）；磁力计开关对 A/B 同步生效。<b>快照后要改参数才有对比</b>——不改参数时 B 与 A 逐点重合，半透明叠在实线下。</p>
           </div>
 
           <div class="ctl">
@@ -778,6 +781,7 @@
 
           <h3>曲线区</h3>
           <p>
+            <b>三块面板</b>：姿态角、总误差、IMU 原始数据（IMU 默认折叠，点各面板标题栏左侧箭头展开/收起）。
             <b>上图（姿态角）</b>：φ/θ/ψ 三个通道页签切换，六条曲线同图对比——白=真实、红=纯陀螺仪积分、橙=互补、蓝=Mahony、绿=Madgwick、品红=卡尔曼。
             图例上的数字是各自的当前误差（度）；<b>点击图例可隐藏对应曲线</b>，只看想对比的两条。
             <b>下图（总误差）</b>：各算法与真实姿态的空间夹角（欧拉角合成的总偏差），不看单轴、只看「整体差多少」，

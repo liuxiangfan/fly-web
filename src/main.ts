@@ -80,7 +80,7 @@ const state = {
   channel: 0,
   attVisible: [true, true, true, true, true, true],
   errVisible: [true, true, true, true, true, true],
-  errVisibleB: [false, false, false, false, false, false],
+  errVisibleB: [false, false, false, false],
   lastImu: null as ImuSample | null,
   /** 视图：四轴姿态 / 万向节锁（不持久化，每次从四轴姿态开始） */
   view: "attitude" as UiView,
@@ -108,11 +108,12 @@ $("btn-serial").addEventListener("dblclick", (e) => e.preventDefault());
 
 // ---------- A/B 参数对比 ----------
 // B 组 = 某一时刻的「参数快照」克隆（状态重置、参数冻结），与 A 组吃同一份 IMU 数据；
-// 误差图上 A 实线 / B 虚线——调参前后谁好谁坏一眼可读。B 组只进误差图，不进 3D 与姿态图。
+// 误差图上 A 实线 / B 半透明虚线——调参前后谁好谁坏一眼可读。
+// 纯陀螺仪积分不进 B 组：它没有参数，B 永远与 A 逐点重合（也是「取消不掉」错觉的来源）。
+const AB_TARGETS = () => ests.filter((e) => e.id !== "pure");
 const abState = { on: false, clones: [] as Estimator[] };
 function cloneOf(e: Estimator): Estimator {
-  const c = e.id === "pure" ? new PureGyroEstimator()
-    : e.id === "comp" ? new ComplementaryEstimator()
+  const c = e.id === "comp" ? new ComplementaryEstimator()
     : e.id === "mahony" ? new MahonyEstimator()
     : e.id === "madg" ? new MadgwickEstimator()
     : new KalmanEstimator();
@@ -121,11 +122,14 @@ function cloneOf(e: Estimator): Estimator {
   return c;
 }
 function snapshotAB(): void {
-  abState.clones = ests.map((e) => {
+  abState.clones = AB_TARGETS().map((e) => {
     const c = cloneOf(e);
     c.reset({ ...e.q }); // 从 A 组当前姿态出发（参数冻结；卡尔曼零偏从头重学，见文档）
     return c;
   });
+}
+function abAlpha(color: string): string {
+  return color + "99"; // B 曲线约 60% 不透明：与 A 同色系但层次可分，重合也不完全遮挡
 }
 $("ab-toggle").addEventListener("change", () => {
   abState.on = ($("ab-toggle") as HTMLInputElement).checked;
@@ -145,7 +149,7 @@ const sceneHandles = createScene($("viewport"));
 // ---------- 图表 ----------
 const truthSeries = { label: "真实", color: "#e6edf3" };
 const estSeries = ests.map((e) => ({ label: e.label, color: e.color }));
-const abSeries = ests.map((e) => ({ label: `${e.label} ·B`, color: e.color, dash: [5, 3] }));
+const abSeries = AB_TARGETS().map((e) => ({ label: `${e.label} ·B`, color: abAlpha(e.color), dash: [5, 3] }));
 const attChart = new RollingChart($("att-canvas"), [truthSeries, ...estSeries], { windowSec: CHART_WINDOW });
 const errChart = new RollingChart($("err-canvas"), [...estSeries, ...abSeries], { windowSec: CHART_WINDOW });
 // IMU 原始波形（第三面板）：18 通道 = 陀螺/加计/磁三组实测三轴 + 三组真值对照（模拟模式才有，
@@ -327,7 +331,7 @@ const errLegend = buildLegend(
 );
 const errLegendB = buildLegend(
   $("err-legend-b"),
-  ests.map((e) => ({ id: `${e.id}-b`, label: `${e.label} B`, color: e.color })),
+  AB_TARGETS().map((e) => ({ id: `${e.id}-b`, label: `${e.label} B`, color: abAlpha(e.color) })),
   state.errVisibleB,
   () => applyVisibility(),
 );
@@ -1174,6 +1178,13 @@ $("att-tabs")
       rebuildAttChart();
     });
   });
+
+// 折叠面板：att/err 默认展开、imu 默认收起（index.html 初始 class）
+document.querySelectorAll<HTMLButtonElement>(".fold-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    document.getElementById(`block-${btn.dataset.fold}`)!.classList.toggle("collapsed");
+  });
+});
 
 // IMU 原始波形页签：陀螺仪 / 加速度计 / 磁力计
 $("imu-tabs")
