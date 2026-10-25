@@ -19,6 +19,8 @@ import { DEG, qAngleBetween, qFromAxisAngle, qFromEuler, qId, qMul, qNorm, qRotI
 import { gimbalDemo, gimbalInnerQuat, toDisplayVec } from "./core/gimbal";
 import * as THREE from "three";
 import { applyViewDom, narrateGimbal, type UiView } from "./ui/mode";
+import { coarseAlign } from "./estimators";
+import { Gauss, mulberry32 } from "./core/rng";
 
 const H = 1 / 500; // 仿真/解算步长
 const LOG_DT = 0.04; // 曲线记录间隔
@@ -56,10 +58,14 @@ const kalman = ests[4] as KalmanEstimator;
 const imuParams: ImuParams = {
   gyroBiasDps: 1,
   gyroNoiseDps: 0.2,
+  gyroWalkDps: 0,
   accelNoise: 0.1,
+  accelCrossAxis: 0,
+  accelNonlin: 0,
   linAccel: 1,
   vibration: 0.3,
   magNoise: 0.8, // 磁力计默认开启（教学主线路径），带小噪声
+  magQuantUts: 0,
   hardIron: 0,
   disturbMag: 0,
 };
@@ -69,11 +75,45 @@ const state = {
   source: "mahony" as "truth" | Estimator["id"],
   channel: 0,
   attVisible: [true, true, true, true, true, true],
-  errVisible: [true, true, true, true, true],
+  errVisible: [true, true, true, true, true, true],
+  errVisibleB: [false, false, false, false, false, false],
   lastImu: null as ImuSample | null,
   /** 视图：四轴姿态 / 万向节锁（不持久化，每次从四轴姿态开始） */
   view: "attitude" as UiView,
 };
+
+// ---------- A/B 参数对比 ----------
+// B 组 = 某一时刻的「参数快照」克隆（状态重置、参数冻结），与 A 组吃同一份 IMU 数据；
+// 误差图上 A 实线 / B 虚线——调参前后谁好谁坏一眼可读。B 组只进误差图，不进 3D 与姿态图。
+const abState = { on: false, clones: [] as Estimator[] };
+function cloneOf(e: Estimator): Estimator {
+  const c = e.id === "pure" ? new PureGyroEstimator()
+    : e.id === "comp" ? new ComplementaryEstimator()
+    : e.id === "mahony" ? new MahonyEstimator()
+    : e.id === "madg" ? new MadgwickEstimator()
+    : new KalmanEstimator();
+  c.setParams(e.getParams());
+  c.magEnabled = e.magEnabled;
+  return c;
+}
+function snapshotAB(): void {
+  abState.clones = ests.map((e) => {
+    const c = cloneOf(e);
+    c.reset({ ...e.q }); // 从 A 组当前姿态出发（参数冻结；卡尔曼零偏从头重学，见文档）
+    return c;
+  });
+}
+$("ab-toggle").addEventListener("change", () => {
+  abState.on = ($("ab-toggle") as HTMLInputElement).checked;
+  ($("btn-ab-snapshot") as HTMLButtonElement).disabled = !abState.on;
+  document.body.dataset.ab = abState.on ? "on" : "off";
+  if (abState.on) snapshotAB();
+  else abState.clones = [];
+});
+$("btn-ab-snapshot").addEventListener("click", () => {
+  if (abState.on) snapshotAB();
+});
+$("btn-sandbox").addEventListener("click", () => enterSandbox());
 
 // ---------- 场景 ----------
 const sceneHandles = createScene($("viewport"));
@@ -81,8 +121,9 @@ const sceneHandles = createScene($("viewport"));
 // ---------- 图表 ----------
 const truthSeries = { label: "真实", color: "#e6edf3" };
 const estSeries = ests.map((e) => ({ label: e.label, color: e.color }));
+const abSeries = ests.map((e) => ({ label: `${e.label} ·B`, color: e.color, dash: [5, 3] }));
 const attChart = new RollingChart($("att-canvas"), [truthSeries, ...estSeries], { windowSec: CHART_WINDOW });
-const errChart = new RollingChart($("err-canvas"), estSeries, { windowSec: CHART_WINDOW });
+const errChart = new RollingChart($("err-canvas"), [...estSeries, ...abSeries], { windowSec: CHART_WINDOW });
 
 // 原始记录（切换通道时不丢历史）
 interface LogRow {
@@ -146,7 +187,9 @@ function logRow(): void {
   logRows.push(row);
   if (logRows.length > 850) logRows.splice(0, 100);
   attChart.push(world.t, channelValues(row, state.channel));
-  errChart.push(world.t, row.err);
+  // 误差图 12 通道：前 6 = A 组（活参数），后 6 = B 组（快照参数，A/B 关闭时为 NaN 不画）
+  const errB = abState.on ? abState.clones.map((c) => qAngleBetween(c.q, world.q) * DEG) : ests.map(() => NaN);
+  errChart.push(world.t, [...row.err, ...errB]);
 }
 
 function rebuildAttChart(): void {
@@ -215,13 +258,20 @@ const errLegend = buildLegend(
   state.errVisible,
   () => applyVisibility(),
 );
+const errLegendB = buildLegend(
+  $("err-legend-b"),
+  ests.map((e) => ({ id: `${e.id}-b`, label: `${e.label} B`, color: e.color })),
+  state.errVisibleB,
+  () => applyVisibility(),
+);
 
 /** 用户勾选 → 图表可见性；同时同步图例芯片的置灰状态 */
 function applyVisibility(): void {
   attChart.setVisible(state.attVisible);
-  errChart.setVisible(state.errVisible);
+  errChart.setVisible([...state.errVisible, ...state.errVisibleB]);
   attLegend.chips.forEach((c, i) => c.classList.toggle("off", !state.attVisible[i]));
   errLegend.chips.forEach((c, i) => c.classList.toggle("off", !state.errVisible[i]));
+  errLegendB.chips.forEach((c, i) => c.classList.toggle("off", !state.errVisibleB[i]));
 }
 
 // ---------- 控件 ----------
@@ -340,6 +390,9 @@ interface ImuPreset {
   biasDps?: number;
   gyroNoiseDps?: number;
   accelNoise?: number;
+  crossAxis?: number;
+  accelNonlin?: number;
+  magQuantUts?: number;
   note: string;
 }
 const IMU_PRESETS: Record<string, ImuPreset> = {
@@ -348,7 +401,10 @@ const IMU_PRESETS: Record<string, ImuPreset> = {
     biasDps: 2,
     gyroNoiseDps: 0.15, // 密度 0.01 °/s/√Hz × 15.81 ≈ 0.158
     accelNoise: 0.05, // 密度 300 μg/√Hz ≈ 0.0029 m/s²/√Hz × 15.81 ≈ 0.047
-    note: "MPU-9250（9 轴，2010 年代教学最常用）：陀螺噪声密度 0.01 °/s/√Hz、加计 300 μg/√Hz；初始零偏容差 ±5 °/s（取 2 为典型值，规格上限拉满更夸张）。内置 AK8963 磁力计。",
+    crossAxis: 0.02, // 交叉轴敏感度 ±2%
+    accelNonlin: 0.005, // 非线性 ±0.5%
+    magQuantUts: 0.6, // 内置 AK8963 = 0.6 μT/LSB
+    note: "MPU-9250（9 轴，2010 年代教学最常用）：陀螺噪声密度 0.01 °/s/√Hz、加计 300 μg/√Hz；初始零偏容差 ±5 °/s（取 2 为典型值，规格上限拉满更夸张）；交叉轴 ±2%、非线性 ±0.5%、AK8963 磁力计 0.6 μT/LSB。",
   },
   icm42688: {
     biasDps: 1,
@@ -380,6 +436,10 @@ const imuSliders = {
   bias: bindSlider("imu-gyro-bias", (v) => { imuParams.gyroBiasDps = v; onImuManual(); }, (v) => `${v.toFixed(1)}°/s`),
   gyroNoise: bindSlider("imu-gyro-noise", (v) => { imuParams.gyroNoiseDps = v; onImuManual(); }, (v) => `${v.toFixed(2)}°/s`),
   accelNoise: bindSlider("imu-accel-noise", (v) => { imuParams.accelNoise = v; onImuManual(); }, (v) => `${v.toFixed(2)}m/s²`),
+  crossAxis: bindSlider("imu-cross-axis", (v) => { imuParams.accelCrossAxis = v / 100; onImuManual(); }, (v) => `${v.toFixed(1)}%`),
+  accelNonlin: bindSlider("imu-accel-nonlin", (v) => { imuParams.accelNonlin = v / 100; onImuManual(); }, (v) => `${v.toFixed(1)}%`),
+  magQuant: bindSlider("imu-mag-quant", (v) => { imuParams.magQuantUts = v; onImuManual(); }, (v) => (v < 0.05 ? "关" : `${v.toFixed(1)}μT`)),
+  gyroWalk: bindSlider("imu-gyro-walk", (v) => { imuParams.gyroWalkDps = v; onImuManual(); }, (v) => `${v.toFixed(2)}°/s/√s`),
 };
 void imuSliders;
 {
@@ -393,6 +453,9 @@ void imuSliders;
       if (p.biasDps !== undefined) imuSliders.bias.set(p.biasDps);
       if (p.gyroNoiseDps !== undefined) imuSliders.gyroNoise.set(p.gyroNoiseDps);
       if (p.accelNoise !== undefined) imuSliders.accelNoise.set(p.accelNoise);
+      if (p.crossAxis !== undefined) imuSliders.crossAxis.set(p.crossAxis * 100);
+      if (p.accelNonlin !== undefined) imuSliders.accelNonlin.set(p.accelNonlin * 100);
+      if (p.magQuantUts !== undefined) imuSliders.magQuant.set(p.magQuantUts);
       presetApplying = false;
     }
     if (note) note.textContent = p.note;
@@ -416,6 +479,7 @@ bindSlider("kalman-obs", (v) => (kalman.obsNoise = v), (v) => v.toFixed(3) + "g"
 function applyMagEnable(): void {
   const on = ($("mag-enable") as HTMLInputElement).checked;
   for (const e of ests) e.magEnabled = on;
+  for (const c of abState.clones) c.magEnabled = on;
   updateMagLegend();
 }
 $("mag-enable").addEventListener("change", applyMagEnable);
@@ -562,8 +626,11 @@ const quatSlider = bindSlider(
   (v) => v.toFixed(2),
 );
 
-function applyQuatInterpolation(pair: { from: [number, number, number]; to: [number, number, number] }, t: number): void {
-  sceneHandles.quatView.setInterpolation(pair.from, pair.to, t);
+function applyQuatInterpolation(
+  pair: { from: [number, number, number]; to: [number, number, number]; path?: Array<[number, number, number]> },
+  t: number,
+): void {
+  sceneHandles.quatView.setInterpolation(pair.from, pair.to, t, pair.path);
   // q−q 组同步显示当前 t 处的姿态
   const k = Math.PI / 180;
   const cur = quatStateCurrentEulerDeg(pair, t);
@@ -761,6 +828,98 @@ function updateProjTurn(q: Quat): void {
     note = `物理 = 绕 ${axis[0]} 轴转 180°（S³ 赤道，${axis[1] >= 0 ? "第一" : "第二"}张皮）`;
   }
   el.textContent = `已左乘 ${projState.presses} 次 · 累计 ${projState.presses * 180}° · q = ${name}（${note}）`;
+  drawProjSection(q);
+}
+
+/** S³ 剖面（w–i 平面）inset：立体投影的「抬升」视角——q 实际走在 4D 超球的这个截面上，
+ *  投影影子与 3D 姿态是它的下游产物（三段式：抬升 → 旋转 → 投影）。 */
+function drawProjSection(q: Quat): void {
+  const c = document.getElementById("proj-section") as HTMLCanvasElement | null;
+  if (!c) return;
+  const ctx = c.getContext("2d");
+  if (!ctx) return;
+  const W = c.width, H = c.height;
+  ctx.clearRect(0, 0, W, H);
+  const cx = W / 2, cy = H / 2, R = Math.min(W, H) / 2 - 14;
+  // w–i 平面与 S³ 的交线 = 单位圆
+  ctx.strokeStyle = "#546a99";
+  ctx.lineWidth = 1.4;
+  ctx.beginPath();
+  ctx.arc(cx, cy, R, 0, Math.PI * 2);
+  ctx.stroke();
+  // 轴与标签
+  ctx.strokeStyle = "#31415f";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(cx - R - 8, cy);
+  ctx.lineTo(cx + R + 8, cy);
+  ctx.moveTo(cx, cy - R - 6);
+  ctx.lineTo(cx, cy + R + 6);
+  ctx.stroke();
+  ctx.font = "10.5px sans-serif";
+  ctx.fillStyle = "#7b8aa3";
+  ctx.textAlign = "center";
+  const pt = (w: number, x: number): [number, number] => [cx + w * R, cy - x * R];
+  const tag = (text: string, p: [number, number], dx: number, dy: number): void => {
+    ctx.fillText(text, p[0] + dx, p[1] + dy);
+  };
+  const p1 = pt(1, 0), pi = pt(0, 1), pm1 = pt(-1, 0), pmi = pt(0, -1);
+  tag("1", p1, 0, 14);
+  tag("i", pi, 12, 4);
+  tag("−1", pm1, 0, 14);
+  tag("−i", pmi, -10, 4);
+  // q 与 −q（对径点）+ 连线
+  const qq = pt(q.w, q.x);
+  const qn = pt(-q.w, -q.x);
+  ctx.strokeStyle = "#31415f";
+  ctx.setLineDash([3, 3]);
+  ctx.beginPath();
+  ctx.moveTo(qq[0], qq[1]);
+  ctx.lineTo(qn[0], qn[1]);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = "#22d3ee";
+  ctx.beginPath();
+  ctx.arc(qq[0], qq[1], 4.5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "#e879f9";
+  ctx.beginPath();
+  ctx.arc(qn[0], qn[1], 4.5, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+/** 沙盒快捷模式：一键配置「综合机动 + 中等污染 + 玻璃盒 + 初始偏差」的自由实验场 */
+function enterSandbox(): void {
+  const set = (id: string, value: string): void => {
+    const el = $<HTMLInputElement>(id);
+    el.value = value;
+    el.dispatchEvent(new Event("input"));
+  };
+  const setSel = (id: string, value: string): void => {
+    const el = $<HTMLSelectElement>(id);
+    el.value = value;
+    el.dispatchEvent(new Event("change"));
+  };
+  const setChk = (id: string, on: boolean): void => {
+    const el = $<HTMLInputElement>(id);
+    el.checked = on;
+    el.dispatchEvent(new Event("change"));
+  };
+  setSel("scenario-select", "composite");
+  setSel("imu-preset", "custom");
+  set("imu-gyro-bias", "1");
+  set("imu-gyro-noise", "0.3");
+  set("imu-lin-accel", "2");
+  set("imu-vibration", "0.5");
+  set("imu-mag-disturb", "0.3");
+  setChk("mag-enable", true);
+  setChk("telemetry-toggle", true);
+  setChk("init-offset-toggle", true);
+  setChk("ab-toggle", true); // 沙盒里 A/B 快照 = 进入前的参数，随改随比
+  setDocsOpen(false);
+  applyView("attitude");
+  resetSim();
+  toast("沙盒模式已就绪：所有参数随便动，B 组虚线是进入时的参数快照");
 }
 
 function projApply(q: Quat): void {
@@ -963,6 +1122,8 @@ function resetSim(): void {
   // 卡尔曼靠大初始协方差；偏航 40° 门控的边界效应见文档·控制项手册。
   const q0 = ($("init-offset-toggle") as HTMLInputElement).checked ? randomInitOffset() : undefined;
   for (const e of ests) e.reset(q0);
+  for (const c of abState.clones) c.reset(q0); // B 组保持冻结参数，只同步初值
+  still.frames = 0;
   attChart.clear();
   errChart.clear();
   attPrev.fill(undefined);
@@ -1027,6 +1188,13 @@ function updateLegendValues(): void {
   errLegend.vals.forEach((el, i) => {
     if (el) el.textContent = Number.isFinite(err[i]) ? `${err[i].toFixed(2)}°` : "--";
   });
+  errLegendB.vals.forEach((el, i) => {
+    const v = err[ests.length + i];
+    if (el) el.textContent = Number.isFinite(v) ? `${v.toFixed(2)}°` : "--";
+  });
+  // 粗对准完成提示（黏 3s，见 stepStillness）
+  const chip = $("align-chip");
+  chip.classList.toggle("hidden", performance.now() / 1000 > still.chipUntil);
 }
 
 // ---------- 玻璃盒：算法内部量 ----------
@@ -1191,10 +1359,38 @@ let uiAcc = 0;
 let frames = 0;
 let fpsAcc = 0;
 
+// ---------- 三段式初始对准：静止检测 → 粗对准 → 滤波接管 ----------
+// Fusion 同款静止阈值（|ω| < 3°/s 持续 3s）；静止且估计明显偏离观测（>8°）时，
+// 粗对准直接把四家融合估计摆回「加计+磁力计观测姿态」——陀螺仪对静止偏航不可观，
+// 偏航只能来自磁场。纯积分不参与对准（它没有观测通道，保留作漂移对照）。
+const still = { frames: 0, lastAlignT: -1e9, chipUntil: -1 };
+function stepStillness(sample: ImuSample): void {
+  const wDps = Math.hypot(sample.gyro[0], sample.gyro[1], sample.gyro[2]) * DEG;
+  still.frames = wDps < 3 ? still.frames + 1 : 0;
+  if (still.frames < Math.round(3 / H) || world.t - still.lastAlignT <= 5) return;
+  let maxAlign = 0;
+  for (const e of ests) {
+    if (e.id === "pure") continue;
+    maxAlign = Math.max(maxAlign, Number(e.telemetry.detail.alignErrorDeg ?? 0) || 0);
+  }
+  if (maxAlign <= 8) return; // 收敛良好：无需对准（零偏已由 Ki / 卡尔曼学走，不重置以免抹掉）
+  const magOn = ($("mag-enable") as HTMLInputElement).checked;
+  const q0 = coarseAlign(sample.accel, sample.mag, magOn);
+  for (const e of ests) if (e.id !== "pure") e.reset(q0);
+  still.lastAlignT = world.t;
+  still.chipUntil = performance.now() / 1000 + 3;
+}
+
 function stepSim(): void {
-  const sample = world.step(H, imuParams);
+  // 闭环演示：控制器改用所选解算结果（而非真实姿态）计算跟踪误差——
+  // 「估计漂多少，机体就飞偏多少」；选真实姿态或关闭开关时为理想飞控。
+  const loopOn = ($("loop-toggle") as HTMLInputElement).checked;
+  const fb = loopOn && state.source !== "truth" ? ests.find((e) => e.id === state.source)!.q : undefined;
+  const sample = world.step(H, imuParams, fb);
   state.lastImu = sample;
   for (const e of ests) e.update(sample.gyro, sample.accel, sample.mag, H);
+  if (abState.on) for (const c of abState.clones) c.update(sample.gyro, sample.accel, sample.mag, H);
+  stepStillness(sample);
   logAcc += H;
   if (logAcc >= LOG_DT) {
     logAcc -= LOG_DT;
@@ -1292,6 +1488,7 @@ function frame(): void {
     updateTelemetry();
     attChart.render();
     errChart.render();
+    updateHash();
   }
 }
 
@@ -1419,6 +1616,7 @@ function updateFigDemoRun(): void {
   compDemoRunning = !docsOverlay.hidden && activeDocPage === "filters" && compDemoCtx !== null;
   orderDemoRunning = !docsOverlay.hidden && activeDocPage === "math" && orderDemoCtx !== null;
   calibDemoRunning = !docsOverlay.hidden && activeDocPage === "math" && calibDemoCtx !== null;
+  if (!docsOverlay.hidden && activeDocPage === "math") drawAllan(); // 惰性一次绘制
 }
 
 function stepCompDemo(dt: number): void {
@@ -1814,9 +2012,213 @@ function stepCalibDemo(dt: number): void {
   drawCalibDemo();
 }
 
+// ---------- 深链分享：面板状态 ↔ URL hash（#s=base64(json)） ----------
+const DEEP_KEYS = [
+  "imu-gyro-bias", "imu-gyro-noise", "imu-gyro-walk", "imu-accel-noise", "imu-cross-axis",
+  "imu-accel-nonlin", "imu-lin-accel", "imu-vibration", "imu-mag-noise", "imu-mag-quant",
+  "imu-mag-disturb", "mahony-kp", "mahony-ki", "madg-beta", "comp-alpha", "kalman-proc",
+  "kalman-obs", "man-roll", "man-pitch", "man-yaw", "quat-t",
+];
+const DEEP_CHECKS = [
+  "mag-enable", "ghost-toggle", "telemetry-toggle", "axis-toggle", "init-offset-toggle",
+  "ab-toggle", "loop-toggle",
+];
+const DEEP_SELS = ["scenario-select", "source-select", "quat-mode", "quat-pair-select", "imu-preset"];
+let lastHash = "";
+
+function deepHash(): string {
+  const o: Record<string, unknown> = { v: 1 };
+  for (const k of DEEP_KEYS) o[k] = ($<HTMLInputElement>(k))?.value;
+  for (const k of DEEP_CHECKS) o[k] = ($<HTMLInputElement>(k))?.checked;
+  for (const k of DEEP_SELS) o[k] = ($<HTMLSelectElement>(k))?.value;
+  return `#s=${btoa(unescape(encodeURIComponent(JSON.stringify(o))))}`;
+}
+
+function applyDeepLink(): void {
+  const m = location.hash.match(/^#s=(.+)$/);
+  if (!m) return;
+  try {
+    // decodeURIComponent 兼容两种来源：updateHash 写入的原始 base64 与外链的 URL 编码形态
+    const o = JSON.parse(decodeURIComponent(escape(atob(decodeURIComponent(m[1]))))) as Record<string, unknown>;
+    for (const k of DEEP_KEYS) {
+      const el = $<HTMLInputElement>(k);
+      if (o[k] !== undefined && el) {
+        el.value = String(o[k]);
+        el.dispatchEvent(new Event("input"));
+      }
+    }
+    for (const k of DEEP_CHECKS) {
+      const el = $<HTMLInputElement>(k);
+      if (o[k] !== undefined && el) {
+        el.checked = Boolean(o[k]);
+        el.dispatchEvent(new Event("change"));
+      }
+    }
+    for (const k of DEEP_SELS) {
+      const el = $<HTMLSelectElement>(k);
+      if (o[k] !== undefined && el) {
+        el.value = String(o[k]);
+        el.dispatchEvent(new Event("change"));
+      }
+    }
+  } catch {
+    /* 无效 hash：静默忽略，按默认状态运行 */
+  }
+}
+
+function updateHash(): void {
+  const h = deepHash();
+  if (h === lastHash) return;
+  lastHash = h;
+  history.replaceState(null, "", h);
+}
+
+function toast(text: string, color = "#7ee787"): void {
+  const chip = document.createElement("div");
+  chip.className = "ov-chip";
+  chip.style.color = color;
+  chip.textContent = text;
+  $("readout-overlay").appendChild(chip);
+  setTimeout(() => chip.remove(), 2400);
+}
+
+$("btn-share").addEventListener("click", async () => {
+  const h = deepHash();
+  history.replaceState(null, "", h);
+  lastHash = h;
+  try {
+    await navigator.clipboard.writeText(location.href);
+    toast("链接已复制——粘给同学即可复现这套参数与场景");
+  } catch {
+    toast("复制失败：请手动复制地址栏链接", "#f85149");
+  }
+});
+
+// ---------- PWA：生产环境注册 Service Worker（首次访问后可离线使用） ----------
+if (import.meta.env.PROD && "serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch(() => {
+      /* SW 不可用不影响功能 */
+    });
+  });
+}
+
+// ---------- 文档页小演示：Allan 方差（把手册噪声数字变成曲线） ----------
+// 合成 655s @50Hz 的陀螺序列（已知白噪声密度 N 与速率随机游走 K），计算重叠 Allan 偏差
+// σ(τ) 的 log-log 曲线：−½ 斜率段=白噪声（N=σ(1)），+½ 段=速率随机游走——「零偏随机游走」
+// 滑块对应的 K 系数在这里现出原形。
+const allanCanvas = document.getElementById("fig-allan-demo") as HTMLCanvasElement | null;
+let allanDrawn = false;
+const ALLAN_FS = 50; // Hz（合成用低采样率：Allan 方差只关心 τ 谱形）
+const ALLAN_N = 1 << 15; // 32768 样本 ≈ 655 s
+
+function allanCompute(): { taus: number[]; sigmas: number[] } {
+  const N_DENSITY = 0.01; // °/s/√Hz（MPU-9250 手册值）
+  const K_WALK = 0.0035; // °/s/√s（速率随机游走系数）
+  const sigSample = N_DENSITY * Math.sqrt(ALLAN_FS / 2); // 每样本白噪声 σ（°/s）
+  const dt = 1 / ALLAN_FS;
+  const g = new Gauss(mulberry32(2026));
+  const theta = new Float64Array(ALLAN_N); // 积分角（°）
+  let walk = 0;
+  for (let i = 1; i < ALLAN_N; i++) {
+    walk += K_WALK * Math.sqrt(dt) * g.next();
+    theta[i] = theta[i - 1] + (walk + sigSample * g.next()) * dt;
+  }
+  const taus: number[] = [];
+  const sigmas: number[] = [];
+  for (let k = 0; k <= 18; k++) {
+    const m = Math.round(Math.pow(2, k / 2)); // 半对数间隔
+    if (m < 1 || 2 * m >= ALLAN_N) continue;
+    let acc = 0;
+    const cnt = ALLAN_N - 2 * m;
+    for (let i = 0; i < cnt; i++) {
+      const d = theta[i + 2 * m] - 2 * theta[i + m] + theta[i];
+      acc += d * d;
+    }
+    const tau = m * dt;
+    taus.push(tau);
+    sigmas.push(Math.sqrt(acc / (2 * cnt)) / tau);
+  }
+  return { taus, sigmas };
+}
+
+function drawAllan(): void {
+  if (!allanCanvas || allanDrawn) return;
+  const ctx = allanCanvas.getContext("2d");
+  if (!ctx) return;
+  allanDrawn = true;
+  const W = allanCanvas.width, H = allanCanvas.height;
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, W, H);
+  const { taus, sigmas } = allanCompute();
+  const L = 56, T = 26, B = 30, R = 12;
+  const lx = (tau: number): number => L + ((Math.log10(tau) - Math.log10(taus[0])) / (Math.log10(taus[taus.length - 1]) - Math.log10(taus[0]))) * (W - L - R);
+  // y 域：σ 范围 ~5e-4..5e-2（°/s），跨 3 个十进位量级
+  const yLo = -4, yHi = -1;
+  const ly = (s: number): number => T + ((yHi - Math.log10(s)) / (yHi - yLo)) * (H - T - B);
+  // 网格
+  ctx.strokeStyle = "#e5eaf2";
+  ctx.lineWidth = 1;
+  ctx.font = "10.5px sans-serif";
+  ctx.fillStyle = "#64748c";
+  for (let e = yLo; e <= yHi; e++) {
+    const y = ly(Math.pow(10, e));
+    ctx.beginPath();
+    ctx.moveTo(L, y);
+    ctx.lineTo(W - R, y);
+    ctx.stroke();
+    ctx.textAlign = "right";
+    ctx.fillText(`1e${e}`, L - 5, y + 3.5);
+  }
+  for (const tau of [0.02, 0.1, 0.5, 2, 10]) {
+    const x = lx(tau);
+    ctx.strokeStyle = "#eef2f8";
+    ctx.beginPath();
+    ctx.moveTo(x, T);
+    ctx.lineTo(x, H - B);
+    ctx.stroke();
+    ctx.textAlign = "center";
+    ctx.fillText(`${tau}s`, x, H - B + 14);
+  }
+  // 参考斜率线（解析形状）：白噪声 σ = ARW/√τ；速率随机游走 σ = (K/√3)·√τ
+  const drawGuide = (fn: (t: number) => number, t0: number, t1: number, label: string, tLabel: number): void => {
+    ctx.strokeStyle = "#94a3b8";
+    ctx.setLineDash([5, 4]);
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.moveTo(lx(t0), ly(fn(t0)));
+    ctx.lineTo(lx(t1), ly(fn(t1)));
+    ctx.stroke();
+    ctx.setLineDash([]);
+    odHaloText(ctx, label, lx(tLabel), ly(fn(tLabel)) - 10, "#64748c");
+  };
+  drawGuide((t) => 0.00707 / Math.sqrt(t), 0.02, 1.2, "白噪声（斜率 −½）→ σ(1s) ≈ N", 0.035);
+  drawGuide((t) => 0.00202 * Math.sqrt(t), 2.5, 10, "零偏随机游走（斜率 +½）", 5.5);
+  // 曲线
+  ctx.strokeStyle = "#0e7fa8";
+  ctx.lineWidth = 2.2;
+  ctx.beginPath();
+  taus.forEach((tau, i) => {
+    const x = lx(tau), y = ly(sigmas[i]);
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+  taus.forEach((tau, i) => {
+    const x = lx(tau), y = ly(sigmas[i]);
+    ctx.fillStyle = "#0e7fa8";
+    ctx.beginPath();
+    ctx.arc(x, y, 2.6, 0, Math.PI * 2);
+    ctx.fill();
+  });
+  odHaloText(ctx, "σ(τ)（°/s）— log-log", L + 6, 16, "#16202f", "12.5px sans-serif");
+  odHaloText(ctx, "τ（平均时长）", W - R - 60, H - 8, "#64748c");
+}
+
 // ---------- 初始化 ----------
 updateSourceChip();
 applyMagEnable(); // 复选框默认勾选但不触发 change：必须显式同步一次 MARG 状态
+applyDeepLink(); // 深链：把 URL hash 里的面板状态还原（在绑定与默认初始化之后执行）
 setGimbalAngles(0, 0, 0);
 applyView("attitude"); // 视图不持久化，始终从四轴姿态视图开始
 setTelemetryVisible(false); // 玻璃盒默认关闭，写 body[data-telemetry] 供 CSS 使用

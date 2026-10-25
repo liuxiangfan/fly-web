@@ -7,6 +7,7 @@
   <meta name="description" content="四元数姿态解算学习演示装置：模拟 IMU、四种解算算法实时对比、万向节锁平衡环架演示。" />
   <title>四元数姿态解算 · 学习演示装置</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="manifest" href="/manifest.webmanifest" />
   <style>html { background: #030712; }</style>
   <!-- Fira Sans / Fira Code 非阻塞加载；网络不可达时自动降级到系统字体，不影响使用 -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -27,6 +28,7 @@
       <span class="mono dim" id="clock">t = 0.0 s</span>
       <button id="btn-pause" class="btn primary">暂停</button>
       <button id="btn-reset" class="btn">重置</button>
+      <button id="btn-share" class="btn" title="把当前面板状态编码进链接复制">分享</button>
       <button id="btn-docs" class="btn" title="文档（Esc 关闭）">文档</button>
     </div>
   </header>
@@ -47,6 +49,7 @@
         <div class="ov-chip mono" id="readout-euler">φ +0.0° &nbsp; θ +0.0° &nbsp; ψ +0.0°</div>
         <div class="ov-chip mono dim" id="readout-true">真实 φ +0.0° θ +0.0° ψ +0.0°</div>
         <div class="ov-chip mono dim imu" id="readout-imu">陀螺仪 [ +0.0, +0.0, +0.0 ] °/s<br />加速度计 [ +0.0, +0.0, +0.0 ] m/s²</div>
+        <div class="ov-chip hidden" id="align-chip">静止 3 秒 → 已粗对准（加计 + 磁力计直接摆出姿态，滤波接管）</div>
         <div class="ov-chip dim axes" id="readout-axes">机体轴：x 前 · y 右 · z 下（NED）</div>
         <div class="ov-chip" id="gravity-legend">
           <span class="lg-item"><span class="lg-dot" style="background:#f1f5f9"></span>预测的「下」（当前估计姿态）</span>
@@ -127,6 +130,12 @@
           <input type="number" class="step-input" data-step="imu-gyro-bias" min="0.001" max="2.5" title="滑杆步距" />
           </div>
         <div class="slider-row with-inputs">
+          <label>零偏随机游走</label>
+          <input type="range" id="imu-gyro-walk" min="0" max="0.5" step="0.01" value="0" />
+          <input type="number" class="num-input" data-num="imu-gyro-walk" step="any" />
+          <input type="number" class="step-input" data-step="imu-gyro-walk" min="0.0005" max="0.25" title="滑杆步距" />
+          </div>
+        <div class="slider-row with-inputs">
           <label>陀螺仪噪声</label>
           <input type="range" id="imu-gyro-noise" min="0" max="2" step="0.05" value="0.2" />
           <input type="number" class="num-input" data-num="imu-gyro-noise" step="any" />
@@ -138,6 +147,21 @@
           <input type="number" class="num-input" data-num="imu-accel-noise" step="any" />
           <input type="number" class="step-input" data-step="imu-accel-noise" min="0.0005" max="0.5" title="滑杆步距" />
           </div>
+        <div class="sub-group">
+          <div class="slider-row with-inputs">
+            <label>交叉轴敏感度</label>
+            <input type="range" id="imu-cross-axis" min="0" max="5" step="0.1" value="0" />
+            <input type="number" class="num-input" data-num="imu-cross-axis" step="any" />
+            <input type="number" class="step-input" data-step="imu-cross-axis" min="0.005" max="2.5" title="滑杆步距" />
+          </div>
+          <div class="slider-row with-inputs">
+            <label>加计非线性</label>
+            <input type="range" id="imu-accel-nonlin" min="0" max="5" step="0.1" value="0" />
+            <input type="number" class="num-input" data-num="imu-accel-nonlin" step="any" />
+            <input type="number" class="step-input" data-step="imu-accel-nonlin" min="0.005" max="2.5" title="滑杆步距" />
+          </div>
+          <p class="hint">进阶器件误差（数据手册规格，MPU-9250：交叉轴 ±2%、非线性 ±0.5%；确定性建模，不影响噪声序列）。</p>
+        </div>
         <div class="slider-row with-inputs">
           <label>机动线加速度</label>
           <input type="range" id="imu-lin-accel" min="0" max="5" step="0.1" value="1" />
@@ -163,7 +187,13 @@
             <input type="number" class="num-input" data-num="imu-mag-disturb" step="any" />
             <input type="number" class="step-input" data-step="imu-mag-disturb" min="0.005" max="0.5" title="滑杆步距" />
           </div>
-          <p class="hint">磁干扰模拟机身金属与电机通电磁场：MARG 偏航精度会下降（实际飞控需要磁强计校准）。</p>
+          <div class="slider-row with-inputs">
+            <label>磁力计量化</label>
+            <input type="range" id="imu-mag-quant" min="0" max="2" step="0.1" value="0" />
+            <input type="number" class="num-input" data-num="imu-mag-quant" step="any" />
+            <input type="number" class="step-input" data-step="imu-mag-quant" min="0.005" max="1" title="滑杆步距" />
+          </div>
+          <p class="hint">磁干扰模拟机身金属与电机通电磁场：MARG 偏航精度会下降（实际飞控需要磁强计校准）。量化步长 0.6μT = AK8963（MPU-9250 内置）的 LSB 规格。</p>
         </div>
       </section>
 
@@ -211,6 +241,10 @@
         <div class="row check-row">
           <label><input type="checkbox" id="init-offset-toggle" /> 重置时给各算法随机初始姿态偏差（演示初始对准）</label>
         </div>
+        <div class="row check-row">
+          <label><input type="checkbox" id="ab-toggle" /> A/B 参数对比（误差图 B 组虚线 = 快照参数）</label>
+          <button class="btn" id="btn-ab-snapshot" disabled>把当前参数存入 B 组</button>
+        </div>
         <p class="hint">卡尔曼 Q = 过程噪声（陀螺仪有多不可信），R = 观测噪声（加速度计/磁力计有多不可信）；滤波器按两者方差自动加权。详见文档·滤波算法讲解。</p>
         <p class="hint">纯积分只用陀螺仪，其姿态不受任何滑块影响——这正是演示漂移的关键。</p>
       </section>
@@ -228,6 +262,10 @@
             <option value="kalman">卡尔曼滤波</option>
           </select>
         </div>
+        <div class="row check-row">
+          <label><input type="checkbox" id="loop-toggle" /> 闭环演示：机体用所选解算结果控制</label>
+        </div>
+        <p class="hint">闭环开启后，跟踪控制器改用「所选来源」的姿态计算误差——解算漂多少，机体就飞偏多少（选纯陀螺仪积分 + 零偏可见漂移如何变成真实飞行偏差）。默认关闭 = 理想飞控（用真实姿态控制）。</p>
         <div class="row check-row">
           <label><input type="checkbox" id="ghost-toggle" checked /> 显示真实姿态幻影（线框）</label>
         </div>
@@ -294,6 +332,8 @@
           <div class="row check-row">
             <label>累计旋转 <span class="mono dim" id="proj-turn">已左乘 0 次 · 累计 0° · q = +1（单位姿态）</span></label>
           </div>
+          <canvas id="proj-section" width="520" height="120" title="S³ 剖面（w–i 平面）：q 与 −q 在 4D 超球截面上的实时位置"></canvas>
+          <p class="hint">S³ 剖面（w–i 平面）＝「抬升」视角：q 真正走在 4D 超球的这个截面上（青点），−q 是它的对径点（品红）。三段式看懂立体投影：<b>① 抬升</b>——本剖面里 q 沿 1→i 的圆弧走；<b>② 旋转</b>——3D 姿态由 q 的「半角」决定；<b>③ 投影</b>——上方球里的青色影子是 q 压进 w=0 的结果。</p>
           <p class="hint">
             球面 = 4D 超球的赤道（w = 0）；青点 = q（球内，w &gt; 0），品红点 = −q（球外，w &lt; 0，一对倒易点）。
             下方小四轴 = q 的 3D 姿态，与球内青点同步转动。
@@ -372,6 +412,7 @@
       <div class="chart-header">
         <div class="chart-title">姿态总误差（解算 vs 真实）</div>
         <div class="chart-legend" id="err-legend"></div>
+        <div class="chart-legend" id="err-legend-b"></div>
       </div>
       <canvas id="err-canvas"></canvas>
     </div>
@@ -418,14 +459,25 @@
             <li><b>万向节锁</b>——三轴平衡环架，直观展示欧拉角在俯仰 ±90° 时「只剩 2 个自由度」。</li>
             <li><b>四元数</b>——参考球上的插值轨迹对比，以及 q 与 −q 的双重覆盖演示。</li>
           </ul>
-          <p>顶栏从左到右四个控件：</p>
+          <p>顶栏从左到右五个控件：</p>
           <ul>
             <li><b>时钟</b>——仿真时间，暂停时停走。</li>
             <li><b>暂停 / 继续</b>——冻结整个仿真，便于对照读数。</li>
             <li><b>重置</b>——时间归零，所有姿态与算法内部状态清零回水平。</li>
+            <li><b>分享</b>——把当前全部面板参数与机动剧本编码进网址并复制：发给同学，打开就是同一套实验状态。</li>
             <li><b>文档</b>——打开本页（Esc 或「返回演示」关闭）。</li>
           </ul>
           <p>3D 区域：拖拽旋转视角、滚轮缩放。所有改动即时生效，无需保存。</p>
+
+          <div class="ctl">
+            <div class="ctl-name">一键进入沙盒模式 <span class="ctl-range">文档页按钮</span></div>
+            <p><span class="k k1">是什么</span>一键配置好「复合机动 + 中等污染（零偏/噪声/振动/线加速度/磁干扰）+ 玻璃盒 + 随机初始偏差 + A/B 对比」的自由实验场。</p>
+            <p><span class="k k2">起什么作用</span>省去逐个拉滑块：进入后所有参数随便动，误差图上 B 组虚线是进入时刻的参数快照——改一项对比一项。</p>
+            <p><span class="k k3">改了会怎样</span>点它 → 文档关闭、回到四轴姿态视图、立即重置开跑。想从头系统学，还是按左侧模块顺序读。</p>
+          </div>
+          <div class="row btn-row">
+            <button class="btn primary" id="btn-sandbox">一键进入沙盒模式</button>
+          </div>
         </section>
 
         <section id="d-scenario">
@@ -453,6 +505,13 @@
             <p><span class="k k2">起什么作用</span>设定真实姿态的目标值；机体以<b>受限角速度</b>平滑跟踪目标，而不是瞬间跳变——和真飞机的舵量响应一致。</p>
             <p><span class="k k3">改了会怎样</span>拖动滑块，幻影（线框真值）实时移动、实心模型跟着解算结果追。
               把三个轴一起拖到复合角度，可以看到误差增大、融合算法的修正量上升。</p>
+          </div>
+
+          <div class="ctl">
+            <div class="ctl-name">闭环演示：用解算结果控制机体 <span class="ctl-range">开关</span></div>
+            <p><span class="k k1">是什么</span>真实飞控的最后一环——姿态解算的结果要喂给控制律才能飞。开启后，跟踪控制器改用「模型姿态来源」所选的解算结果计算误差；默认关闭 = 理想飞控（直接用真实姿态控制，解算只管显示）。</p>
+            <p><span class="k k2">起什么作用</span>把「解算精度为什么重要」变成闭环实验：估计误差不再只是曲线上的数字，而是真实的飞行偏差。工业飞控在这层之外还有角速率内环与电机混控（ArduPilot：角度 P（sqrt 整形）→ 角速率 PID → AP_Motors，主循环 400 Hz）。</p>
+            <p><span class="k k3">改了会怎样</span>选「纯陀螺仪积分」+ 零偏 2°/s 开闭环：估计持续漂，机体跟着持续飞偏——「解算漂多少、飞机偏多少」；换成 Mahony/卡尔曼，机体立刻回到目标。这是整条教学链的终点：传感器 → 解算 → 控制。</p>
           </div>
 
           <div class="ctl">
@@ -490,6 +549,20 @@
                 <tr><td>备注</td><td>内置 AK8963 磁力计（0.6 μT/LSB）</td><td>片上可编程数字滤波</td><td>Cortex-M0 片上融合，直出四元数</td></tr>
               </tbody>
             </table></div>
+          </div>
+
+          <div class="ctl">
+            <div class="ctl-name">零偏随机游走 <span class="ctl-range">0 – 0.5 °/s/√s</span></div>
+            <p><span class="k k1">是什么</span>陀螺仪零偏自身的慢漂速率：真实器件的温度/应力变化让零偏随时间随机漫步（Allan 方差曲线上斜率 +½ 的那段），而不是永远恒定。</p>
+            <p><span class="k k2">起什么作用</span>把「恒定零偏」升级成「会漂的零偏」：纯积分误差从线性增长恶化为平方增长；卡尔曼的零偏随机游走参数（内部固定小值）正好为此存在——滤波器假设零偏每秒可能挪一点。</p>
+            <p><span class="k k3">改了会怎样</span>调到 0.3：红线（纯积分）从直线变成越弯越快的抛物线；Mahony/卡尔曼仍能跟住（积分项/零偏估计在追）。配合文档·传感器测量模型的 Allan 方差图理解 K 系数的来源。</p>
+          </div>
+
+          <div class="ctl">
+            <div class="ctl-name">交叉轴敏感度 / 加计非线性 / 磁力计量化 <span class="ctl-range">0 – 5% / 0 – 5% / 0 – 2 μT</span></div>
+            <p><span class="k k1">是什么</span>三个「数据手册级」的进阶误差项：交叉轴 = 一个轴的加速度漏进另外两个轴的读数（安装/工艺不完美，规格 ±2%）；非线性 = 输出偏离理想直线的弯曲（偏离 1g 越远越明显，规格 ±0.5%）；量化 = 磁力计 ADC 的最小步长（AK8963 = 0.6 μT/LSB），读数只能落在格点上。</p>
+            <p><span class="k k2">起什么作用</span>让模拟 IMU 的误差谱接近真实器件——白噪声和零偏之外，真实数据里还有这些「系统性形状」的误差。三者全部按器件规格确定性建模（不引入随机数）。</p>
+            <p><span class="k k3">改了会怎样</span>交叉轴 2%（MPU-9250 档）：大过载机动时加计观测出现固定比例的串扰，融合输出出现小幅常值偏差；量化 0.6 μT：磁力计读数呈台阶状，小噪声场景下 MARG 偏航出现轻微锯齿。器件预设会自动写入对应规格。</p>
           </div>
 
           <div class="ctl">
@@ -551,6 +624,13 @@
             <p><span class="k k1">是什么</span>勾选后按「重置」：真实姿态回到水平，但五种算法全部从同一个<b>随机偏差 20–35° 的错误初始姿态</b>出发（每次重置随机一次，五家共用同一初值保证公平对比）。</p>
             <p><span class="k k2">起什么作用</span>把「初始对准」变成可观察的过程：真实飞控上电时姿态未知，必须靠加速度计/磁力计把估计从错误初值拉回来。互补/Mahony/Madgwick 内置<b>启动增益 ramp</b>——重置后 2.5 秒内修正增益从 6 倍线性衰减回设定值（工业库 Fusion 同款手法），收敛又快又不至于稳态过冲；卡尔曼则靠「开局协方差大 → 增益自动大」实现同等效果。</p>
             <p><span class="k k3">改了会怎样</span>勾选并重置：幻影（真值）原地不动，五条曲线从偏差处各自收敛——带 ramp 的三家几秒内贴住，纯积分永远停在偏差处（它没有观测）。细节：偏差上限 35° 是刻意设计——卡尔曼的 40° 新息门控会拒绝「偏差超过门限」的一切观测，若初始偏差更大它会卡死在错误姿态上，这正是工程上「初始对准必须先于滤波」的原因（文档·工程实践备忘）。</p>
+          </div>
+
+          <div class="ctl">
+            <div class="ctl-name">A/B 参数对比 <span class="ctl-range">开关 + 快照按钮</span></div>
+            <p><span class="k k1">是什么</span>调参教学的对照组：勾选瞬间，五种算法各克隆一个「B 组」——参数冻结为当前值、姿态重置为当前估计；之后 A 组随滑块实时变化，B 组原地不动。</p>
+            <p><span class="k k2">起什么作用</span>误差图上 A 实线 / B 虚线同图：把 Kp 从 1 拉到 5，B 虚线还停在旧参数的表现上——「快而抖 vs 慢而稳」不用嘴说。点「把当前参数存入 B 组」可随时重新快照。</p>
+            <p><span class="k k3">改了会怎样</span>B 组只进误差图（虚线，图例第二行可单独开关），不进 3D 与姿态图。细节：B 组的卡尔曼零偏从快照时刻重新学习（状态重置、参数冻结）；磁力计开关对 A/B 同步生效。</p>
           </div>
 
           <div class="ctl">
@@ -803,6 +883,7 @@
         <section id="m-overview" class="math-section">
           <div class="math-banner">数学原理</div>
           <h2>总览：从「传感器原始数据」到「无人机姿态」</h2>
+          <div class="doc-hook"><b>开胃问题</b>：无人机悬停一分钟，陀螺仪 0.1°/s 的零偏会让它「以为」自己转了多少度？——6°。加速度计随时知道「下」在哪，却一受机动就撒谎。三个传感器各有各的谎话，这一章讲怎么让它们互相揭穿。</div>
           <p>
             开跑前还有一个问题——<b>第一帧的姿态是谁给的？</b>本装置 t = 0 时假设机体水平放置
             （q = [1,0,0,0]）；真实系统这一步叫「初始对准」（静置用加速度计/磁力计对出初始姿态，
@@ -970,6 +1051,7 @@
 
 <section id="m-repr" class="math-section">
           <h2>姿态的数学表示：为什么是四元数</h2>
+          <div class="doc-hook"><b>开胃问题</b>：三个数为什么装不下旋转？把地球仪的经纬度拨到北极点试试——所有经线在那里相遇，朝向信息凭空消失。旋转群的「极点」藏在哪，这一章把它找出来，再用第四个数填平它。</div>
 
           <h3>姿态是一个旋转</h3>
           <p>
@@ -1116,6 +1198,7 @@ R(φ, 90°, ψ) =
 
         <section id="m-ijk" class="math-section optional">
           <h2>i、j、k 到底是什么</h2>
+          <div class="doc-hook"><b>开胃问题</b>：把手绕竖直轴匀速转 360°——你回到原样了吗？物理上「是」，四元数的世界里「没有」：你走到了 −q，还要再转一整圈才真正回家。i、j、k 就是这桩怪事的三张身份证。</div>
           <h3>从虚数 i 说起：i 就是「转 90°」的记号</h3>
           <p>
             中学里「i 是 −1 的平方根」其实隐藏了它的几何身份：把平面上的数乘以 i，
@@ -1170,6 +1253,7 @@ i² = j² = k² = i·j·k = −1</div>
 
 <section id="m-sensor" class="math-section">
           <h2>传感器测量模型：每个传感器到底测到什么</h2>
+          <div class="doc-hook"><b>开胃问题</b>：加速度计静止时读 +9.8 沿机体「下」——可它测的是支撑力，方向应该朝「上」才对？这枚 ± 号里藏着「比力」的全部秘密，也是初学者排错时最容易栽的第一个坑。</div>
           <p>推导融合之前必须先弄清输入。<b>每个传感器 = 一个「理想观测量」+ 一串误差项</b>，写成方程一目了然。先看它们各自的物理原理：</p>
           <ul>
             <li><b>陀螺仪（MEMS）</b>：内部有一个持续振动的小质量块。机体旋转时，质量块因「科里奥利效应」受到侧向力，电容测出这个力 → 角速度。它测的是<b>转速</b>，不是角度。</li>
@@ -1184,7 +1268,18 @@ i² = j² = k² = i·j·k = −1</div>
             <b>b</b> 是零偏：温度漂移、启动误差造成的<b>慢变</b>恒定分量（真实 MEMS 陀螺仪约 0.1–2 °/s，本装置滑块 0–5）；
             <b>n</b> 是白噪声：每帧独立的随机分量。关键在于陀螺仪输出的是<b>角速度</b>——姿态必须由它积分而来，
             而积分对恒定误差毫无抵抗力：任何 b 都会以 dθ/dt = b 的速度累积成姿态偏差（漂移），噪声则累积成随机游走。
+            真实零偏本身还会慢漂（速率随机游走）——本装置「零偏随机游走」滑块模拟它，积分误差从线性恶化成平方增长。
           </p>
+
+          <figure class="doc-fig doc-fig-demo">
+            <canvas id="fig-allan-demo" width="720" height="230" title="Allan 方差：白噪声与速率随机游走在 log-log 图上的形状"></canvas>
+            <figcaption class="fig-cap">演示 · Allan 方差 σ(τ)：对合成陀螺序列（655 s @50 Hz，已知噪声密度 N=0.01 °/s/√Hz 与随机游走 K=0.0035 °/s/√s）按不同平均时长 τ 计算相邻段差分。
+              log-log 图左段斜率 −½ = 白噪声（读法：σ(1s) ≈ 噪声密度换算值），右段斜率 +½ = 零偏随机游走——
+              器件数据手册的噪声指标就是从这种曲线读出来的，也是「零偏随机游走」滑块的系数来源。</figcaption>
+          </figure>
+          <div class="formula">Allan 方差定义（非重叠）　σ²(τ) = <span class="frac"><span class="n">1</span><span class="d">2(M − 2m)</span></span>·Σ(Θ<sub>i+2m</sub> − 2Θ<sub>i+m</sub> + Θ<sub>i</sub>)² / τ²
+Θ：陀螺仪输出的积分角　τ = m·τ₀：平均时长　τ₀：采样间隔</div>
+          <div class="fvars"><b>变量</b>　σ(τ)：Allan 偏差（°/s）　M：样本数　m：平均窗口（按半对数取值）　读斜率判型：−½ 白噪声（N = σ(1)·√2）　+½ 速率随机游走（K）　平底区 零偏不稳定性 B</div>
 
           <h3>加速度计：测比力</h3>
           <div class="formula">比力定义（真实器件的输出）　f<sub>b</sub> = R<sup>T</sup>(q)·(a<sub>world</sub> − g<sub>world</sub>) + 噪声　（机体系）</div>
@@ -1243,6 +1338,7 @@ i² = j² = k² = i·j·k = −1</div>
         </section>
 
         <section id="m-integral" class="math-section" data-toc="陀螺仪积分方程：q̇ = ½ · q ⊗ ω 的完整推导">
+          <div class="doc-hook"><b>开胃问题</b>：0.1°/s 的零偏 × 3600 秒 = 360°——一小时的飞行足够让「以为水平」的无人机原地转一整圈。积分不原谅任何误差；这行方程就是误差的入口。</div>
           <h2>陀螺仪积分方程：<i class="od">q</i> = <span class="frac"><span class="n">1</span><span class="d">2</span></span> · q ⊗ ω 的完整推导</h2>
           <p>
             这是整条流水线的「预测」引擎。先把问题说成大白话：<b>我知道「这一瞬间我在往哪个方向转、转多快」，
@@ -1303,6 +1399,7 @@ i² = j² = k² = i·j·k = −1</div>
 
         <section id="m-error" class="math-section">
           <h2>误差的定义：两个「下」方向的叉积</h2>
+          <div class="doc-hook"><b>开胃问题</b>：两根「下」方向箭头相差 20° 时，把它们叉乘一下——得到的向量恰好垂直于两者、长度正好是 sin 20°。为什么叉积天生就是姿态误差的正确形状？三个性质在这一章逐一拆开。</div>
           <p>修正的前提是先量化「姿态错了多少、往哪个方向错」。全靠一个优雅的构造——叉积。</p>
 
           <h3>两个重力方向</h3>
@@ -1521,6 +1618,23 @@ t ∈ [0, 1]　（cos Ω = q₀·q₁：两四元数在 4D 球面上的夹角）
             每步只需一次乘加、完全免三角函数，出自 Shoemake 原始论文与维基 Slerp 条目的递推形式。
             本装置参考球的弧线采样（65 点）用直接公式毫无压力；样本数上千的关键帧管线才值得换递推。
           </p>
+
+          <h3>Squad：多关键帧的光滑插值</h3>
+          <p>
+            两个关键帧之间 Slerp 是最优解；但相机动画通常是<b>一串</b>关键帧——逐段 Slerp 在关键帧处
+            角速度会跳变（每段绕不同的轴、以不同的速度）。Shoemake 给出的修补是 <b>Squad</b>（球面四边形插值）：
+            用相邻关键帧的内积切线 s₁、s₂ 造一条<b>切线连续</b>（C¹）的路径：
+          </p>
+          <div class="formula">内积切线　s<sub>i</sub> = q<sub>i</sub> ⊗ exp( −( log(q<sub>i</sub><sup>−1</sup>⊗q<sub>i+1</sub>) + log(q<sub>i</sub><sup>−1</sup>⊗q<sub>i−1</sub>) ) / 4 )
+Squad(q₁, q₂, s₁, s₂, t) = Slerp( Slerp(q₁, q₂, t), Slerp(s₁, s₂, t), 2t(1−t) )</div>
+          <div class="fvars"><b>变量</b>　q₀…q₃：四个关键帧（本段插 q₁→q₂）　s₁,s₂：内积切线　log/exp：单位四元数的对数/指数映射　2t(1−t)：两端为 0 的抛物线权重</div>
+          <p>
+            三层 Slerp 嵌套的直觉：内层两个 Slerp 各自扫一条大圆弧，外层按 2t(1−t) 在两弧间「来回拨」——
+            端点处权重为 0（严格落在 q₁、q₂ 上），中点权重最大（把路径往切线方向弯）。
+            完整正确性证明见 Dam–Koch–Lillholm 报告（哥本哈根大学 DIKU-TR-98/5）。
+            选姿态对「四关键帧路径」可以看到：琥珀色 Squad 弧在端点与白色 Slerp 重合、中途被相邻关键帧
+            「牵引」出平滑弯道——关键帧动画系统（相机轨迹、云台路径）用的就是它。
+          </p>
         </section>
 
                 <section id="m-4d" class="math-section optional">
@@ -1595,6 +1709,7 @@ t ∈ [0, 1]　（cos Ω = q₀·q₁：两四元数在 4D 球面上的夹角）
         </section>
         <section id="m-practice" class="math-section">
           <h2>工程实践备忘：面板滑块背后的真实世界</h2>
+          <div class="doc-hook"><b>开胃问题</b>：数据手册上「零偏 ±5°/s」意味着什么？意味着上电第一秒，真实器件可能比你的算法一整天的努力错得还多——工程从标定开始，而不是从滤波开始。</div>
           <p>以下是真实飞控与组合导航（参考北航 Rfly 课程、武大 i2Nav KF-GINS 架构）里与本装置各滑块对应的工程惯例。</p>
           <h3>传感器标定：三条默认流水线</h3>
           <ul>
@@ -1647,6 +1762,7 @@ t ∈ [0, 1]　（cos Ω = q₀·q₁：两四元数在 4D 球面上的夹角）
 
         <section id="f-intro">
           <h2>全景：所有算法共享同一个框架</h2>
+          <div class="doc-hook"><b>开胃问题</b>：同一份脏数据、同一颗陀螺仪，五种算法画出五条不同的误差曲线——全部差别来自一个问题的不同答案：<b>观测不可信的时候，信几成？</b>互补用一个 α、Mahony 用一对 Kp/Ki、Madgwick 用一个 β、卡尔曼直接把「信几成」当成被估计的量。</div>
           <p>
             五种算法（含纯陀螺仪积分）都可以装进同一个「预测—修正」框架：<b>预测</b>用陀螺仪积分推算下一刻姿态；
             <b>修正</b>用加速度计/磁力计的绝对方向观测纠正预测。它们的全部区别只在两件事：

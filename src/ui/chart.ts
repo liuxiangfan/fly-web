@@ -1,6 +1,8 @@
 export interface ChartSeries {
   label: string;
   color: string;
+  /** 虚线样式（A/B 对比的 B 组用）；缺省实线 */
+  dash?: number[];
 }
 
 /** 滚动时序折线图（Canvas 2D 手绘，深色主题） */
@@ -157,6 +159,7 @@ export class RollingChart {
     for (let s = 0; s < this.series.length; s++) {
       if (!this.visible[s]) continue;
       ctx.strokeStyle = this.series[s].color;
+      ctx.setLineDash(this.series[s].dash ?? []);
       ctx.beginPath();
       let started = false;
       for (let k = 0; k < this.count; k++) {
@@ -175,6 +178,7 @@ export class RollingChart {
         }
       }
       ctx.stroke();
+      ctx.setLineDash([]);
     }
   }
 

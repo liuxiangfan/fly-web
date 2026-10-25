@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { buildQuad, type QuadModel } from "./quad";
 import { makeTextSprite } from "./labels";
 import { toDisplayQ, toDisplayVec } from "../core/gimbal";
-import { eulerLerp, qFromEuler, qRot, qSlerp, type Quat } from "../core/quat";
+import { eulerLerp, qFromEuler, qRot, qSlerp, squad, squadTangent, type Quat } from "../core/quat";
 
 export interface QuatPosePair {
   id: string;
@@ -10,16 +10,25 @@ export interface QuatPosePair {
   /** 度（NED 欧拉角） */
   from: [number, number, number];
   to: [number, number, number];
+  /** 四关键帧路径（Squad 演示）：[p0, p1=from, p2=to, p3]，缺省无 Squad 弧 */
+  path?: Array<[number, number, number]>;
 }
 
 /**
  * 预设姿态对：多轴复合旋转下 Slerp（大圆）与欧拉插值（扭曲线）分叉最明显。
- * from/to 为 (横滚, 俯仰, 偏航)，单位度。
+ * from/to 为 (横滚, 俯仰, 偏航)，单位度；带 path 的预设额外画 Squad 弧（琥珀）。
  */
 export const QUAT_POSE_PAIRS: QuatPosePair[] = [
   { id: "combo", name: "偏航+俯仰+横滚（差异最大）", from: [0, 0, 0], to: [140, 70, 160] },
   { id: "flip", name: "俯仰翻越 90°", from: [0, -60, 0], to: [80, 120, 90] },
   { id: "roll", name: "纯横滚 180°（两者几乎重合）", from: [0, 0, 0], to: [180, 0, 0] },
+  {
+    id: "squad",
+    name: "四关键帧路径（Squad vs Slerp）",
+    from: [0, 0, 0],
+    to: [140, 70, 160],
+    path: [[-40, 20, 30], [0, 0, 0], [140, 70, 160], [175, 100, 205]],
+  },
 ];
 
 /** 参考球半径：所有轨迹弧贴着这个球面 */
@@ -36,8 +45,14 @@ export interface QuatViewRig {
   /**
    * 设置插值演示：姿态对（NED 欧拉角，度）与进度 t。
    * 重建两条弧线几何、移动当前四轴到插值姿态、更新轴角箭头与滑动 marker。
+   * path（四关键帧 [p0,p1=from,p2=to,p3]）缺省时不画 Squad 弧；提供时额外采样 Squad。
    */
-  setInterpolation(fromDeg: [number, number, number], toDeg: [number, number, number], t: number): void;
+  setInterpolation(
+    fromDeg: [number, number, number],
+    toDeg: [number, number, number],
+    t: number,
+    path?: Array<[number, number, number]>,
+  ): void;
   /** q 与 −q 演示：给定姿态（NED 欧拉角，度），并排两个四轴分别按 q 与 −q 摆位 */
   setNegation(rollDeg: number, pitchDeg: number, yawDeg: number): void;
   /** 切换插值组 / q−q 组的可见性 */
@@ -56,6 +71,8 @@ export interface QuatViewRig {
     /** 采样点数组（显示坐标，N=ARC_SAMPLES+1）：弧线几何由这些点生成 */
     slerpPoints: THREE.Vector3[];
     eulerPoints: THREE.Vector3[];
+    /** Squad 弧采样点（仅带 path 的预设填充；供 scenecheck 断言） */
+    squadPoints: THREE.Vector3[];
     negA: QuadModel;
     negB: QuadModel;
     axisArrow: THREE.ArrowHelper;
@@ -136,7 +153,18 @@ export function buildQuatView(): QuatViewRig {
       roughness: 0.4,
     }),
   );
-  interpGroup.add(slerpLine, eulerLine);
+  // Squad 弧（琥珀，仅四关键帧预设显示）：多关键帧的 C¹ 光滑插值对照组
+  const SQUAD_COLOR = 0xf0c674;
+  const squadLine = new THREE.Mesh(
+    new THREE.BufferGeometry(),
+    new THREE.MeshStandardMaterial({
+      color: SQUAD_COLOR,
+      emissive: new THREE.Color(SQUAD_COLOR).multiplyScalar(0.35),
+      roughness: 0.4,
+    }),
+  );
+  squadLine.visible = false;
+  interpGroup.add(slerpLine, eulerLine, squadLine);
 
   // 双滑动 marker：白球沿 Slerp 弧、品红球沿欧拉弧
   const slerpMarker = new THREE.Mesh(
@@ -183,6 +211,7 @@ export function buildQuatView(): QuatViewRig {
 
   const slerpPoints: THREE.Vector3[] = [];
   const eulerPoints: THREE.Vector3[] = [];
+  const squadPoints: THREE.Vector3[] = [];
 
   // ---------------- 4D 立体投影组 ----------------
   // S³ 上点 (w,x,y,z) 从南极 (−1,0,0,0) 投影到 w=0 三维空间：p = (x,y,z)/(1+w)。
@@ -299,6 +328,7 @@ export function buildQuatView(): QuatViewRig {
       projGroup,
       slerpPoints,
       eulerPoints,
+      squadPoints,
       negA,
       negB,
       axisArrow,
@@ -306,7 +336,7 @@ export function buildQuatView(): QuatViewRig {
       projQPos,
       projNegPos,
     },
-    setInterpolation(fromDeg, toDeg, t) {
+    setInterpolation(fromDeg, toDeg, t, path) {
       const qFrom = quatFromEulerDeg(fromDeg);
       const qTo = quatFromEulerDeg(toDeg);
       const r0 = SPHERE_RADIUS;
@@ -335,6 +365,31 @@ export function buildQuatView(): QuatViewRig {
       eulerLine.geometry = new THREE.TubeGeometry(
         new THREE.CatmullRomCurve3(eulerPoints), 96, 0.012, 10, false,
       );
+
+      // Squad 弧（琥珀）：四关键帧的内积切线 + squad 混合；无 path 时隐藏
+      squadPoints.length = 0;
+      if (path && path.length === 4) {
+        const p0 = quatFromEulerDeg(path[0]);
+        const p1 = quatFromEulerDeg(path[1]);
+        const p2 = quatFromEulerDeg(path[2]);
+        const p3 = quatFromEulerDeg(path[3]);
+        const s1 = squadTangent(p0, p1, p2);
+        const s2 = squadTangent(p1, p2, p3);
+        for (let i = 0; i <= ARC_SAMPLES; i++) {
+          const u = i / ARC_SAMPLES;
+          const qs = squad(p1, p2, s1, s2, u);
+          squadPoints.push(vecToDisplay(qRot(qs, REF_VEC)).multiplyScalar(r0));
+        }
+        squadLine.geometry.dispose();
+        squadLine.geometry = new THREE.TubeGeometry(
+          new THREE.CatmullRomCurve3(squadPoints), 96, 0.012, 10, false,
+        );
+        squadLine.visible = true;
+      } else {
+        squadLine.geometry.dispose();
+        squadLine.geometry = new THREE.BufferGeometry();
+        squadLine.visible = false;
+      }
 
       // 滑动 marker：当前 t 在两条路径上的位置
       slerpMarker.position.copy(slerpPoints[Math.round(clamp01(t) * ARC_SAMPLES)]);

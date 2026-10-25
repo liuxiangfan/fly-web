@@ -1,7 +1,7 @@
 # 项目状态 · 四元数姿态解算学习演示装置
 
 > **本文件是项目的恢复锚点。** 会话上下文被压缩后，从这里可以快速接续全部关键信息。
-> 最后更新：2026-10-25（外部资料落地轮·三：幅度+方向双门控/等效旋转轴开关/校准舞蹈演示/Slerp 递推备注；自检增至 53 项）
+> 最后更新：2026-10-25（待办清零轮：A/B 对比/闭环控制/Allan 方差/深链+PWA/Squad/静止对准/叙事钩子/沙盒/新误差滑块/S³剖面；自检 59 项；tsconfig 纳入 scripts）
 
 ## 一句话
 
@@ -15,7 +15,7 @@
 
 - Vite + TypeScript（无框架）+ Three.js（three ^0.170）
 - `npm run dev` / `npm run build`（= `tsc --noEmit && vite build` → `dist/`）/ `npm run preview`
-- `npm run check` = `selftest`（Node 数值自检）+ `scenecheck`（Node 下构建真实 three.js 场景图做几何校验），共 53 项
+- `npm run check` = `selftest`（Node 数值自检）+ `scenecheck`（Node 下构建真实 three.js 场景图做几何校验），共 59 项
 - 诊断脚本：`scripts/diag.ts`（收敛时间线）、`scripts/diag-violent.ts`（剧烈机动复现）
 - 源码改动后必须 `npm run build` 并在浏览器 **Ctrl+F5 强刷**（preview 服务的是构建产物）
 - 部署：`.github/workflows/deploy.yml`（wrangler v4），依赖 GitHub secrets 里的 Cloudflare 凭据
@@ -94,6 +94,38 @@
 
 ## 已完成里程碑
 
+- **待办清零轮**（2026-10-25，候选增强 4 项 + 长线 5 项全部落地）：
+  - **A/B 参数对比**：`ab-toggle` 勾选瞬间五算法各克隆 B 组（`getParams/setParams` 快照、姿态重置、参数冻结、
+    磁力计开关同步）；误差图扩为 12 通道（A 实线 / B 虚线 `dash:[5,3]`），`#err-legend-b` 第二图例行
+    （`body[data-ab=on]` 控制显隐）；`btn-ab-snapshot` 随时重快照；B 组卡尔曼零偏从快照时刻重学（文档注明）
+  - **闭环控制演示**：`World.step(h, params, feedbackQ?)`——`loop-toggle` 勾选后控制器改用所选估计器姿态
+    计算跟踪误差（因果序：用上一步估计），「估计漂多少、机体飞偏多少」；selftest 32：理想环 0.00° vs
+    纯积分估计反馈（零偏 3°/s）13.47°
+  - **IMU 误差模型升级**：`gyroWalkDps`（零偏随机游走，World 持有 `gyroWalk` 状态每步推进，
+    0 = 不消耗随机数、序列守护不变）、`accelCrossAxis`（双向泄漏）、`accelNonlin`（偏离 1g 二次压缩）、
+    `magQuantUts`（确定性取整）——全部默认 0；4 个新滑块 + d-imu 条目；selftest 30/31（粗对准 0.000°、
+    量化格点/交叉轴泄漏）；**坑**：walk 状态单位 °/s，只在 simulateImu 统一转 rad/s（曾双除 57.3 缩小 57 倍）
+  - **Allan 方差演示**（`#fig-allan-demo`，m-sensor）：合成 655s@50Hz 已知 N/K 序列 → 非重叠 Allan σ(τ)
+    log-log 曲线 + ±½ 斜率参考线 + 公式与读法；惰性一次绘制
+  - **深链分享 + PWA**：`deepHash()`（21 滑块 + 7 开关 + 5 下拉 → base64(json) → `#s=`），
+    `applyDeepLink()` 初始化还原（dispatch input/change），`updateHash()` 挂 frame 的 0.1s UI 块（replaceState）；
+    `btn-share` 复制 + toast；`public/manifest.webmanifest` + `public/sw.js`（stale-while-revalidate 运行时缓存）
+    + `import.meta.env.PROD` 下注册（tsconfig types 加 vite/client）
+  - **Squad**：quat.ts 加 `qLog/qExp/squadTangent/squad`；`QUAT_POSE_PAIRS` 新增四关键帧预设
+    （path=[p0,p1,p2,p3]）；quatview 第三条琥珀弧（`parts.squadPoints`，无 path 隐藏）；m-slerp 加推导节
+    （内积切线 + 三层 Slerp 嵌套直觉 + Dam 报告引用）；scenecheck 四元数断言扩展 squad 端点/点数
+  - **三段式初始对准·静止检测**：`stepStillness`（|ω|<3°/s 持续 3s 且融合估计对齐差 >8° →
+    `coarseAlign(accel, mag, magEnabled)` 重置四家融合估计，纯积分保留作对照；5s 冷却）；
+    `#align-chip` 提示 3s；selftest 30 验证 coarseAlign 精度
+  - **立体投影三段式**：`#proj-section` canvas（w–i 平面 S³ 剖面 inset：单位圆 + q/−q 对径点实时位置，
+    drawProjSection 挂 updateProjTurn）+ 面板 hint「抬升→旋转→投影」三段式叙事
+  - **文档叙事**：8 个 `.doc-hook` 钩子盒（量化开胃问题：总览/表示/ijk/传感器/积分/叉积/工程实践/滤波总览）
+    + `btn-sandbox` 一键沙盒（复合机动+中等污染+玻璃盒+初始偏差+A/B 快照+回姿态视图）
+  - **selftest 28–33**：Squad 端点/归一化/区分度/qLog 往返、参数快照 roundtrip、粗对准、量化+交叉轴、
+    闭环、随机游走——共 33 项；**坑**：qAngleBetween 的 acos 在零夹角附近分辨率 ~1e-6°，端点断言容差 1e-4°
+  - **tsconfig 纳入 scripts**（include + node types）：修复 diag*.ts 停留在旧 API（update 三参、缺 ImuParams 字段）、
+    scenecheck 未用导入——类型检查不再有盲区
+  - 验证：tsc/check(59)/build 全绿；浏览器验证见下轮（本次 commit 前快速抽查）
 - **外部资料落地轮·三**（2026-10-25，依据 RESEARCH-NOTES.md §6 P2-9/10/11/12③）：
   - **加速度计观测门控（幅度+方向双层）**：互补/Mahony/Madgwick 加 `accelGate`（默认开，公开供自检 A/B）——
     幅度（‖a‖ 偏 g 超 35%）+ **方向**（实测与预测重力夹角超 `ACCEL_GATE_DEG=20°`）；
@@ -213,7 +245,7 @@
 
 ## 验证体系
 
-- `npx tsc --noEmit` → `npm run check`（53 项全 PASS）→ `npm run build`
+- `npx tsc --noEmit` → `npm run check`（59 项全 PASS）→ `npm run build`
 - `selftest` 覆盖：欧拉↔四元数往返、无零偏不漂、零偏线性漂移、抗扰、动态跟踪、剧本切换、
   万向环链条≡主视图、死锁判定、演示全相位、锁定态等价、磁力计（含参数全零守护）、
   轴角双覆盖（qToAxisAngle 对 q 与 −q 恒等）、欧拉插值端点与区分度
@@ -223,13 +255,11 @@
 
 ## 待办
 
-- 候选增强：A/B 参数对比、深链分享 + PWA、闭环控制演示、IMU 误差模型升级（Allan 方差级噪声）
-- **RESEARCH-NOTES.md §6 尚未落地的建议**（长线，均为大型设计任务）：Squad 多关键帧插值扩展、
-  文档叙事重构（钩子/沙盒模式）、立体投影「抬升-变换-投影」三段式镜头、三段式初始对准的静止检测部分、
-  交叉轴/非线性/磁量化新误差滑块
-  （门控/校准舞蹈/Slerp 递推/等效旋转轴/初始对准/器件预设/比力/BNO055/ES-EKF 对照均已落地）
+- ~~候选增强（A/B 对比、闭环控制、Allan 方差、深链+PWA）~~ 全部完成（待办清零轮）
+- ~~长线大件（Squad、叙事钩子+沙盒、S³ 剖面三段式、静止检测、新误差滑块）~~ 全部完成（待办清零轮）
 - **安全**：Cloudflare API token 曾在对话中暴露（已写入 GitHub 加密 secrets，未入代码库），
   **用户仍未确认轮换，需再次提醒**
+- 远期可选（未列入正式待办）：Web Serial 接真实 IMU、guided tour 课程剧本、参数整定小游戏、误差分解视图
 
 - **4D 投影模式重排版**（本轮）：
   - 投影球缩至 PROJ_RADIUS=0.62（导出常量；scenecheck 投影断言改用它）——给「姿态舞台」与 −q 钳制位留画面

@@ -15,7 +15,7 @@ import { buildGimbal, GIMBAL_GEOM } from "../src/scene/gimbal";
 import { buildQuad } from "../src/scene/quad";
 import { buildQuatView, PROJ_RADIUS, SPHERE_RADIUS } from "../src/scene/quatview";
 import { gimbalAxisAlign, toDisplayQ } from "../src/core/gimbal";
-import { qFromEuler, qSlerp, qRot, RAD } from "../src/core/quat";
+import { qFromEuler, RAD } from "../src/core/quat";
 import { mulberry32 } from "../src/core/rng";
 
 // makeTextSprite 需要 canvas 2D 上下文；打一个最小桩，避免引入真实 DOM
@@ -316,7 +316,10 @@ const rig = buildGimbal();
   const rig = buildQuatView();
   const from = [0, 0, 0] as [number, number, number];
   const to = [140, 70, 160] as [number, number, number];
-  rig.setInterpolation(from, to, 0.5);
+  const path = [
+    [-40, 20, 30], [0, 0, 0], [140, 70, 160], [175, 100, 205],
+  ] as Array<[number, number, number]>;
+  rig.setInterpolation(from, to, 0.5, path);
 
   // 弧线采样点（显示坐标）应落在参考球面上：机头方向 × 球面半径，
   // 且两端点分别等于起/终点姿态的机头方向 × 半径
@@ -341,6 +344,13 @@ const rig = buildGimbal();
   // 两条弧线点数一致（同一采样数）
   const sameCount = slerpPts.length === eulerPts.length && slerpPts.length >= 3;
 
+  // Squad 弧（四关键帧）：端点 = p1/p2 机头、点数一致
+  const squadPts = rig.parts.squadPoints;
+  const qvPathOk =
+    squadPts.length === slerpPts.length &&
+    close(squadPts[0], pStart) &&
+    close(squadPts[squadPts.length - 1], pEnd);
+
   // q 与 −q 组：两个四轴世界姿态应恒等（双覆盖的可视化证明）
   rig.setNegation(35, -52, 128);
   rig.group.updateWorldMatrix(true, true);
@@ -358,8 +368,9 @@ const rig = buildGimbal();
 
   check(
     "四元数视图：弧线端点正确、q/−q 恒等",
-    endpointsOk && sameCount && negIdentity,
+    endpointsOk && sameCount && negIdentity && qvPathOk,
     `弧线端点=起终点机头=${endpointsOk}；两弧同点数 ${slerpPts.length}=${eulerPts.length}=${sameCount}；` +
+      `Squad 弧端点/点数=${qvPathOk}；` +
       `q 与 −q 组世界姿态恒等=${negIdentity}`,
   );
 }

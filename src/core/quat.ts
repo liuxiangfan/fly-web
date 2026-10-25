@@ -170,6 +170,55 @@ export function qSlerp(a: Quat, b: Quat, t: number): Quat {
 }
 
 /**
+ * 单位四元数的对数：log(q) = v̂·(θ/2)（纯四元数向量部分；acos(w) 恰为半角）。
+ * q 与 −q 取同值（落 w≥0 短路径）；零旋转返回 [0,0,0]。
+ * Squad 内积切线与「Slerp 导数 = log(q₁q₀⁻¹)·½ω」分析都用它。
+ */
+export function qLog(q: Quat): V3 {
+  const n = Math.hypot(q.x, q.y, q.z);
+  if (n < 1e-12) return [0, 0, 0];
+  const s = q.w < 0 ? -1 : 1;
+  const angle = Math.acos(Math.min(1, s * q.w));
+  return [(s * q.x / n) * angle, (s * q.y / n) * angle, (s * q.z / n) * angle];
+}
+
+/** qLog 的逆映射：exp(v) = [cos‖v‖, v̂·sin‖v‖]（单位四元数）。qExp(qLog(q)) ≈ q */
+export function qExp(v: V3): Quat {
+  const n = Math.hypot(v[0], v[1], v[2]);
+  if (n < 1e-12) return qId();
+  return {
+    w: Math.cos(n),
+    x: (v[0] / n) * Math.sin(n),
+    y: (v[1] / n) * Math.sin(n),
+    z: (v[2] / n) * Math.sin(n),
+  };
+}
+
+/**
+ * Squad 内积切线（Shoemake / Dam 等报告的标准形式）：
+ * sᵢ = qᵢ ⊗ exp(−(log(qᵢ⁻¹qᵢ₊₁) + log(qᵢ⁻¹qᵢ₋₁)) / 4)
+ * 几何含义：把两侧相邻段的对数平均「预旋」进 qᵢ，让相邻段的角速度在关键帧处衔接平滑。
+ */
+export function squadTangent(prev: Quat, cur: Quat, next: Quat): Quat {
+  const inv = qConj(cur);
+  const lNext = qLog(qMul(inv, next));
+  const lPrev = qLog(qMul(inv, prev));
+  const t: V3 = [-(lNext[0] + lPrev[0]) / 4, -(lNext[1] + lPrev[1]) / 4, -(lNext[2] + lPrev[2]) / 4];
+  return qMul(cur, qExp(t));
+}
+
+/**
+ * Squad（球面四边形插值）：四关键帧 q₀,q₁,q₂,q₃ 之间 q₁→q₂ 段的 C¹ 光滑插值。
+ * squad(q₁,q₂,s₁,s₂,t) = slerp( slerp(q₁,q₂,t), slerp(s₁,s₂,t), 2t(1−t) )
+ * 外层 2t(1−t) 在两端为 0 → 端点严格等于 q₁/q₂，中途把内层两个 slerp 按抛物线权重混合。
+ */
+export function squad(q1: Quat, q2: Quat, s1: Quat, s2: Quat, t: number): Quat {
+  const a = qSlerp(q1, q2, t);
+  const b = qSlerp(s1, s2, t);
+  return qSlerp(a, b, 2 * t * (1 - t));
+}
+
+/**
  * 四元数 → 方向余弦矩阵（DCM，行主序 3×3）：C = R(q)，机体系→世界系，
  * 即 world = C · body（与 qRot 严格一致，qRotInv 等价于 Cᵀ·v）。
  * DCM 是惯性导航里与四元数并列的标准姿态表示（见文档·四种姿态表示）。

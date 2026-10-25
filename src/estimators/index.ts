@@ -58,6 +58,9 @@ export interface Estimator {
    * 「初始姿态偏差」演示——观察各算法从错误初值收敛到观测（初始对准的逆过程）。
    */
   reset(initial?: Quat): void;
+  /** 可调参数快照（A/B 对比用）：键名各算法不同（α / Kp,Ki / β / Q,R） */
+  getParams(): Record<string, number>;
+  setParams(p: Record<string, number>): void;
 }
 
 /**
@@ -107,6 +110,23 @@ function magIsPlausible(m: V3): boolean {
   return n > 1e-6 && Math.abs(n - MAG_REF) < 0.4 * MAG_REF;
 }
 
+/**
+ * 粗对准（三段式初始对准第一段）：静止时由加计直接解出横滚/俯仰（AN4248 公式），
+ * 磁力计经倾斜补偿补偏航——与互补滤波的观测公式完全同源。
+ * 静止检测确认机体不动后调用，把明显漂移/带偏差的估计直接摆回观测姿态。
+ */
+export function coarseAlign(accel: V3, mag: V3, magEnabled: boolean): Quat {
+  const norm = Math.hypot(accel[0], accel[1], accel[2]);
+  if (norm < 1e-6) return qId();
+  const ax = accel[0] / norm, ay = accel[1] / norm, az = accel[2] / norm;
+  const roll = Math.atan2(ay, az);
+  const pitch = Math.atan2(-ax, Math.hypot(ay, az));
+  const yaw = magEnabled && magIsPlausible(mag)
+    ? tiltCompensatedYaw(roll, pitch, mag[0], mag[1], mag[2])
+    : 0;
+  return qFromEuler(roll, pitch, yaw);
+}
+
 const G = 9.80665;
 
 /**
@@ -151,6 +171,12 @@ export class PureGyroEstimator implements Estimator {
   reset(initial?: Quat): void {
     this.q = initial ? { ...initial } : qId();
     this.telemetry = emptyTelemetry();
+  }
+  getParams(): Record<string, number> {
+    return {};
+  }
+  setParams(): void {
+    /* 纯积分无参数 */
   }
 }
 
@@ -246,6 +272,12 @@ export class ComplementaryEstimator implements Estimator {
     this.age = 0;
     this.telemetry = emptyTelemetry();
   }
+  getParams(): Record<string, number> {
+    return { alpha: this.alpha };
+  }
+  setParams(p: Record<string, number>): void {
+    if (Number.isFinite(p.alpha)) this.alpha = p.alpha;
+  }
 }
 
 /** 3. Mahony：加计方向 × 预测重力方向 = 误差，P/I 反馈修正角速度 */
@@ -336,6 +368,13 @@ export class MahonyEstimator implements Estimator {
     this.eInt = [0, 0, 0];
     this.age = 0;
     this.telemetry = emptyTelemetry();
+  }
+  getParams(): Record<string, number> {
+    return { kp: this.kp, ki: this.ki };
+  }
+  setParams(p: Record<string, number>): void {
+    if (Number.isFinite(p.kp)) this.kp = p.kp;
+    if (Number.isFinite(p.ki)) this.ki = p.ki;
   }
 }
 
@@ -440,6 +479,12 @@ export class MadgwickEstimator implements Estimator {
   reset(initial?: Quat): void {
     this.q = initial ? { ...initial } : qId();
     this.age = 0;
+  }
+  getParams(): Record<string, number> {
+    return { beta: this.beta };
+  }
+  setParams(p: Record<string, number>): void {
+    if (Number.isFinite(p.beta)) this.beta = p.beta;
   }
 }
 
@@ -661,5 +706,12 @@ export class KalmanEstimator implements Estimator {
     this.bias = [0, 0, 0];
     this.initCovariance();
     this.telemetry = emptyTelemetry();
+  }
+  getParams(): Record<string, number> {
+    return { gyroNoiseDps: this.gyroNoiseDps, obsNoise: this.obsNoise };
+  }
+  setParams(p: Record<string, number>): void {
+    if (Number.isFinite(p.gyroNoiseDps)) this.gyroNoiseDps = p.gyroNoiseDps;
+    if (Number.isFinite(p.obsNoise)) this.obsNoise = p.obsNoise;
   }
 }

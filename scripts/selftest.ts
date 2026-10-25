@@ -4,14 +4,16 @@
  */
 import { World } from "../src/core/world";
 import { manualTarget, scenarios } from "../src/core/scenarios";
-import { G_ACC, simulateImu, type ImuParams } from "../src/core/imu";
+import { G_ACC, simulateImu, simulateMag, type ImuParams } from "../src/core/imu";
 import { Gauss, mulberry32 } from "../src/core/rng";
 import {
   ComplementaryEstimator,
+  coarseAlign,
   KalmanEstimator,
   MadgwickEstimator,
   MahonyEstimator,
   PureGyroEstimator,
+  type Estimator,
 } from "../src/estimators";
 import {
   DEG,
@@ -19,14 +21,18 @@ import {
   RAD,
   eulerLerp,
   qAngleBetween,
+  qExp,
   qFromAxisAngle,
   qFromEuler,
   qId,
   qIntegrate,
+  qLog,
   qNorm,
   qRot,
   qRotInv,
   qSlerp,
+  squad,
+  squadTangent,
   qToAxisAngle,
   qToEuler,
   qToMatrix,
@@ -84,8 +90,8 @@ function runStatic(
 }
 
 // 磁参数全零：守护既有噪声序列不变（磁采样不消耗随机数）
-const clean: ImuParams = { gyroBiasDps: 0, gyroNoiseDps: 0, accelNoise: 0, linAccel: 0, vibration: 0, magNoise: 0, hardIron: 0, disturbMag: 0 };
-const dirty: ImuParams = { gyroBiasDps: 1, gyroNoiseDps: 0.2, accelNoise: 0.15, linAccel: 0.5, vibration: 0.3, magNoise: 0, hardIron: 0, disturbMag: 0 };
+const clean: ImuParams = { gyroBiasDps: 0, gyroNoiseDps: 0, gyroWalkDps: 0, accelNoise: 0, accelCrossAxis: 0, accelNonlin: 0, linAccel: 0, vibration: 0, magNoise: 0, magQuantUts: 0, hardIron: 0, disturbMag: 0 };
+const dirty: ImuParams = { gyroBiasDps: 1, gyroNoiseDps: 0.2, gyroWalkDps: 0, accelNoise: 0.15, accelCrossAxis: 0, accelNonlin: 0, linAccel: 0.5, vibration: 0.3, magNoise: 0, magQuantUts: 0, hardIron: 0, disturbMag: 0 };
 
 // 1. 欧拉角 ↔ 四元数 往返
 {
@@ -749,9 +755,9 @@ const dirty: ImuParams = { gyroBiasDps: 1, gyroNoiseDps: 0.2, accelNoise: 0.15, 
     for (const [, e] of off) e.update(sOff.gyro, sOff.accel, sOff.mag, H);
   }
   const detail = on
-    .map(([n, e], i) => `${n} ramp ${(qAngleBetween(e.q, qTrue) * DEG).toFixed(1)}° vs 无 ${(qAngleBetween(off[i][1].q, qTrue) * DEG).toFixed(1)}°`)
+    .map(([nameA, e], i) => `${nameA} ramp ${(qAngleBetween(e.q, qTrue) * DEG).toFixed(1)}° vs 无 ${(qAngleBetween(off[i][1].q, qTrue) * DEG).toFixed(1)}°`)
     .join("；");
-  const allFaster = on.every(([n, e], i) => qAngleBetween(e.q, qTrue) * DEG < qAngleBetween(off[i][1].q, qTrue) * DEG);
+  const allFaster = on.every(([, e], i) => qAngleBetween(e.q, qTrue) * DEG < qAngleBetween(off[i][1].q, qTrue) * DEG);
   check("启动 ramp 加速初始对准（A/B）", allFaster, `reset 后 1.5s：${detail}（带 ramp 须全部更快）`);
 }
 
@@ -790,6 +796,147 @@ const dirty: ImuParams = { gyroBiasDps: 1, gyroNoiseDps: 0.2, accelNoise: 0.15, 
     ok,
     `10s 持续侧向 4 m/s²（方向偏 22°、范数仅偏 8%）：Mahony 门控 ${mah.gated.toFixed(2)}° vs 关 ${mah.raw.toFixed(2)}°；` +
       `互补 门控 ${comp.gated.toFixed(2)}° vs 关 ${comp.raw.toFixed(2)}°（门控开须 <1°，关须 >15°）`,
+  );
+}
+
+// 28. Squad 与 qLog/qExp：端点严格、路径归一化、与 Slerp 在四关键帧路径下有区分度
+{
+  const p0 = qFromEuler(-40 * RAD, 20 * RAD, 30 * RAD);
+  const p1 = qFromEuler(0, 0, 0);
+  const p2 = qFromEuler(140 * RAD, 70 * RAD, 160 * RAD);
+  const p3 = qFromEuler(175 * RAD, 100 * RAD, 205 * RAD);
+  const s1 = squadTangent(p0, p1, p2);
+  const s2 = squadTangent(p1, p2, p3);
+  const e0 = squad(p1, p2, s1, s2, 0);
+  const e1 = squad(p1, p2, s1, s2, 1);
+  // qAngleBetween 的 acos 在零夹角附近的数值分辨率约 1e-6°，端点容差取 1e-4°
+  const endOk = qAngleBetween(e0, p1) * DEG < 1e-4 && qAngleBetween(e1, p2) * DEG < 1e-4;
+  let minNorm = Infinity, maxDiffSlerp = 0;
+  const slerpMid = qSlerp(p1, p2, 0.5);
+  for (let i = 0; i <= 20; i++) {
+    const q = squad(p1, p2, s1, s2, i / 20);
+    minNorm = Math.min(minNorm, Math.hypot(q.w, q.x, q.y, q.z));
+    if (i === 10) maxDiffSlerp = qAngleBetween(q, slerpMid) * DEG;
+  }
+  // qLog/qExp 往返
+  const qAny = qFromEuler(32 * RAD, -41 * RAD, 115 * RAD);
+  const lg = qLog(qAny);
+  const back = qExp(lg);
+  const dot = qAny.w * back.w + qAny.x * back.x + qAny.y * back.y + qAny.z * back.z;
+  const logRoundTrip = Math.abs(Math.abs(dot) - 1) < 1e-12;
+  check(
+    "Squad 端点/归一化 + qLog 往返",
+    endOk && minNorm > 0.999 && maxDiffSlerp > 1 && logRoundTrip,
+    `端点误差 <1e-9°=${endOk}；路径模长最小 ${minNorm.toFixed(6)}；` +
+      `四关键帧中点 Squad vs Slerp 差 ${maxDiffSlerp.toFixed(2)}°（>1° 才有教学区分度）；qExp(qLog(q)) 往返=${logRoundTrip}`,
+  );
+}
+
+// 29. 参数快照 roundtrip：getParams/setParams（A/B 对比的数据基础）
+{
+  const cases: Array<[string, Estimator, Record<string, number>]> = [
+    ["互补", new ComplementaryEstimator(), { alpha: 2.5 }],
+    ["Mahony", new MahonyEstimator(), { kp: 3, ki: 0.12 }],
+    ["Madgwick", new MadgwickEstimator(), { beta: 0.4 }],
+    ["卡尔曼", new KalmanEstimator(), { gyroNoiseDps: 0.7, obsNoise: 0.2 }],
+  ];
+  let ok = true;
+  const names: string[] = [];
+  for (const [name, e, p] of cases) {
+    e.setParams(p);
+    const got = e.getParams();
+    const match = Object.entries(p).every(([k, v]) => Math.abs(got[k] - v) < 1e-12);
+    if (!match) ok = false;
+    names.push(`${name} ${JSON.stringify(got)}`);
+  }
+  check("参数快照 roundtrip（getParams/setParams）", ok, names.join("；"));
+}
+
+// 30. 粗对准：静止加计+磁力计直接摆出的姿态与真值一致（三段式初始对准第一段）
+{
+  const qTrue = qFromEuler(15 * RAD, 25 * RAD, 40 * RAD);
+  const g = new Gauss(mulberry32(91));
+  const s = simulateImu(qTrue, [0, 0, 0], 0, clean, g, 1);
+  const q0 = coarseAlign(s.accel, s.mag, true);
+  const err = qAngleBetween(q0, qTrue) * DEG;
+  check("粗对准（加计+磁力计）直接给出姿态", err < 1, `与真值夹角 ${err.toFixed(3)}°（磁关时偏航不可观，此处 MARG 开）`);
+}
+
+// 31. 器件级确定性误差：磁量化（格点对齐、逐位可复现）与交叉轴（泄漏方向正确）
+{
+  const q = qFromEuler(10 * RAD, 20 * RAD, 30 * RAD);
+  const pQuant: ImuParams = { ...clean, magNoise: 0.5, magQuantUts: 0.6 };
+  const g1 = new Gauss(mulberry32(97));
+  const g2 = new Gauss(mulberry32(97));
+  const s1 = simulateMag(q, 1.23, pQuant, g1);
+  const s2 = simulateMag(q, 1.23, pQuant, g2);
+  const quantOk = s1.every((v, i) => v === s2[i] && Math.abs(v / 0.6 - Math.round(v / 0.6)) < 1e-9);
+  // 交叉轴：沿 z 的 1g 双向泄漏——x/y 各漏入 0.02g，z 主读数保持 g
+  const pCross: ImuParams = { ...clean, accelCrossAxis: 0.02 };
+  const sCross = simulateImu(qId(), [0, 0, 0], 0, pCross, new Gauss(mulberry32(98)), 1);
+  const e = 1e-9;
+  const leakOk =
+    Math.abs(sCross.accel[0] - 0.02 * G_ACC) < e &&
+    Math.abs(sCross.accel[1] - 0.02 * G_ACC) < e &&
+    Math.abs(sCross.accel[2] - G_ACC) < e;
+  check(
+    "器件级误差：磁量化确定性格点 + 交叉轴双向泄漏",
+    quantOk && leakOk,
+    `量化：同种子两次采样逐位相等=${s1.every((v, i) => v === s2[i])} 且 0.6μT 格点对齐=${quantOk}；` +
+      `交叉轴：沿 z 的 1g 在 x/y 各漏出 0.02g、z 保持 g=${leakOk}`,
+  );
+}
+
+// 32. 闭环控制：理想环（真值反馈）跟踪到位；纯积分估计反馈下「估计漂多少、机体飞偏多少」
+{
+  manualTarget.rollDeg = 30;
+  manualTarget.pitchDeg = 0;
+  manualTarget.yawDeg = 0;
+  const run = (useEstimator: boolean): number => {
+    const w = new World(scenarios.manual);
+    const est = new PureGyroEstimator();
+    const pBias: ImuParams = { ...clean, gyroBiasDps: 3 };
+    let last = qId();
+    for (let i = 0; i < Math.round(6 / H); i++) {
+      const fb = useEstimator ? last : undefined;
+      const s = w.step(H, pBias, fb);
+      est.update(s.gyro, s.accel, s.mag, H);
+      last = { ...est.q };
+    }
+    return Math.abs(qToEuler(w.q).roll - 30 * RAD) * DEG;
+  };
+  const ideal = run(false);
+  const closed = run(true);
+  manualTarget.rollDeg = 0;
+  manualTarget.pitchDeg = 0;
+  manualTarget.yawDeg = 0;
+  check(
+    "闭环控制：解算误差直接变成飞行偏差",
+    ideal < 2 && closed > 8,
+    `6s 手动目标横滚 30°：理想环（真值反馈）误差 ${ideal.toFixed(2)}°；纯积分估计反馈（零偏 3°/s）误差 ${closed.toFixed(2)}°——估计漂多少、机体偏多少`,
+  );
+}
+
+// 33. 零偏随机游走：walk=1 °/s/√s 时纯积分误差远超干净情形（线性漂移恶化为游走主导）
+{
+  const qTrue = qFromEuler(15 * RAD, 25 * RAD, 40 * RAD);
+  const run = (walk: number): number => {
+    const w = new World(scenarios.manual);
+    const est = new PureGyroEstimator();
+    est.q = { ...qTrue };
+    const p: ImuParams = { ...clean, gyroWalkDps: walk };
+    for (let i = 0; i < Math.round(20 / H); i++) {
+      const s = w.step(H, p);
+      est.update(s.gyro, s.accel, s.mag, H);
+    }
+    return qAngleBetween(est.q, qTrue) * DEG;
+  };
+  const noWalk = run(0);
+  const withWalk = run(1);
+  check(
+    "零偏随机游走：误差从线性恶化为游走主导",
+    noWalk < 1 && withWalk > 5,
+    `20s 纯积分（静止）：walk=0 误差 ${noWalk.toFixed(2)}°；walk=1 °/s/√s 误差 ${withWalk.toFixed(2)}°（随机游走 σ ≈ √20 × 1）`,
   );
 }
 

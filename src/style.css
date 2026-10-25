@@ -520,6 +520,16 @@ button:disabled { cursor: default; }
 }
 
 .chart-legend { display: flex; gap: 11px; flex-wrap: wrap; }
+/* A/B 对比关闭时隐藏 B 组图例（main.ts 以 body[data-ab] 同步） */
+body:not([data-ab="on"]) #err-legend-b { display: none; }
+/* 等效旋转轴 / S³ 剖面 inset 等面板内小画布 */
+.panel canvas#proj-section {
+  width: 100%;
+  height: auto;
+  border-radius: 6px;
+  background: #0a1020;
+  border: 1px solid var(--border);
+}
 .legend-chip {
   display: flex;
   align-items: center;
@@ -978,6 +988,18 @@ body[data-view="quat"] .section-quat { display: block; }
   border-left: 3px solid var(--accent);
   padding-left: 12px;
 }
+/* 钩子盒：每章开篇的量化提问（可探索解释方法论——先爱上问题，再给推导） */
+.doc-hook {
+  border-left: 3px solid var(--accent);
+  background: var(--accent-soft);
+  border-radius: 0 6px 6px 0;
+  padding: 10px 14px;
+  margin: 14px 0 6px;
+  font-size: 14.5px;
+  line-height: 1.75;
+  color: var(--text);
+}
+.doc-hook b:first-child { color: var(--accent); }
 .doc-page h2 {
   margin: 40px 0 12px;
   font-size: 20px;
