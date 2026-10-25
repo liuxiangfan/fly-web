@@ -1164,16 +1164,17 @@ body[data-view="quat"] .section-quat { display: block; }
   background: currentColor;
 }
 .od::after {
-  top: -0.08em;
-  width: 0.2em;
-  height: 0.2em;
+  top: 0.02em;           /* 紧贴小写字母顶部（x 字高），不再悬在高处 */
+  width: 0.19em;
+  height: 0.19em;
   border-radius: 50%;
 }
 .oh::after {
-  top: -0.02em;
-  width: 0.52em;
-  height: 0.26em;
-  clip-path: polygon(0 100%, 50% 0, 100% 100%, 100% 74%, 50% 30%, 0 74%);
+  top: 0.0em;
+  width: 0.56em;
+  height: 0.34em;
+  /* 带厚 40%：明显加粗的 Λ */
+  clip-path: polygon(0 100%, 50% 0, 100% 100%, 100% 60%, 50% 36%, 0 60%);
 }
 
 /* 变量含义表：紧跟公式的注释行 */
