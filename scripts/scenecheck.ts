@@ -13,7 +13,7 @@
 import * as THREE from "three";
 import { buildGimbal, GIMBAL_GEOM } from "../src/scene/gimbal";
 import { buildQuad } from "../src/scene/quad";
-import { buildQuatView, PROJ_RADIUS } from "../src/scene/quatview";
+import { buildQuatView, PROJ_RADIUS, SPHERE_RADIUS } from "../src/scene/quatview";
 import { gimbalAxisAlign, toDisplayQ } from "../src/core/gimbal";
 import { qFromEuler, qSlerp, qRot, RAD } from "../src/core/quat";
 import { mulberry32 } from "../src/core/rng";

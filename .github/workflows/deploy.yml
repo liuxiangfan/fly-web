@@ -28,7 +28,7 @@ jobs:
       - name: Typecheck
         run: npx tsc --noEmit
 
-      - name: Selftest (37 checks)
+      - name: Selftest + Scenecheck (50 checks)
         run: npm run check
 
       - name: Build
