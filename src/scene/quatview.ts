@@ -24,6 +24,8 @@ export const QUAT_POSE_PAIRS: QuatPosePair[] = [
 
 /** 参考球半径：所有轨迹弧贴着这个球面 */
 export const SPHERE_RADIUS = 0.85;
+/** 4D 投影模式专用球半径：缩小给下方「姿态舞台」和 −q 钳制位留出画面 */
+export const PROJ_RADIUS = 0.62;
 /** 参考向量：机头方向（NED +X）。弧线 = 该向量末端在球面上的轨迹 */
 const REF_VEC: [number, number, number] = [1, 0, 0];
 
@@ -191,11 +193,11 @@ export function buildQuatView(): QuatViewRig {
   const projSphereMat = new THREE.MeshBasicMaterial({
     color: 0x2a3b5e, transparent: true, opacity: 0.1, depthWrite: false,
   });
-  const projSphere = new THREE.Mesh(new THREE.SphereGeometry(SPHERE_RADIUS, 48, 32), projSphereMat);
+  const projSphere = new THREE.Mesh(new THREE.SphereGeometry(PROJ_RADIUS, 48, 32), projSphereMat);
   projGroup.add(projSphere);
   const projEquator = new THREE.Mesh(
-    new THREE.TorusGeometry(SPHERE_RADIUS, 0.005, 8, 96),
-    new THREE.MeshBasicMaterial({ color: 0x3d5080, transparent: true, opacity: 0.35 }),
+    new THREE.TorusGeometry(PROJ_RADIUS, 0.006, 8, 96),
+    new THREE.MeshBasicMaterial({ color: 0x3d5080, transparent: true, opacity: 0.4 }),
   );
   projEquator.rotation.x = Math.PI / 2;
   projGroup.add(projEquator);
@@ -209,7 +211,7 @@ export function buildQuatView(): QuatViewRig {
     const dir = lastDir;
     const denom = 1 + w; // 南极 w=−1 为投影极点
     const len = denom < 1e-6 ? Infinity : n / denom;
-    const L = Math.min(len, 3) * SPHERE_RADIUS; // 单位球尺度 → 参考球尺度（钳制在 3R 内）
+    const L = Math.min(len, 3) * PROJ_RADIUS; // 单位球尺度 → 投影球尺度（钳制在 3R 内）
     return vecToDisplay([dir[0] * L, dir[1] * L, dir[2] * L]);
   };
 
@@ -236,33 +238,51 @@ export function buildQuatView(): QuatViewRig {
     new THREE.BufferGeometry(),
     new THREE.LineBasicMaterial({ color: 0x22d3ee, transparent: true, opacity: 0.4 }),
   );
-  projGroup.add(projTrail);
+  const projTrailNegPts: THREE.Vector3[] = [];
+  const projTrailNeg = new THREE.Line(
+    new THREE.BufferGeometry(),
+    new THREE.LineBasicMaterial({ color: 0xe879f9, transparent: true, opacity: 0.22 }),
+  );
+  projGroup.add(projTrail, projTrailNeg);
 
   // 基向量架：1 投影到原点；i/j/k（w=0）恰落在球面上
   const projOne = new THREE.Mesh(
-    new THREE.SphereGeometry(0.028, 12, 10), new THREE.MeshBasicMaterial({ color: 0x93a2bb }),
+    new THREE.SphereGeometry(0.02, 10, 8), new THREE.MeshBasicMaterial({ color: 0x93a2bb }),
   );
   projGroup.add(projOne);
+  const projOneLabel = makeTextSprite("1", "#7f8da6", { size: 0.13 });
+  projOneLabel.position.set(0.07, -0.075, 0);
+  projGroup.add(projOneLabel);
+  // w 语义锚点：球内=北半球（w>0），球外=南半球（w<0）——投影的「内外有别」一眼可读
+  const wInLabel = makeTextSprite("球内 · w > 0", "#8a9ab5", { size: 0.14 });
+  wInLabel.position.set(0, PROJ_RADIUS * 0.52, 0);
+  const wOutLabel = makeTextSprite("球外 · w < 0", "#8a9ab5", { size: 0.14 });
+  wOutLabel.position.set(0, PROJ_RADIUS + 0.3, 0);
+  projGroup.add(wInLabel, wOutLabel);
   const projBasis = new THREE.Group();
   projGroup.add(projBasis);
   const BASIS: Array<[string, [number, number, number]]> = [
     ["i", [1, 0, 0]], ["j", [0, 1, 0]], ["k", [0, 0, 1]],
   ];
   for (const [name, v] of BASIS) {
-    const p = vecToDisplay(v).multiplyScalar(SPHERE_RADIUS);
+    const p = vecToDisplay(v).multiplyScalar(PROJ_RADIUS);
     const m = new THREE.Mesh(
-      new THREE.SphereGeometry(0.032, 12, 10), new THREE.MeshBasicMaterial({ color: 0x58a6ff }),
+      new THREE.SphereGeometry(0.036, 12, 10), new THREE.MeshBasicMaterial({ color: 0x58a6ff }),
     );
     m.position.copy(p);
-    const l = makeTextSprite(name, "#8dbdf0", { size: 0.18 });
+    const l = makeTextSprite(name, "#8dbdf0", { size: 0.19 });
     l.position.copy(p.clone().multiplyScalar(1.14));
     projBasis.add(m, l);
   }
 
-  // 投影模式的小四轴：显示 q 代表的 3D 姿态（把 4D 点与 3D 姿态绑定）
+  // 姿态舞台：球下方的小四轴同步显示 q 代表的 3D 姿态——与球内 4D 点分离，互不遮挡
   const projQuad = buildQuad(false, { axes: false });
-  projQuad.group.scale.setScalar(0.5);
+  projQuad.group.scale.setScalar(0.42);
+  projQuad.group.position.set(0, -0.98, 0);
   projGroup.add(projQuad.group);
+  const projQuadLabel = makeTextSprite("3D 姿态（与 q 同步）", "#8a9ab5", { size: 0.14 });
+  projQuadLabel.position.set(0, -1.24, 0);
+  projGroup.add(projQuadLabel);
 
   const projQPos = new THREE.Vector3();
   const projNegPos = new THREE.Vector3();
@@ -348,16 +368,26 @@ export function buildQuatView(): QuatViewRig {
       projNegPos.copy(pn);
       projQ.position.copy(pq);
       projNeg.position.copy(pn);
-      projLabelQ.position.copy(pq.clone().multiplyScalar(1.16));
-      projLabelNeg.position.copy(pn.clone().multiplyScalar(1.06));
+      // 标签沿径向外推；q 近原点时给最小竖直偏移，避免与原点「1」重叠
+      projLabelQ.position.copy(
+        pq.length() > 0.14 ? pq.clone().multiplyScalar(1.18) : pq.clone().add(new THREE.Vector3(0, 0.13, 0)),
+      );
+      projLabelNeg.position.copy(pn.clone().multiplyScalar(1.07));
       projTie.geometry.setFromPoints([pq, pn]);
-      // 轨迹：移动超过阈值才落点，避免静止时堆积
+      // 双轨迹：q（青）与 −q（品红）各留一条——对径点的内外互换一目了然
       const last = projTrailPts[projTrailPts.length - 1];
       if (!last || last.distanceTo(pq) > 0.012) {
         projTrailPts.push(pq.clone());
         if (projTrailPts.length > 240) projTrailPts.shift();
         projTrail.geometry.dispose();
         projTrail.geometry = new THREE.BufferGeometry().setFromPoints(projTrailPts);
+      }
+      const lastNeg = projTrailNegPts[projTrailNegPts.length - 1];
+      if (!lastNeg || lastNeg.distanceTo(pn) > 0.012) {
+        projTrailNegPts.push(pn.clone());
+        if (projTrailNegPts.length > 240) projTrailNegPts.shift();
+        projTrailNeg.geometry.dispose();
+        projTrailNeg.geometry = new THREE.BufferGeometry().setFromPoints(projTrailNegPts);
       }
       applyDisplayQuat(projQuad.group, { w: qw, x: qx, y: qy, z: qz });
     },

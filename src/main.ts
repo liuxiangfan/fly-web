@@ -618,18 +618,51 @@ function stepQuatFades(dt: number): void {
   }
 }
 
-/** 四元数视图三个演示组的互斥切换（带过渡） */
+/** 四元数视图三个演示组的互斥切换（带过渡 + 模式级相机推拉） */
+const quatCamTween = {
+  active: false,
+  t: 0,
+  fromPos: new THREE.Vector3(), toPos: new THREE.Vector3(),
+  fromTgt: new THREE.Vector3(), toTgt: new THREE.Vector3(),
+};
+const QUAT_FRAMING = {
+  interp: { pos: [0, 1.6, 3.2], tgt: [0, 1.0, 0] },
+  // 投影模式：球缩小+姿态舞台在下方，−q 最远 3×0.62≈1.86 —— 相机稍远、目标略低
+  proj: { pos: [0, 1.55, 3.75], tgt: [0, 0.78, 0] },
+} as const;
+function startQuatCamTween(mode: "interp" | "proj"): void {
+  const f = QUAT_FRAMING[mode];
+  quatCamTween.fromPos.copy(sceneHandles.camera.position);
+  quatCamTween.fromTgt.copy(sceneHandles.controls.target);
+  quatCamTween.toPos.set(f.pos[0], f.pos[1], f.pos[2]);
+  quatCamTween.toTgt.set(f.tgt[0], f.tgt[1], f.tgt[2]);
+  quatCamTween.t = 0;
+  quatCamTween.active = true;
+}
+function stepQuatCamTween(dt: number): void {
+  const c = quatCamTween;
+  if (!c.active) return;
+  c.t = Math.min(1, c.t + dt / 0.55);
+  const k = c.t * c.t * (3 - 2 * c.t);
+  sceneHandles.camera.position.lerpVectors(c.fromPos, c.toPos, k);
+  sceneHandles.controls.target.lerpVectors(c.fromTgt, c.toTgt, k);
+  sceneHandles.controls.update();
+  if (c.t >= 1) c.active = false;
+}
 function enterQuatScene(which: "interp" | "neg" | "proj"): void {
   const parts = sceneHandles.quatView.parts;
   quatGroupFade(parts.interpGroup, which === "interp");
   quatGroupFade(parts.negGroup, which === "neg");
   quatGroupFade(parts.projGroup, which === "proj");
   sceneHandles.quatView.parts.sphere.visible = false; // 可见性交给 interpGroup 级淡入淡出
+  startQuatCamTween(which === "proj" ? "proj" : "interp");
 }
 
 // ---------- 4D 立体投影模式 ----------
 const projState = {
   q: qId() as Quat,
+  /** 当前画面上实际显示的 q（动画中途连按时从这里无缝续接，不跳变） */
+  current: qId() as Quat,
   anim: null as null | { from: Quat; to: Quat; t: number; dur: number },
 };
 const PROJ_I: Quat = { w: 0, x: 1, y: 0, z: 0 };
@@ -637,13 +670,15 @@ const PROJ_J: Quat = { w: 0, x: 0, y: 1, z: 0 };
 const PROJ_K: Quat = { w: 0, x: 0, y: 0, z: 1 };
 
 function projApply(q: Quat): void {
+  projState.current = { ...q };
   $("quat-readout").textContent = `[${[q.w, q.x, q.y, q.z].map((a) => a.toFixed(3)).join(", ")}]`;
   sceneHandles.quatView.setProjection(q);
 }
 
 function projAnimateTo(target: Quat): void {
   // 弦上的归一化插值（nlerp）：不取短路径，保证终点恰为目标四元数（连按两次精确到 −q）
-  projState.anim = { from: { ...projState.q }, to: target, t: 0, dur: 0.7 };
+  // 起点取「当前显示帧」——动画中途再按按钮时从画面位置无缝续接
+  projState.anim = { from: { ...projState.current }, to: target, t: 0, dur: 0.7 };
 }
 $("btn-proj-i").addEventListener("click", () => projAnimateTo(qMul(projState.q, PROJ_I)));
 $("btn-proj-j").addEventListener("click", () => projAnimateTo(qMul(projState.q, PROJ_J)));
@@ -676,6 +711,7 @@ function stepQuatProj(dt: number): void {
   });
   if (a.t >= 1) {
     projState.q = a.to;
+    projState.current = { ...a.to };
     projState.anim = null;
     projApply(a.to);
   } else {
@@ -1074,6 +1110,7 @@ function frame(): void {
   stepQuatPlay(dt);
   stepQuatProj(dt);
   stepQuatFades(dt);
+  stepQuatCamTween(dt);
 
   if (state.playing) {
     simAcc += dt;

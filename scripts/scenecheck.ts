@@ -13,7 +13,7 @@
 import * as THREE from "three";
 import { buildGimbal, GIMBAL_GEOM } from "../src/scene/gimbal";
 import { buildQuad } from "../src/scene/quad";
-import { buildQuatView, SPHERE_RADIUS } from "../src/scene/quatview";
+import { buildQuatView, PROJ_RADIUS } from "../src/scene/quatview";
 import { gimbalAxisAlign, toDisplayQ } from "../src/core/gimbal";
 import { qFromEuler, qSlerp, qRot, RAD } from "../src/core/quat";
 import { mulberry32 } from "../src/core/rng";
@@ -367,7 +367,7 @@ const rig = buildGimbal();
 // 9. 4D 立体投影：单位 q 投到原点、基向量投到球面、q/−q 为倒易点对（|p|·|p'|=1）
 {
   const qv = buildQuatView();
-  const R = SPHERE_RADIUS;
+  const R = PROJ_RADIUS;
   // a) q = 单位 → 投影在原点
   qv.setProjection({ w: 1, x: 0, y: 0, z: 0 });
   const idOk = qv.parts.projQPos.length() < 1e-9;
