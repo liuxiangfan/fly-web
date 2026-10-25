@@ -118,7 +118,11 @@
     数学工具箱章新增「记号一览」表（顶部点/尖帽/δ/范数/转置逆/⊗×·/∫Σ/∇/lim 十行）；
     分数全量上下式（32 处 .frac，含 θ/2、ω·dt/2 等内嵌小分数与 K=P·Hᵀ/(H·P·Hᵀ+R) 这类逆序括号→分数）；
     全部 SVG 箭头由实心三角改为开口 V 形（chevron marker），marker id 按图唯一化（修复跨图 id 冲突）；
-    图 7 重做为 7 大步之字 + 3 枚切向小箭头（去掉逐点 marker-mid 的杂乱）
+    图 7 重做为 7 大步之字 + 3 枚切向小箭头（去掉逐点 marker-mid 的杂乱）；
+    排版 v4（符号系统化）：½ 全部改为上下分数（9 处含标题/散文）；组合字符点(24)/帽(80)
+    改 CSS 定位记号 `.od`/`.oh`（::after 悬浮 ˙/ˆ，不再与后续字母重叠）；上标修饰字母
+    ᵀ/⁻¹/⁺/⁻ 全部转 `<sup>`（22+8 处，字号 0.72em 可读）；S¹/S³ 转上标；
+    ω_used/ω_corr 转真下标；图 2 SVG 内 f_z/f_x 用 tspan 位移下标（SVG 无 <sub>）
   - 渲染：RoomEnvironment PMREM IBL（environmentIntensity 0.35）+ 冷色轮廓补光；
     万向环改 MeshPhysicalMaterial 阳极金属（envMapIntensity 1.35）；新四轴模型见上
   - UI：面板/图表卡片渐变表面+分层阴影+hover 描边；主按钮内高光；滑杆轨道值填充

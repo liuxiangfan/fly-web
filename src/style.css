@@ -1147,6 +1147,29 @@ body[data-view="quat"] .section-quat { display: block; }
 }
 .mtx .mrows span { white-space: nowrap; text-align: center; }
 
+/* 顶部记号：点（时间导数）与尖帽（估计值/单位向量）——CSS 定位，避免组合字符与后续字母重叠 */
+.od, .oh {
+  position: relative;
+  display: inline-block;
+  font-style: normal;
+  padding: 0 0.06em;
+}
+.od::after, .oh::after {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 0.62em;
+  line-height: 1;
+}
+.od::after {
+  content: "˙";
+  top: -0.58em;
+}
+.oh::after {
+  content: "ˆ";
+  top: -0.5em;
+}
+
 /* 变量含义表：紧跟公式的注释行 */
 .fvars {
   margin: -4px 0 14px;
