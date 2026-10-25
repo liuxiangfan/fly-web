@@ -115,7 +115,26 @@ function eulerTriples(): number[][] {
 }
 
 function channelValues(row: LogRow, ch: number): number[] {
-  return row.euler.map((r, i) => unwrap(i * 3 + ch, r[ch]));
+  const vals = row.euler.map((r, i) => unwrap(i * 3 + ch, r[ch]));
+  // 集体重定位：循环剧本（如横滚 360°）每圈解卷绕累加 360°，永不复位会把
+  // 曲线与读数推到几万度。当本通道**所有系列**一起越过 ±180° 时，整体平移
+  // 360°——系列之间的相对关系与单圈内的连续性都不受影响，显示值却有界。
+  if (vals.length > 0) {
+    if (vals.every((v) => v > 180)) {
+      for (let i = 0; i < vals.length; i++) {
+        vals[i] -= 360;
+        const slot = i * 3 + ch;
+        if (attPrev[slot] !== undefined) attPrev[slot]! -= 360;
+      }
+    } else if (vals.every((v) => v < -180)) {
+      for (let i = 0; i < vals.length; i++) {
+        vals[i] += 360;
+        const slot = i * 3 + ch;
+        if (attPrev[slot] !== undefined) attPrev[slot]! += 360;
+      }
+    }
+  }
+  return vals;
 }
 
 function logRow(): void {
@@ -834,7 +853,16 @@ function updateReadouts(): void {
 function updateLegendValues(): void {
   const att = attChart.latest();
   attLegend.vals.forEach((el, i) => {
-    if (el) el.textContent = Number.isFinite(att[i]) ? `${att[i].toFixed(1)}°` : "--";
+    if (!el) return;
+    if (!Number.isFinite(att[i])) {
+      el.textContent = "--";
+      return;
+    }
+    // 读数永远显示包裹到 ±180° 的角度：曲线保留连续性，读数不被循环剧本撑爆
+    let v = att[i];
+    while (v > 180) v -= 360;
+    while (v < -180) v += 360;
+    el.textContent = `${v.toFixed(1)}°`;
   });
   const err = errChart.latest();
   errLegend.vals.forEach((el, i) => {
@@ -1112,7 +1140,9 @@ function buildChapterToc(page: HTMLElement): void {
   for (const el of anchors) {
     if (el.tagName === "SECTION") {
       const head = el.querySelector("h2, h3");
-      if (head) items.push({ id: el.id, text: head.textContent!.trim(), sub: head.tagName === "H3" });
+      // data-toc 提供目录友好的纯文本（标题里的点/帽/分数等排版记号在纯文本里会退化）
+      const text = el.dataset.toc || head?.textContent?.trim() || "";
+      if (head && text) items.push({ id: el.id, text, sub: head.tagName === "H3" });
     } else {
       items.push({ id: el.id, text: el.textContent!.trim(), sub: true });
     }
@@ -1270,10 +1300,14 @@ function drawCompDemo(): void {
   ctx.stroke();
   const n = cdBuf[0].length;
   if (n >= 2) {
-    const widths = [1.6, 1.5, 1, 2.6];
-    cdBuf.forEach((buf, k) => {
+    // 绘制顺序：噪声→陀螺仪→融合（半透明）→真实（最后画、最粗，保证黑线可见）
+    const widths = [2.2, 1.5, 1, 2.2];
+    const alphas = [1, 1, 1, 0.8];
+    for (const k of [2, 1, 3, 0]) {
+      const buf = cdBuf[k];
       ctx.strokeStyle = CD_COLORS[k];
       ctx.lineWidth = widths[k];
+      ctx.globalAlpha = alphas[k];
       ctx.beginPath();
       for (let i = 0; i < n; i++) {
         const x = L + ((W - L - R) * i) / (CD_N - 1);
@@ -1282,7 +1316,8 @@ function drawCompDemo(): void {
         else ctx.lineTo(x, y);
       }
       ctx.stroke();
-    });
+      ctx.globalAlpha = 1;
+    }
   }
   // 当前时刻圆点（描画笔头）：四路信号各自的最新点
   if (n >= 1) {
@@ -1298,18 +1333,18 @@ function drawCompDemo(): void {
       ctx.stroke();
     });
   }
-  // 起点：左端刻度 + 标注
+  // 起点：左端刻度（图例行下方，不再与图例挤在一行）
   ctx.strokeStyle = "#b9c6d8";
   ctx.lineWidth = 1.5;
   ctx.beginPath();
-  ctx.moveTo(L, T - 6);
-  ctx.lineTo(L, H - B + 6);
+  ctx.moveTo(L, 24);
+  ctx.lineTo(L, H - B);
   ctx.stroke();
   ctx.lineWidth = 3;
   ctx.strokeStyle = "rgba(255,255,255,0.92)";
-  ctx.strokeText("起点", L - 2, T - 10);
+  ctx.strokeText("起点", L + 5, 30);
   ctx.fillStyle = "#64748c";
-  ctx.fillText("起点", L - 2, T - 10);
+  ctx.fillText("起点", L + 5, 30);
   // 底部进度条：本轮画到哪了
   const prog = n / CD_N;
   ctx.fillStyle = "#e5eaf2";

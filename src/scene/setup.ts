@@ -101,15 +101,16 @@ export function createScene(container: HTMLElement): SceneHandles {
   scene.add(grid);
 
   // 罗盘：北 +X、东 +Z（NED 的 N/E 经基变换后的方向）
-  const north = new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 0.01, 0), 1.7, 0xf0c674, 0.14, 0.07);
+  // 罗盘长度与标签位置收在画布安全区内（默认取景下不被右侧面板裁切）
+  const north = new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 0.01, 0), 1.42, 0xf0c674, 0.13, 0.065);
   scene.add(north);
   const nLabel = makeTextSprite("北", "#f0c674");
-  nLabel.position.set(2.05, 0.3, 0);
+  nLabel.position.set(1.62, 0.3, 0);
   scene.add(nLabel);
-  const east = new THREE.ArrowHelper(new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 0.01, 0), 1.7, 0x6fb3d2, 0.14, 0.07);
+  const east = new THREE.ArrowHelper(new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 0.01, 0), 1.42, 0x6fb3d2, 0.13, 0.065);
   scene.add(east);
   const eLabel = makeTextSprite("东", "#6fb3d2");
-  eLabel.position.set(0, 0.3, 2.05);
+  eLabel.position.set(0, 0.3, 1.62);
   scene.add(eLabel);
 
   // 四轴模型：实体（解算姿态）+ 幻影（真实姿态）

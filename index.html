@@ -284,12 +284,12 @@
         <div class="row check-row quat-only-extra hidden">
           <label>当前四元数分量 <span class="mono dim" id="quat-readout">—</span></label>
         </div>
-        <p class="hint">
+        <p class="hint quat-interp-only">
           蓝色线框 = 起点姿态，橙色线框 = 终点姿态，实心四轴 = 当前插值位置。
           白弧是 Slerp（始终走球面大圆），品红弧是欧拉角逐分量插值（穿过欧拉空间，多轴时会扭曲）。
           青色箭头是当前姿态的旋转轴（轴角表示：绕它转多少度）。
         </p>
-        <p class="hint">
+        <p class="hint quat-interp-only">
           勾选「q 与 −q」：两个四轴分别按 q 与 −q 摆放——它们表示同一个旋转，所以永远完全重合。
         </p>
       </section>
@@ -492,12 +492,13 @@
 
         <section id="d-algo">
           <h2>解算算法</h2>
-          <p>四种算法同时接收同一份脏数据、各自解算，误差曲线同图对比。思路一览：</p>
+          <p>五种算法同时接收同一份脏数据、各自解算，误差曲线同图对比。思路一览：</p>
           <ul>
             <li><b>纯陀螺仪积分</b>——只用陀螺仪，不修正。动态完美、恒定漂移，是「不融合会怎样」的对照组（红线）。</li>
             <li><b>互补滤波</b>——陀螺仪积分（高通）与加速度计角度（低通）按比例混合，欧拉角域实现，最直观。</li>
             <li><b>Mahony</b>——把重力方向误差经 P/I 反馈注入陀螺仪积分，飞控最常用；多一个积分项能消零偏。</li>
             <li><b>Madgwick</b>——把姿态估计写成优化问题，沿目标函数梯度下降，单参数 β，计算量小。</li>
+            <li><b>卡尔曼滤波</b>——同时估计「姿态有多不准」（协方差 P），按预测/观测方差自动加权修正，还能顺带估出陀螺仪零偏。</li>
           </ul>
 
           <div class="ctl">
@@ -599,11 +600,12 @@
             <li><b>真实 φ θ ψ</b>——仿真剧本的姿态真值，与上面一行的差就是当前误差。</li>
             <li><b>陀螺仪 / 加速度计</b>——IMU 原始输出（已含噪声、零偏与机动污染），观察滑块效果最直接的地方。</li>
             <li><b>机体轴</b>——坐标约定提示：x 前、y 右、z 下（NED），所以场景里 z 箭头指向地面。</li>
-          </ul>
+                      <li><b>磁航向指示（琥珀色图例）</b>——机头方位在水平面投影的说明：MARG 关时随陀螺仪漂移偏离真北，开时被磁场拉回（详见「磁力计与 MARG」）。</li>
+</ul>
 
           <h3>曲线区</h3>
           <p>
-            <b>上图（姿态角）</b>：φ/θ/ψ 三个通道页签切换，五条曲线同图对比——白=真实、红=纯陀螺仪积分、橙=互补、蓝=Mahony、绿=Madgwick。
+            <b>上图（姿态角）</b>：φ/θ/ψ 三个通道页签切换，六条曲线同图对比——白=真实、红=纯陀螺仪积分、橙=互补、蓝=Mahony、绿=Madgwick、紫=卡尔曼。
             图例上的数字是各自的当前误差（度）；<b>点击图例可隐藏对应曲线</b>，只看想对比的两条。
             <b>下图（总误差）</b>：各算法与真实姿态的空间夹角（欧拉角合成的总偏差），不看单轴、只看「整体差多少」，
             是评价算法优劣最综合的一条曲线。
@@ -737,6 +739,11 @@
           <div class="math-banner">数学原理</div>
           <h2>总览：从「传感器原始数据」到「无人机姿态」</h2>
           <p>
+            开跑前还有一个问题——<b>第一帧的姿态是谁给的？</b>本装置 t = 0 时假设机体水平放置
+            （q = [1,0,0,0]）；真实系统这一步叫「初始对准」（静置用加速度计/磁力计对出初始姿态，
+            见工程实践备忘），之后才交给下面的循环接管。
+          </p>
+          <p>
             先建立一个画面：<b>无人机悬停在空中，它自己并不知道自己是什么姿势</b>。机体内部没有任何魔法，
             只有三个小传感器各报告一条数据。姿态解算要回答的问题是——
             <b>只凭这三条数据，如何推断出「我现在头朝哪、身子歪了多少」？</b>
@@ -801,7 +808,7 @@
               矩阵只是「查表」，推导时我会把它拆成一行行分量写出来。</p>
           </div>
           <h3>记号一览：点、尖帽与其它符号</h3>
-          <table class="docs-table">
+          <div class="tscroll"><table class="docs-table">
             <thead><tr><th>记号</th><th>读法</th><th>含义</th></tr></thead>
             <tbody>
               <tr><td><i class="od">q</i>　δ<i class="od">θ</i></td><td>q 点</td><td>顶部一个<b>点</b> = 对时间求导——「每秒变化多少」</td></tr>
@@ -815,7 +822,7 @@
               <tr><td>∇f</td><td>f 的梯度</td><td>最陡上升方向；前面加负号 −∇f 即「下山」方向</td></tr>
               <tr><td>lim<sub>dt→0</sub></td><td>极限</td><td>dt 趋于 0 时式子的值（导数的定义动作）</td></tr>
             </tbody>
-          </table>
+          </table></div>
 
 
         
@@ -842,7 +849,7 @@
   <text x="560" y="184" font-size="10.5" fill="#64748c" text-anchor="middle">右手定则定方向；长度 = ‖a‖‖b‖·sinθ</text>
 </svg><figcaption class="fig-cap">图 1 · 数学工具箱三件套（从左到右 ①→②→③）：向量（方向+长度）、点积（同向程度）、叉积（垂直转轴）——后面所有推导反复使用的只有这三样。</figcaption></figure>
         </section>
-        <section id="m-why" class="math-section">
+        <section id="m-why" class="math-section optional">
           <h2>为什么恰好是四个数</h2>
           <p>
             欧拉角三个数就够描述姿态了，四元数却用四个——多出来的这个数不是浪费，
@@ -965,7 +972,7 @@
           </p>
         </section>
 
-                        <section id="m-reps" class="math-section">
+                        <section id="m-reps" class="math-section optional">
           <h2>四种姿态表示：一个都不能少</h2>
           <p>
             工程与惯导讲义（如武汉大学 i2Nav《惯性导航姿态算法》）把姿态表示总结为四种。
@@ -988,7 +995,7 @@
           <p>单位约束 ‖q‖=1 压回 3 个自由度；乘法封闭、更新方程线性（<i class="od">q</i> = <span class="frac"><span class="n">1</span><span class="d">2</span></span>·q⊗ω）、插值走大圆。
             代价只有双重覆盖（q 与 −q 同姿态，Slerp 需短路径处理）与一步归一化维护——
             本装置全部估计器以它为主表示。</p>
-          <table class="docs-table">
+          <div class="tscroll"><table class="docs-table">
             <thead><tr><th>表示</th><th>分量数</th><th>奇点</th><th>冗余</th><th>插值</th><th>典型岗位</th></tr></thead>
             <tbody>
               <tr><td>欧拉角</td><td>3</td><td>有（±90°）</td><td>无</td><td>会扭曲</td><td>人机界面显示</td></tr>
@@ -996,10 +1003,10 @@
               <tr><td>旋转矢量</td><td>3</td><td>无</td><td>无</td><td>小角度可加</td><td>姿态差值/高精度更新</td></tr>
               <tr><td>四元数</td><td>4</td><td>无</td><td>单位约束</td><td>Slerp 大圆</td><td>主表示/积分/融合</td></tr>
             </tbody>
-          </table>
+          </table></div>
         </section>
 
-        <section id="m-ijk" class="math-section">
+        <section id="m-ijk" class="math-section optional">
           <h2>i、j、k 到底是什么</h2>
           <h3>从虚数 i 说起：i 就是「转 90°」的记号</h3>
           <p>
@@ -1122,7 +1129,7 @@ i² = j² = k² = i·j·k = −1</div>
 　磁力计——定偏航、怕电磁干扰</div>
         </section>
 
-        <section id="m-integral" class="math-section">
+        <section id="m-integral" class="math-section" data-toc="陀螺仪积分方程：q̇ = ½ · q ⊗ ω 的完整推导">
           <h2>陀螺仪积分方程：<i class="od">q</i> = <span class="frac"><span class="n">1</span><span class="d">2</span></span> · q ⊗ ω 的完整推导</h2>
           <p>
             这是整条流水线的「预测」引擎。先把问题说成大白话：<b>我知道「这一瞬间我在往哪个方向转、转多快」，
@@ -1237,6 +1244,12 @@ i² = j² = k² = i·j·k = −1</div>
             受扰时降低修正权重甚至暂停修正，让陀螺仪独挑——「剧烈机动」剧本下误差曲线先抬头后快速回落，
             正是「机动中靠预测、机动后靠观测追回」的完整过程。
           </p>
+          <p class="plain">
+            本装置的「两道防线」其实是同一件事——观测可信度管理：① <b>幅度门控</b>（互补/Mahony/Madgwick 用）：
+            ‖a‖ 偏离 9.8 超过 35% 即降权或暂停加速度计修正；② <b>新息门控</b>（卡尔曼用）：观测与预测的
+            夹角超过 40° 即判为野值丢弃。前者看「测量本身正不正常」，后者看「测量与预测合不合拍」——
+            共同守住「坏观测不如没观测」。
+          </p>
         </section>
 
         <section id="m-fusion" class="math-section">
@@ -1257,7 +1270,7 @@ i² = j² = k² = i·j·k = −1</div>
           <h3>Mahony：把误差注入陀螺仪通道</h3>
           <p>Mahony 把上面的思想搬到四元数域，并把修正量定义为「额外的角速度」：</p>
           <div class="formula">e = a<sub>b</sub> × <i class="oh">g</i><sub>b</sub>　　　　　　　　　　　（重力对齐误差）
-ω<sub>used</sub> = ω<sub>g</sub> − (Kp·e + Ki·∫e dt)　　（注入修正后的等效角速度）
+ω<sub>used</sub> = ω<sub>g</sub> + Kp·e + Ki·∫e dt　　（e 的方向即「把 ĝ 拧向 a」的轴——顺着它加，姿态被拉回观测）
 <i class="od">q</i> = <span class="frac"><span class="n">1</span><span class="d">2</span></span> · q ⊗ (0, ω<sub>used</sub>)　　　　　（照常积分）</div>
           <div class="fvars"><b>变量</b>　e：误差向量　Kp：比例增益（弹簧刚度）　Ki：积分增益（账本速率）　∫e dt：误差累积量</div>
           <p>
@@ -1335,7 +1348,7 @@ m<sub>y</sub>' = m<sub>y</sub>·cos φ − m<sub>z</sub>·sin φ
           </p>
         </section>
 
-        <section id="m-slerp" class="math-section">
+        <section id="m-slerp" class="math-section optional">
           <h2>Slerp：球面线性插值的推导</h2>
           <p>
             姿态估计解决「现在在哪」，插值解决「怎么从 A 平滑走到 B」——相机动画、云台轨迹、关键帧过渡都要它。
@@ -1391,7 +1404,7 @@ t ∈ [0, 1]　（cos Ω = q₀·q₁：两四元数在 4D 球面上的夹角）
           </p>
         </section>
 
-                <section id="m-4d" class="math-section">
+                <section id="m-4d" class="math-section optional">
           <h2>立体投影：把 4D 超球压进 3D</h2>
           <p>
             四元数活在 4 维超球面 S<sup>3</sup> 上，人眼看不见 4D——但有一个经典技巧能把整个超球「压」进 3D：
@@ -1573,7 +1586,7 @@ t ∈ [0, 1]　（cos Ω = q₀·q₁：两四元数在 4D 球面上的夹角）
 
         <section id="f-compare">
           <h2>对比与选型</h2>
-          <table class="docs-table">
+          <div class="tscroll"><table class="docs-table">
             <thead><tr><th>算法</th><th>工作空间</th><th>参数</th><th>消零偏</th><th>计算量</th><th>一句话定位</th></tr></thead>
             <tbody>
               <tr><td>纯陀螺仪积分</td><td>四元数</td><td>无</td><td>不能</td><td>极小</td><td>对照组：不融合必漂移</td></tr>
@@ -1582,7 +1595,7 @@ t ∈ [0, 1]　（cos Ω = q₀·q₁：两四元数在 4D 球面上的夹角）
               <tr><td>Madgwick</td><td>四元数</td><td>β</td><td>不能</td><td>极小</td><td>单参数，算力紧张场景</td></tr>
               <tr><td>卡尔曼滤波</td><td>四元数+误差状态</td><td>Q, R</td><td>状态估计</td><td>中</td><td>统计最优，精度优先</td></tr>
             </tbody>
-          </table>
+          </table></div>
           <p><b>怎么选</b>：学习原理从互补 → Mahony 递进；产品飞控用 Mahony 或卡尔曼；算力极紧用 Madgwick；
             需要零偏估计与多传感器置信度管理用卡尔曼。所有方案都不互斥——很多飞控同时跑两套互为备份。</p>
           <p><b>本装置实验建议</b>：① 开「剧烈机动」剧本对比四条误差曲线——卡尔曼的门控与自适应增益通常恢复最快；
@@ -1788,7 +1801,8 @@ A = <span class="mtx"><i class="ml"></i><span class="mrows" style="--cols:2"><sp
 　R ↔ 加速度计噪声（观测有多不可信）
 带宽 ≈ 由 <span class="frac"><span class="n">Q</span><span class="d">R</span></span> 比值决定
 　比值大 → 信观测多 → 跟随快而抖
-　比值小 → 平滑而慢</div>
+　比值小 → 平滑而慢
+单位换算：滑块 Q（°/s）进入代码后 ×π/180 变为 rad/s；滑块 R（g）对应归一化方向噪声——与推导单位一致</div>
           <figure class="doc-fig"><svg viewBox="0 0 660 210" role="img">
   <rect x="46.0" y="26" width="180.0" height="152" fill="#fdecec"/>
   <rect x="526.0" y="26" width="90.0" height="152" fill="#fdf4d7"/>

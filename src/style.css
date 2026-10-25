@@ -316,6 +316,7 @@ button:disabled { cursor: default; }
 }
 
 /* ---- 下拉框 ---- */
+#quat-pair-select { max-width: 232px; }
 .row {
   display: flex;
   align-items: center;
@@ -1151,6 +1152,7 @@ body[data-view="quat"] .section-quat { display: block; }
 .od, .oh {
   position: relative;
   display: inline-block;
+  line-height: 1;
   font-style: normal;
   padding: 0 0.06em;
   vertical-align: baseline; /* 不位移基线：记号悬于字母正常行框上方 */
@@ -1232,6 +1234,21 @@ body[data-view="quat"] .section-quat { display: block; }
   color: var(--text-dim);
 }
 
+/* 「选读」徽标：通识章节标题右侧的小胶囊（主线/支线路线提示） */
+.math-section.optional > h2::after {
+  content: "选读";
+  margin-left: 10px;
+  padding: 1px 9px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  vertical-align: 2px;
+}
+
 /* 数学原理章分隔横幅 */
 .math-banner {
   margin-top: 4px;
@@ -1246,6 +1263,10 @@ body[data-view="quat"] .section-quat { display: block; }
   letter-spacing: 0.22em;
   text-align: center;
 }
+
+/* 表格横向滚动容器：窄屏不撑破版心 */
+.tscroll { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 12px 0; }
+.tscroll .docs-table { margin: 0; min-width: 560px; }
 
 /* 对比表格 */
 .docs-table {
@@ -1308,9 +1329,39 @@ body[data-view="quat"] .section-quat { display: block; }
 .docs-chapter-toc .ct-empty { padding: 6px 8px; font-size: 12px; color: var(--text-faint); }
 
 @media (max-width: 1280px) {
-  .docs-shell { grid-template-columns: 196px minmax(0, 1fr); }
-  .docs-chapter-toc { display: none; }
-  .doc-page { padding: 30px 30px 80px; }
+  /* 窄屏不再丢弃右栏目录：改为内容列顶部的横向滚动目录条 */
+  .docs-shell {
+    grid-template-columns: 196px minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .docs-toc { grid-column: 1; grid-row: 1 / span 2; }
+  .doc-pages { grid-column: 2; grid-row: 2; }
+  .docs-chapter-toc {
+    grid-column: 2;
+    grid-row: 1;
+    display: flex;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    gap: 5px;
+    height: auto;
+    padding: 9px 12px;
+    border-left: none;
+    border-bottom: 1px solid var(--border);
+  }
+  .docs-chapter-toc::-webkit-scrollbar { height: 5px; }
+  .docs-chapter-toc .ct-title { display: none; }
+  .docs-chapter-toc a {
+    flex: none;
+    white-space: nowrap;
+    border: 1px solid var(--border);
+    border-radius: 99px;
+    padding: 3px 11px;
+  }
+  .docs-chapter-toc a.active { border-color: var(--accent); }
+  .docs-chapter-toc a.ct-sub { padding-left: 11px; }
+  .docs-chapter-toc .ct-empty { display: none; }
+  .doc-page { padding: 24px 22px 70px; }
 }
 @media (max-width: 860px) {
   #docs-overlay { overflow-y: auto; }
