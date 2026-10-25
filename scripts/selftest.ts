@@ -7,6 +7,11 @@ import { manualTarget, scenarios } from "../src/core/scenarios";
 import { G_ACC, simulateImu, simulateMag, type ImuParams } from "../src/core/imu";
 import { Gauss, mulberry32 } from "../src/core/rng";
 import {
+  buildFrame,
+  parseFrame,
+  type Mounting,
+} from "../src/core/serial";
+import {
   ComplementaryEstimator,
   coarseAlign,
   KalmanEstimator,
@@ -937,6 +942,60 @@ const dirty: ImuParams = { gyroBiasDps: 1, gyroNoiseDps: 0.2, gyroWalkDps: 0, ac
     "零偏随机游走：误差从线性恶化为游走主导",
     noWalk < 1 && withWalk > 5,
     `20s 纯积分（静止）：walk=0 误差 ${noWalk.toFixed(2)}°；walk=1 °/s/√s 误差 ${withWalk.toFixed(2)}°（随机游走 σ ≈ √20 × 1）`,
+  );
+}
+
+// 34. 串口帧解析器（纯函数）：往返数值、坏 CRC 拒收重同步、粘包、帧头前垃圾、安装方向重排
+{
+  const MOUNT: Mounting = "x-front-y-right";
+  const gyro: V3 = [12.3, -45.6, 7.8];
+  const accel: V3 = [0.41, -1.22, 9.79];
+  const mag: V3 = [21.5, -8.3, 38.2];
+  // a) 往返：buildFrame → parseFrame 精确恢复（定点 0.1/0.01 量化误差内）
+  const f = buildFrame(0x1234, 0xaabbccdd, gyro, accel, mag);
+  const r1 = parseFrame(f, MOUNT);
+  const roundTripOk =
+    r1.frame !== null &&
+    r1.frame.seq === 0x1234 &&
+    r1.frame.tickMs === 0xaabbccdd &&
+    r1.frame.gyroDps.every((v, i) => Math.abs(v - gyro[i]) < 0.1) &&
+    r1.frame.accelMs2.every((v, i) => Math.abs(v - accel[i]) < 0.01) &&
+    r1.frame.magUt.every((v, i) => Math.abs(v - mag[i]) < 0.01);
+  // b) 坏 CRC：拒收并 consumed=2（跳过帧头，留给下次重同步）
+  const fBad = buildFrame(7, 100, gyro, accel, mag, { at: 12, value: 0xff ^ buildFrame(7, 100, gyro, accel, mag)[12] });
+  const r2 = parseFrame(fBad, MOUNT);
+  const badOk = r2.frame === null && r2.consumed === 2;
+  // c) 粘包：垃圾 + 两帧连发 + 半帧尾巴 → 依次解析得两帧、尾巴留缓冲
+  const fA = buildFrame(1, 10, gyro, accel, mag);
+  const fB = buildFrame(2, 20, gyro, accel, mag);
+  const stream = new Uint8Array(3 + fA.length + fB.length + 10);
+  stream.set([0x00, 0x37, 0xaa], 0); // 前置垃圾（含半个帧头 0xaa，考验 findSync 不误吞）
+  stream.set(fA, 3);
+  stream.set(fB, 3 + fA.length);
+  stream.set(fA.subarray(0, 10), 3 + fA.length + fB.length); // 半帧
+  let off = 0;
+  const got: number[] = [];
+  // 第一轮应只消费垃圾 3 字节（帧头在 2 处被 0x37 隔开不算）
+  const p1 = parseFrame(stream.subarray(off), MOUNT);
+  off += p1.consumed;
+  for (let k = 0; k < 2; k++) {
+    const p = parseFrame(stream.subarray(off), MOUNT);
+    if (p.frame) got.push(p.frame.seq);
+    off += p.consumed;
+  }
+  const stickyOk = got.length === 2 && got[0] === 1 && got[1] === 2 && off === 3 + fA.length + fB.length;
+  // d) 安装方向重排：x-front-y-left 时模块 +y → 机体 −y
+  const fM = buildFrame(3, 30, [0, 10, 0], [0, 0, 9.8], [0, 0, 0]);
+  const rm = parseFrame(fM, "x-front-y-left");
+  const mountOk =
+    rm.frame !== null &&
+    Math.abs(rm.frame.gyroDps[1] + 10) < 1e-6 && // 机体 y = −模块 y
+    Math.abs(rm.frame.gyroDps[0]) < 1e-6;
+  check(
+    "串口帧解析：往返/CRC 拒收/粘包重同步/安装方向",
+    roundTripOk && badOk && stickyOk && mountOk,
+    `往返=${roundTripOk}；坏 CRC consumed=${r2.consumed}（应 2）=${badOk}；` +
+      `粘包两帧 seq=${got.join(",")} off=${off}=${stickyOk}；y-left 重排机体y=${rm.frame ? rm.frame.gyroDps[1].toFixed(1) : "?"}=${mountOk}`,
   );
 }
 

@@ -466,11 +466,22 @@ button:disabled { cursor: default; }
 #charts {
   display: grid;
   grid-template-columns: 1fr 1fr;
+  grid-template-areas:
+    "att err"
+    "imu imu";
   gap: 11px;
   padding: 11px 14px;
   border-top: 1px solid var(--border);
   background: var(--bg-panel);
 }
+.chart-block.att { grid-area: att; }
+.chart-block.err { grid-area: err; }
+.chart-block.imu { grid-area: imu; }
+/* 真实 IMU 串口行与状态提示 */
+.serial-row { display: flex; gap: 8px; align-items: center; margin: 6px 0; }
+.serial-row select { flex: 1; }
+#serial-status { margin: 4px 0; font-size: 11px; }
+#serial-status.warn { color: #f85149; }
 .chart-block {
   background: var(--bg-card);
   border: 1px solid var(--border);
@@ -552,7 +563,7 @@ body:not([data-ab="on"]) #err-legend-b { display: none; }
 .legend-chip.off { opacity: 0.3; }
 .legend-chip .val { color: var(--text-dim); min-width: 48px; }
 
-#att-canvas, #err-canvas { width: 100%; height: 150px; display: block; }
+#att-canvas, #err-canvas, #imu-canvas { width: 100%; height: 150px; display: block; }
 
 /* ==========================================================================
    底栏
@@ -861,7 +872,7 @@ body[data-view="quat"] .section-quat { display: block; }
   #app-main { grid-template-columns: 1fr; }
   #viewport { height: 46vh; }
   #panel { border-left: none; border-top: 1px solid var(--border); }
-  #charts { grid-template-columns: 1fr; }
+  #charts { grid-template-columns: 1fr; grid-template-areas: "att" "err" "imu"; }
   .title-block h1 span { display: none; }
 }
 

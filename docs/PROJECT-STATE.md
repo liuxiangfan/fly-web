@@ -1,7 +1,7 @@
 # 项目状态 · 四元数姿态解算学习演示装置
 
 > **本文件是项目的恢复锚点。** 会话上下文被压缩后，从这里可以快速接续全部关键信息。
-> 最后更新：2026-10-25（待办清零轮：A/B 对比/闭环控制/Allan 方差/深链+PWA/Squad/静止对准/叙事钩子/沙盒/新误差滑块/S³剖面；自检 59 项；tsconfig 纳入 scripts）
+> 最后更新：2026-10-25（真实 IMU 串口接入：Web Serial 第七数据源/帧解析器/原始波形第三面板；自检 60 项）
 
 ## 一句话
 
@@ -15,7 +15,7 @@
 
 - Vite + TypeScript（无框架）+ Three.js（three ^0.170）
 - `npm run dev` / `npm run build`（= `tsc --noEmit && vite build` → `dist/`）/ `npm run preview`
-- `npm run check` = `selftest`（Node 数值自检）+ `scenecheck`（Node 下构建真实 three.js 场景图做几何校验），共 59 项
+- `npm run check` = `selftest`（Node 数值自检）+ `scenecheck`（Node 下构建真实 three.js 场景图做几何校验），共 60 项
 - 诊断脚本：`scripts/diag.ts`（收敛时间线）、`scripts/diag-violent.ts`（剧烈机动复现）
 - 源码改动后必须 `npm run build` 并在浏览器 **Ctrl+F5 强刷**（preview 服务的是构建产物）
 - 部署：`.github/workflows/deploy.yml`（wrangler v4），依赖 GitHub secrets 里的 Cloudflare 凭据
@@ -33,6 +33,8 @@
 | `core/world.ts` | 真实姿态积分 + 姿态跟踪控制器（K=5，ω_max=4.2 rad/s）+ IMU 生成 |
 | `estimators/index.ts` | 五估计器统一 `Estimator` 接口：`update(gyro,accel,mag,dt)` + `reset(initial?)`（initial 缺省=水平；传非单位姿态即「初始姿态偏差」演示）+ `magEnabled` + `telemetry`（rate/rawGyro/correction/predictedGravity/measuredGravity/accelNorm/accelValid/magValid/detail）。Mahony MARG：磁误差 z 分量并入；Madgwick：独立偏航方向分量；互补：`tiltCompensatedYaw`；**KalmanEstimator**：ES-EKF/MEKF（6 维误差状态 [δθ,δb]，重力+磁场观测，40° 新息门控，可估计陀螺仪零偏，参数 Q=gyroNoiseDps / R=obsNoise）。**启动增益 ramp**：互补/Mahony/Madgwick 共用 rampK()——reset 后 2.5s 内修正增益从 6 倍线性衰减（Fusion 同款，只放比例/梯度项），`rampEnabled` 公开供自检 A/B。**加速度计观测门控 accelGate**（同三家）：幅度（‖a‖ 偏 g 超 35%）+ 方向（与预测夹角超 `ACCEL_GATE_DEG=20°`）双层拒绝，ramp 期间关闭（Fusion 语义），被拒帧退化纯积分 |
 | `scene/setup.ts` | 渲染器/相机/灯光/地面/网格/罗盘/主四轴+幻影/万向环架；`toDisplay`、`setView`、`syncVisibility`；玻璃盒双箭头 + 磁航向箭头 + 等效旋转轴箭头 `axisArrow`（青色，`#axis-toggle` 控制） |
+| `core/serial.ts` | 真实 IMU 串口帧解析（纯函数）：CRC8/粘包重同步/安装方向重排/`buildFrame` 测试往返；帧协议见 `firmware/gy87.h` |
+| `firmware/` | STM32F4 + GY-87 固件参考（`gy87.h` 帧规格表；用户自行实现并已验证） |
 | `scene/quad.ts` | `buildQuad(ghost, {axes})` 程序化四轴（PBR 质感版）：RoundedBox 亮漆机身+云台球+锥形机臂+电机铃+前后航行灯（前青后红）+桨叶与半透明桨盘；ghost=EdgesGeometry 轮廓线；桨尖径向包络 ≤0.68（scenecheck 穿模断言守护） |
 | `scene/gimbal.ts` | 平衡环架：外环偏航（蓝）→ 中环俯仰（金）→ 内环横滚（绿）；枢轴销连接相邻环；环标签随环转动；环内嵌四轴 scale 1.15 |
 | `scene/quatview.ts` | 四元数视图（球面参考方案）：参考球+赤道环+极轴；Slerp 白 / 欧拉品红双 Tube 弧（r=0.012）+ 滑动 marker；起终点蓝/橙球；中央四轴 0.55 + 机头箭头 + 轴角青箭头；q/−q 并排组（X ±0.95）。`parts.slerpPoints/eulerPoints` 采样点数组供 scenecheck 断言。`SPHERE_RADIUS=0.85`。**4D 立体投影模式**（`projGroup`）：S³ 从南极 (−1,0,0,0) 投影 p=(x,y,z)/(1+w)，赤道 w=0 恰为参考球；青点 q（球内）/品红 −q（球外，倒易 |p(q)|·|p(−q)|=1）/轨迹线/i-j-k 基架/中央姿态四轴；lastDir 方向延续防极点跳变。API：`setInterpolation/setNegation/showNegation/setProjection/showProjection`；parts 增 `projGroup/projQPos/projNegPos` |
@@ -94,6 +96,23 @@
 
 ## 已完成里程碑
 
+- **真实 IMU 串口接入**（2026-10-25，用户硬件 STM32F4 + GY-87，固件由用户自行编写并已在 SerialWeb 验证）：
+  - **帧协议**（`firmware/gy87.h` 规格表 + 用户固件对齐）：0xAA 0x55 | len=24 | seq u16 | tick u32 |
+    gyro i16×3 (0.1°/s) | accel i16×3 (0.01m/s²) | mag i16×3 (0.01μT) | CRC8(0x07)，28 字节小端
+  - **`src/core/serial.ts` 纯函数解析器**：流式喂入/粘包重同步（丢到下一帧头）/坏 CRC 拒收（consumed=2）/
+    安装方向重排（4 种 mounting → NED 机体系）/`buildFrame` 供测试往返；selftest 34 四项断言全过
+  - **main.ts 连接管理**：`btn-serial` 用户手势触发 `requestPort()`（最小 Web Serial 类型面 declare global）→
+    `open(921600)` → readLoop 拼缓冲（1KB 上限）→ `serialDrainBuffer` 弹帧；丢帧统计（seq 回绕）；
+    断线/拔出提示；`serial-mounting` 下拉换向时清缓冲
+  - **真实模式语义**（`state.real` + `applyDataSourceSemantics`）：模拟剧本与污染滑块停用（stepSim 分流吃
+    `serialState.lastFrame`，gyro °/s→rad/s）、**无真值基准** → 幻影隐藏（frame 每帧压制）、误差曲线改
+    「vs Mahony 基准」（`err-title` 同步文案）、readout-true 标注「基准(Mahony)」、静止检测粗对准保留
+  - **IMU 原始波形第三面板**（`#imu-canvas` 18 通道）：陀螺/加计/磁三组实测三轴 + 模拟模式三组真值对照
+    （真实模式真值 NaN 不画）；三页签切 visible 掩码（`imuTabMask`）；`logRow` 每 40ms push
+  - **坑**：SW 缓存导致浏览器拿旧构建——开发循环先 `unregister + caches.delete` 再 reload；
+    `qAngleBetween` 的 acos 在零夹角附近分辨率 ~1e-6°（端点断言别定 1e-9）
+  - 验证：tsc/check(60)/build 全绿；浏览器验收控件/页签/波形（加计 z≈9.8 精确、真值虚线贴合、
+    SW 缓存坑实测并记录）；真实设备连接流程待用户硬件到位后走通
 - **待办清零轮**（2026-10-25，候选增强 4 项 + 长线 5 项全部落地）：
   - **A/B 参数对比**：`ab-toggle` 勾选瞬间五算法各克隆 B 组（`getParams/setParams` 快照、姿态重置、参数冻结、
     磁力计开关同步）；误差图扩为 12 通道（A 实线 / B 虚线 `dash:[5,3]`），`#err-legend-b` 第二图例行
@@ -245,7 +264,7 @@
 
 ## 验证体系
 
-- `npx tsc --noEmit` → `npm run check`（59 项全 PASS）→ `npm run build`
+- `npx tsc --noEmit` → `npm run check`（60 项全 PASS）→ `npm run build`
 - `selftest` 覆盖：欧拉↔四元数往返、无零偏不漂、零偏线性漂移、抗扰、动态跟踪、剧本切换、
   万向环链条≡主视图、死锁判定、演示全相位、锁定态等价、磁力计（含参数全零守护）、
   轴角双覆盖（qToAxisAngle 对 q 与 −q 恒等）、欧拉插值端点与区分度

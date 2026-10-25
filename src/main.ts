@@ -7,6 +7,7 @@ import { RollingChart } from "./ui/chart";
 import { World } from "./core/world";
 import { scenarios } from "./core/scenarios";
 import type { ImuParams, ImuSample } from "./core/imu";
+import { G_ACC, MAG_WORLD_NED } from "./core/imu";
 import {
   ComplementaryEstimator,
   KalmanEstimator,
@@ -21,6 +22,7 @@ import * as THREE from "three";
 import { applyViewDom, narrateGimbal, type UiView } from "./ui/mode";
 import { coarseAlign } from "./estimators";
 import { Gauss, mulberry32 } from "./core/rng";
+import { parseFrame, type Mounting, type SerialImuFrame } from "./core/serial";
 
 const H = 1 / 500; // 仿真/解算步长
 const LOG_DT = 0.04; // 曲线记录间隔
@@ -73,6 +75,8 @@ const imuParams: ImuParams = {
 const state = {
   playing: true,
   source: "mahony" as "truth" | Estimator["id"],
+  /** real=true 时数据来自串口真实 IMU：无真值基准，误差曲线改以 Mahony 为参照 */
+  real: false,
   channel: 0,
   attVisible: [true, true, true, true, true, true],
   errVisible: [true, true, true, true, true, true],
@@ -81,6 +85,26 @@ const state = {
   /** 视图：四轴姿态 / 万向节锁（不持久化，每次从四轴姿态开始） */
   view: "attitude" as UiView,
 };
+
+/** 真实/模拟模式切换的连带语义（幻影、误差参照、UI 显隐） */
+function applyDataSourceSemantics(): void {
+  state.real = serialState.running;
+  document.body.dataset.imuMode = state.real ? "real" : "sim";
+  $("err-title").textContent = state.real ? "姿态偏差（各算法 vs Mahony 基准）" : "姿态总误差（解算 vs 真实）";
+  // 真实模式无真值：幻影与「真实姿态」来源失去意义，强制切到 Mahony 并隐藏幻影选项区
+  if (state.real) {
+    if (state.source === "truth") {
+      state.source = "mahony";
+      sourceSelect.value = "mahony";
+      updateSourceChip();
+    }
+  } else {
+    for (const e of ests) e.reset();
+    for (const c of abState.clones) c.reset();
+    resetSim();
+  }
+}
+$("btn-serial").addEventListener("dblclick", (e) => e.preventDefault());
 
 // ---------- A/B 参数对比 ----------
 // B 组 = 某一时刻的「参数快照」克隆（状态重置、参数冻结），与 A 组吃同一份 IMU 数据；
@@ -124,6 +148,28 @@ const estSeries = ests.map((e) => ({ label: e.label, color: e.color }));
 const abSeries = ests.map((e) => ({ label: `${e.label} ·B`, color: e.color, dash: [5, 3] }));
 const attChart = new RollingChart($("att-canvas"), [truthSeries, ...estSeries], { windowSec: CHART_WINDOW });
 const errChart = new RollingChart($("err-canvas"), [...estSeries, ...abSeries], { windowSec: CHART_WINDOW });
+// IMU 原始波形（第三面板）：18 通道 = 陀螺/加计/磁三组实测三轴 + 三组真值对照（模拟模式才有，
+// 真实模式真值 NaN 不画）。页签只切 visible 掩码（RollingChart 的 y 自适应只看可见通道）。
+const AXES = ["x", "y", "z"] as const;
+const AXIS_COLORS = ["#e5484d", "#7ee787", "#58a6ff"];
+const imuSeriesDef = [
+  ...AXES.map((a, i) => ({ label: `陀螺 ${a}`, color: AXIS_COLORS[i] })),
+  ...AXES.map((a, i) => ({ label: `加计 ${a}`, color: AXIS_COLORS[i] })),
+  ...AXES.map((a, i) => ({ label: `磁 ${a}`, color: AXIS_COLORS[i] })),
+  ...AXES.map(() => ({ label: "真值", color: "#e6edf3", dash: [4, 3] })),
+  ...AXES.map(() => ({ label: "真值", color: "#e6edf3", dash: [4, 3] })),
+  ...AXES.map(() => ({ label: "真值", color: "#e6edf3", dash: [4, 3] })),
+];
+const imuChart = new RollingChart($("imu-canvas"), imuSeriesDef, { windowSec: CHART_WINDOW });
+const imuState = { tab: 0 as 0 | 1 | 2 };
+const imuTabMask = [
+  [1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0],
+  [0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0],
+  [0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1],
+];
+function applyImuTab(): void {
+  imuChart.setVisible(imuTabMask[imuState.tab].map((v) => v === 1));
+}
 
 // 原始记录（切换通道时不丢历史）
 interface LogRow {
@@ -146,7 +192,9 @@ function unwrap(slot: number, v: number): number {
 }
 
 function eulerTriples(): number[][] {
-  const truthE = qToEuler(world.q);
+  // 真实模式无真值：第一行（「真实」系列）改为 Mahony 参照基准
+  const refQ = state.real ? (ests[2] as MahonyEstimator).q : world.q;
+  const truthE = qToEuler(refQ);
   const rows: number[][] = [[truthE.roll, truthE.pitch, truthE.yaw].map((a) => a * DEG)];
   for (const e of ests) {
     const eu = qToEuler(e.q);
@@ -182,14 +230,33 @@ function logRow(): void {
   const row: LogRow = {
     t: world.t,
     euler: eulerTriples(),
-    err: ests.map((e) => qAngleBetween(e.q, world.q) * DEG),
+    err: ests.map((e) => {
+      const ref = state.real ? (ests[2] as MahonyEstimator).q : world.q;
+      return qAngleBetween(e.q, ref) * DEG;
+    }),
   };
   logRows.push(row);
   if (logRows.length > 850) logRows.splice(0, 100);
   attChart.push(world.t, channelValues(row, state.channel));
-  // 误差图 12 通道：前 6 = A 组（活参数），后 6 = B 组（快照参数，A/B 关闭时为 NaN 不画）
-  const errB = abState.on ? abState.clones.map((c) => qAngleBetween(c.q, world.q) * DEG) : ests.map(() => NaN);
+  // 误差图 10 通道：前 5 = A 组（活参数），后 5 = B 组（快照参数，A/B 关闭时为 NaN 不画）
+  const errB = abState.on ? abState.clones.map((c) => {
+    const ref = state.real ? (ests[2] as MahonyEstimator).q : world.q;
+    return qAngleBetween(c.q, ref) * DEG;
+  }) : ests.map(() => NaN);
   errChart.push(world.t, [...row.err, ...errB]);
+  // IMU 原始波形 18 通道：三组实测 + 模拟模式三组真值对照（真实模式真值 = NaN 不画）
+  const imu = state.lastImu;
+  if (imu) {
+    const truthGyro = state.real ? [NaN, NaN, NaN] : world.omega.map((v) => v * DEG);
+    const truthAccel = state.real ? [NaN, NaN, NaN] : qRotInv(world.q, [0, 0, G_ACC]);
+    const truthMag = state.real ? [NaN, NaN, NaN] : qRotInv(world.q, MAG_WORLD_NED);
+    imuChart.push(world.t, [
+      imu.gyro[0] * DEG, imu.gyro[1] * DEG, imu.gyro[2] * DEG,
+      imu.accel[0], imu.accel[1], imu.accel[2],
+      imu.mag[0], imu.mag[1], imu.mag[2],
+      ...truthGyro, ...truthAccel, ...truthMag,
+    ]);
+  }
 }
 
 function rebuildAttChart(): void {
@@ -1108,6 +1175,19 @@ $("att-tabs")
     });
   });
 
+// IMU 原始波形页签：陀螺仪 / 加速度计 / 磁力计
+$("imu-tabs")
+  .querySelectorAll<HTMLButtonElement>(".tab")
+  .forEach((btn) => {
+    btn.addEventListener("click", () => {
+      $("imu-tabs").querySelectorAll(".tab").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      imuState.tab = parseInt(btn.dataset.tab!, 10) as 0 | 1 | 2;
+      applyImuTab();
+      imuChart.render();
+    });
+  });
+
 function setPlaying(p: boolean): void {
   state.playing = p;
   $("btn-pause").textContent = p ? "暂停" : "继续";
@@ -1126,6 +1206,7 @@ function resetSim(): void {
   still.frames = 0;
   attChart.clear();
   errChart.clear();
+  imuChart.clear();
   attPrev.fill(undefined);
   logRows.length = 0;
   state.lastImu = null;
@@ -1157,10 +1238,14 @@ const fmtVec = (v: [number, number, number]): string =>
 function updateReadouts(): void {
   const q = state.source === "truth" ? world.q : ests.find((e) => e.id === state.source)!.q;
   const eu = qToEuler(q);
-  const te = qToEuler(world.q);
+  // 真实模式无真值：这一行显示 Mahony 参照基准（图例里的「真实」即基准）
+  const refQ = state.real ? (ests[2] as MahonyEstimator).q : world.q;
+  const te = qToEuler(refQ);
   $("readout-quat").textContent = `q = [${[q.w, q.x, q.y, q.z].map((a) => a.toFixed(4)).join(", ")}]`;
   $("readout-euler").innerHTML = `φ ${fmtSigned(eu.roll * DEG)}° &nbsp; θ ${fmtSigned(eu.pitch * DEG)}° &nbsp; ψ ${fmtSigned(eu.yaw * DEG)}°`;
-  $("readout-true").textContent = `真实 φ ${fmtSigned(te.roll * DEG)}° θ ${fmtSigned(te.pitch * DEG)}° ψ ${fmtSigned(te.yaw * DEG)}°`;
+  $("readout-true").innerHTML = state.real
+    ? `<span style="color:#e6edf3">基准(Mahony)</span> φ ${fmtSigned(te.roll * DEG)}° θ ${fmtSigned(te.pitch * DEG)}° ψ ${fmtSigned(te.yaw * DEG)}°`
+    : `真实 φ ${fmtSigned(te.roll * DEG)}° θ ${fmtSigned(te.pitch * DEG)}° ψ ${fmtSigned(te.yaw * DEG)}°`;
   const imu = state.lastImu;
   if (imu) {
     const gyroDps: [number, number, number] = [imu.gyro[0] * DEG, imu.gyro[1] * DEG, imu.gyro[2] * DEG];
@@ -1382,6 +1467,29 @@ function stepStillness(sample: ImuSample): void {
 }
 
 function stepSim(): void {
+  if (state.real) {
+    // 真实模式：数据来自串口帧。帧到达频率由固件决定（100–200Hz），
+    // 每个仿真 tick 用最近一帧驱动一次（帧率低于 500Hz 时等效降采样，算法仍以 dt=2ms 步进——
+    // 对教学精度足够；真要精确可用帧内 tick 差，见 firmware README 的说明）。
+    const f = serialState.lastFrame;
+    if (!f) return;
+    const RAD2 = Math.PI / 180;
+    const sample: ImuSample = {
+      gyro: [f.gyroDps[0] * RAD2, f.gyroDps[1] * RAD2, f.gyroDps[2] * RAD2],
+      accel: [...f.accelMs2],
+      mag: [...f.magUt],
+    };
+    state.lastImu = sample;
+    for (const e of ests) e.update(sample.gyro, sample.accel, sample.mag, H);
+    if (abState.on) for (const c of abState.clones) c.update(sample.gyro, sample.accel, sample.mag, H);
+    stepStillness(sample); // 真实模式静止检测同样有效（3s → 粗对准）
+    logAcc += H;
+    if (logAcc >= LOG_DT) {
+      logAcc -= LOG_DT;
+      logRow();
+    }
+    return;
+  }
   // 闭环演示：控制器改用所选解算结果（而非真实姿态）计算跟踪误差——
   // 「估计漂多少，机体就飞偏多少」；选真实姿态或关闭开关时为理想飞控。
   const loopOn = ($("loop-toggle") as HTMLInputElement).checked;
@@ -1447,6 +1555,8 @@ function frame(): void {
 
   const q = state.source === "truth" ? world.q : ests.find((e) => e.id === state.source)!.q;
   quad.group.quaternion.copy(toDisplay(q));
+  // 真实模式无真值基准：幻影隐藏（它显示的是模拟剧本的姿态，与真实机体无关）
+  ghost.group.visible = !state.real && state.view === "attitude" && ($("ghost-toggle") as HTMLInputElement).checked;
   ghost.group.quaternion.copy(toDisplay(world.q));
 
   // 磁航向箭头：世界系水平箭头（挂 scene，不随机体姿态旋转），指向估计姿态
@@ -1488,6 +1598,7 @@ function frame(): void {
     updateTelemetry();
     attChart.render();
     errChart.render();
+    imuChart.render();
     updateHash();
   }
 }
@@ -2214,6 +2325,152 @@ function drawAllan(): void {
   odHaloText(ctx, "σ(τ)（°/s）— log-log", L + 6, 16, "#16202f", "12.5px sans-serif");
   odHaloText(ctx, "τ（平均时长）", W - R - 60, H - 8, "#64748c");
 }
+
+// ---------- 真实 IMU（Web Serial，帧协议见 firmware/gy87.h） ----------
+// Web Serial API 的最小类型面（DOM lib 未收录；只声明我们用到的部分）
+interface SerialPortLike {
+  open(o: { baudRate: number }): Promise<void>;
+  readable: ReadableStream<Uint8Array> | null;
+  close(): Promise<void>;
+}
+declare global {
+  interface Navigator {
+    readonly serial: {
+      requestPort(): Promise<SerialPortLike>;
+    };
+  }
+}
+
+// 状态机：idle → connecting → live →（断线/错误）→ idle。真实模式下：
+// ① 剧本与模拟 IMU 滑块停用（真值/污染都来自真实世界）；
+// ② 没有姿态真值 → 幻影隐藏、误差曲线改以 Mahony 为参照基准；
+// ③ 帧间隔上限 dt 兜底：收不到数据时估计器不推进（避免用陈旧帧空转）。
+const serialState = {
+  port: null as SerialPortLike | null,
+  reader: null as ReadableStreamDefaultReader<Uint8Array> | null,
+  running: false,
+  buffer: new Uint8Array(0),
+  lastFrame: null as SerialImuFrame | null,
+  frames: 0,
+  dropped: 0,
+  lastSeq: -1,
+  chipUntil: -1,
+};
+
+function serialStatusChip(): HTMLElement {
+  return $("serial-status");
+}
+
+function setSerialStatus(text: string, warn = false): void {
+  const chip = serialStatusChip();
+  chip.textContent = text;
+  chip.classList.toggle("warn", warn);
+  chip.classList.remove("hidden");
+}
+
+async function serialConnect(): Promise<void> {
+  if (!("serial" in navigator)) {
+    setSerialStatus("此浏览器不支持 Web Serial（需要 Chrome/Edge 且 HTTPS 或 localhost）", true);
+    return;
+  }
+  try {
+    serialState.port = await navigator.serial.requestPort();
+    await serialState.port.open({ baudRate: 921600 });
+    serialState.running = true;
+    setSerialStatus("真实 IMU 已连接（921600 8N1）——等待数据帧…");
+    serialReadLoop();
+  } catch (err) {
+    serialState.running = false;
+    const msg = err instanceof Error ? err.message : String(err);
+    setSerialStatus(`连接失败：${msg}（未选端口或端口被占用——SerialWeb 等其它工具需先断开）`, true);
+  }
+}
+
+async function serialDisconnect(): Promise<void> {
+  serialState.running = false;
+  try {
+    await serialState.reader?.cancel();
+    await serialState.port?.close();
+  } catch {
+    /* 端口可能已拔出 */
+  }
+  serialState.port = null;
+  serialState.reader = null;
+  serialState.buffer = new Uint8Array(0);
+  serialState.lastFrame = null;
+  setSerialStatus("真实 IMU 已断开——回到模拟模式");
+}
+
+async function serialReadLoop(): Promise<void> {
+  if (!serialState.port?.readable || !serialState.running) return;
+  serialState.reader = serialState.port.readable.getReader();
+  try {
+    while (serialState.running) {
+      const { value, done } = await serialState.reader.read();
+      if (done) break;
+      if (!value) continue;
+      // 拼缓冲（上限防溢出：一帧 28B，1KB 足够容纳任何合理突发）
+      const merged = new Uint8Array(serialState.buffer.length + value.length);
+      merged.set(serialState.buffer);
+      merged.set(value, serialState.buffer.length);
+      serialState.buffer = merged.length > 1024 ? merged.subarray(merged.length - 1024) : merged;
+      serialDrainBuffer();
+    }
+  } catch {
+    /* 断线/拔出：落到下面的收尾 */
+  } finally {
+    serialState.reader.releaseLock();
+    if (serialState.running) {
+      // 异常断开（拔线）：回到 idle 并提示
+      serialState.running = false;
+      serialState.port = null;
+      setSerialStatus("真实 IMU 连接中断（设备拔出或重置？）——点击「连接真实 IMU」重连", true);
+      applyDataSourceSemantics();
+    }
+  }
+}
+
+/** 把缓冲里所有完整帧弹出，更新 lastFrame 与统计 */
+function serialDrainBuffer(): void {
+  const mounting = ($("serial-mounting") as HTMLSelectElement).value as Mounting;
+  for (;;) {
+    const { frame, consumed } = parseFrame(serialState.buffer, mounting);
+    if (consumed > 0) {
+      serialState.buffer = serialState.buffer.subarray(consumed);
+    }
+    if (!frame) break;
+    // 丢帧统计：seq 应 +1（u16 回绕）
+    if (serialState.lastSeq >= 0) {
+      const expect = (serialState.lastSeq + 1) & 0xffff;
+      if (frame.seq !== expect) serialState.dropped += (frame.seq - expect) & 0xffff;
+    }
+    serialState.lastSeq = frame.seq;
+    serialState.lastFrame = frame;
+    serialState.frames++;
+  }
+}
+
+function serialToggle(): void {
+  if (serialState.running) {
+    void serialDisconnect().then(() => applyDataSourceSemantics());
+  } else {
+    void serialConnect().then(() => {
+      if (serialState.running) {
+        applyDataSourceSemantics();
+        for (const e of ests) e.reset(); // 进真实模式：估计器从水平出发
+        attChart.clear();
+        errChart.clear();
+        imuChart.clear();
+        attPrev.fill(undefined);
+        logRows.length = 0;
+      }
+    });
+  }
+}
+$("btn-serial").addEventListener("click", () => serialToggle());
+$("serial-mounting").addEventListener("change", () => {
+  serialState.buffer = new Uint8Array(0); // 换安装方向：丢弃半解析缓冲防错位
+});
 
 // ---------- 初始化 ----------
 updateSourceChip();

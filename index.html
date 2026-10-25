@@ -113,6 +113,17 @@
 
       <section class="panel-section section-imu">
         <h2>IMU 传感器模拟</h2>
+        <div class="row serial-row">
+          <button class="btn" id="btn-serial">连接真实 IMU</button>
+          <select id="serial-mounting" title="GY-87 模块丝印轴在机体上的朝向">
+            <option value="x-front-y-left" selected>模块 X 朝前、Y 朝左</option>
+            <option value="x-front-y-right">模块 X 朝前、Y 朝右</option>
+            <option value="y-front-x-left">模块 Y 朝前、X 朝左</option>
+            <option value="y-front-x-right">模块 Y 朝前、X 朝右</option>
+          </select>
+        </div>
+        <div class="ov-chip hidden" id="serial-status"></div>
+        <p class="hint">连接后进入真实模式：模拟剧本与污染滑块停用，五种算法改吃真实数据（无真值基准，误差曲线以 Mahony 为参照）。固件帧协议见 firmware/README.md；固件调试先用 SerialWeb。</p>
         <div class="row">
           <label for="imu-preset">器件预设</label>
           <select id="imu-preset">
@@ -410,11 +421,22 @@
     </div>
     <div class="chart-block err">
       <div class="chart-header">
-        <div class="chart-title">姿态总误差（解算 vs 真实）</div>
+        <div class="chart-title" id="err-title">姿态总误差（解算 vs 真实）</div>
         <div class="chart-legend" id="err-legend"></div>
         <div class="chart-legend" id="err-legend-b"></div>
       </div>
       <canvas id="err-canvas"></canvas>
+    </div>
+    <div class="chart-block imu">
+      <div class="chart-header">
+        <div class="chart-tabs" id="imu-tabs">
+          <button data-tab="0" class="tab active">陀螺仪 °/s</button>
+          <button data-tab="1" class="tab">加速度计 m/s²</button>
+          <button data-tab="2" class="tab">磁力计 μT</button>
+        </div>
+        <div class="chart-legend" id="imu-legend"></div>
+      </div>
+      <canvas id="imu-canvas"></canvas>
     </div>
   </section>
 
@@ -549,6 +571,13 @@
                 <tr><td>备注</td><td>内置 AK8963 磁力计（0.6 μT/LSB）</td><td>片上可编程数字滤波</td><td>Cortex-M0 片上融合，直出四元数</td></tr>
               </tbody>
             </table></div>
+          </div>
+
+          <div class="ctl">
+            <div class="ctl-name">连接真实 IMU <span class="ctl-range">按钮 + 安装方向</span></div>
+            <p><span class="k k1">是什么</span>通过浏览器的 Web Serial API 直连真实 IMU（本装置按 GY-87 的 28 字节帧协议，见仓库 firmware/README.md）。连接后进入<b>真实模式</b>：模拟剧本与污染滑块停用，五种算法改吃真实传感器数据流。</p>
+            <p><span class="k k2">起什么作用</span>让「传感器 → 解算」从模拟走进现实：真实器件的噪声、零偏、振动、安装误差全部原样进入算法——文档里所有误差描述第一次有了实物对照。安装方向下拉声明 GY-87 丝印轴在机体上的朝向（网页端据此重排到 NED 机体系）。</p>
+            <p><span class="k k3">改了会怎样</span>连接后：幻影隐藏（没有真值基准）、误差曲线改为「各算法 vs Mahony 基准」、第三面板「IMU 原始数据」成为确认传感器健康的主要窗口（静止加计模长≈1g、磁模长≈50μT）。断开自动回到模拟模式。要求 Chrome/Edge + HTTPS（本站已部署 HTTPS ✓）；固件调试阶段先用 SerialWeb 验证帧格式。</p>
           </div>
 
           <div class="ctl">
