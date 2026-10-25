@@ -15,7 +15,7 @@ import {
   PureGyroEstimator,
   type Estimator,
 } from "./estimators";
-import { DEG, qAngleBetween, qFromEuler, qId, qMul, qNorm, qSlerp, qToEuler, RAD, type Quat } from "./core/quat";
+import { DEG, qAngleBetween, qFromAxisAngle, qFromEuler, qId, qMul, qNorm, qRotInv, qSlerp, qToAxisAngle, qToEuler, RAD, type Quat, type V3 } from "./core/quat";
 import { gimbalDemo, gimbalInnerQuat, toDisplayVec } from "./core/gimbal";
 import * as THREE from "three";
 import { applyViewDom, narrateGimbal, type UiView } from "./ui/mode";
@@ -333,9 +333,72 @@ const manYaw = bindSlider("man-yaw", (v) => (world.manual.yawDeg = v), (v) => `$
 void manRoll;
 void manPitch;
 void manYaw;
-bindSlider("imu-gyro-bias", (v) => (imuParams.gyroBiasDps = v), (v) => `${v.toFixed(1)}°/s`);
-bindSlider("imu-gyro-noise", (v) => (imuParams.gyroNoiseDps = v), (v) => `${v.toFixed(2)}°/s`);
-bindSlider("imu-accel-noise", (v) => (imuParams.accelNoise = v), (v) => `${v.toFixed(2)}m/s²`);
+// ---------- IMU 器件预设（真实数据手册规格 → 滑块一键写入） ----------
+// 噪声密度（°/s/√Hz、μg/√Hz）按白噪声采样换算成每采样点 σ：σ = 密度 × √(fs/2)，fs = 500 Hz（√250 ≈ 15.81）。
+// 滑块按自身步距对齐，写不入的精确值在注释里保留原数。规格来源见文档·控制项手册·IMU 传感器模拟。
+interface ImuPreset {
+  biasDps?: number;
+  gyroNoiseDps?: number;
+  accelNoise?: number;
+  note: string;
+}
+const IMU_PRESETS: Record<string, ImuPreset> = {
+  custom: { note: "自由调参。选择真实器件可一键写入其数据手册规格换算的噪声/零偏——换一颗传感器，看漂移差几倍。" },
+  mpu9250: {
+    biasDps: 2,
+    gyroNoiseDps: 0.15, // 密度 0.01 °/s/√Hz × 15.81 ≈ 0.158
+    accelNoise: 0.05, // 密度 300 μg/√Hz ≈ 0.0029 m/s²/√Hz × 15.81 ≈ 0.047
+    note: "MPU-9250（9 轴，2010 年代教学最常用）：陀螺噪声密度 0.01 °/s/√Hz、加计 300 μg/√Hz；初始零偏容差 ±5 °/s（取 2 为典型值，规格上限拉满更夸张）。内置 AK8963 磁力计。",
+  },
+  icm42688: {
+    biasDps: 1,
+    gyroNoiseDps: 0.05, // 密度 0.0028 × 15.81 ≈ 0.044
+    accelNoise: 0, // 密度 70 μg/√Hz ≈ 0.011 m/s²（滑块网格对齐后为 0——比默认干净一个量级）
+    note: "ICM-42688-P（现役 6 轴低噪声标杆）：陀螺噪声密度 0.0028 °/s/√Hz（约为 MPU-9250 的 1/3.6）、加计 70 μg/√Hz；片上可编程数字滤波。零偏未给典型值，保持 1 °/s。",
+  },
+  bno055: {
+    biasDps: 0.5,
+    gyroNoiseDps: 0.2, // 密度 0.014 × 15.81 ≈ 0.222
+    accelNoise: 0.05, // 密度 175 μg/√Hz ≈ 0.027
+    note: "BNO055（片上融合智能传感器）：陀螺 0.014、加计 175 μg/√Hz；零偏由片上 Cortex-M0 自动校准追踪（取 0.5 °/s 模拟校准后残余）。它直接输出四元数——相当于把本页算法固化进了传感器。",
+  },
+};
+let presetApplying = false;
+
+/** 手动碰任一预设管理的滑块 → 回到「自定义」 */
+function onImuManual(): void {
+  if (presetApplying) return;
+  const sel = document.getElementById("imu-preset") as HTMLSelectElement | null;
+  if (sel && sel.value !== "custom") {
+    sel.value = "custom";
+    const note = document.getElementById("imu-preset-note");
+    if (note) note.textContent = IMU_PRESETS.custom.note;
+  }
+}
+
+const imuSliders = {
+  bias: bindSlider("imu-gyro-bias", (v) => { imuParams.gyroBiasDps = v; onImuManual(); }, (v) => `${v.toFixed(1)}°/s`),
+  gyroNoise: bindSlider("imu-gyro-noise", (v) => { imuParams.gyroNoiseDps = v; onImuManual(); }, (v) => `${v.toFixed(2)}°/s`),
+  accelNoise: bindSlider("imu-accel-noise", (v) => { imuParams.accelNoise = v; onImuManual(); }, (v) => `${v.toFixed(2)}m/s²`),
+};
+void imuSliders;
+{
+  const sel = $<HTMLSelectElement>("imu-preset");
+  const apply = () => {
+    const p = IMU_PRESETS[sel.value];
+    const note = document.getElementById("imu-preset-note");
+    if (!p) return;
+    if (sel.value !== "custom") {
+      presetApplying = true;
+      if (p.biasDps !== undefined) imuSliders.bias.set(p.biasDps);
+      if (p.gyroNoiseDps !== undefined) imuSliders.gyroNoise.set(p.gyroNoiseDps);
+      if (p.accelNoise !== undefined) imuSliders.accelNoise.set(p.accelNoise);
+      presetApplying = false;
+    }
+    if (note) note.textContent = p.note;
+  };
+  sel.addEventListener("change", () => apply());
+}
 bindSlider("imu-lin-accel", (v) => (imuParams.linAccel = v), (v) => `${v.toFixed(1)}m/s²`);
 bindSlider("imu-vibration", (v) => (imuParams.vibration = v), (v) => v.toFixed(2));
 bindSlider("imu-mag-noise", (v) => (imuParams.magNoise = v), (v) => `${v.toFixed(1)}μT`);
@@ -347,12 +410,15 @@ bindSlider("comp-alpha", (v) => (comp.alpha = v), (v) => v.toFixed(2));
 bindSlider("kalman-proc", (v) => (kalman.gyroNoiseDps = v), (v) => `${v.toFixed(2)}°/s`);
 bindSlider("kalman-obs", (v) => (kalman.obsNoise = v), (v) => v.toFixed(3) + "g");
 
-// 磁力计总开关：同时切换三个融合算法的 MARG 路径
-$("mag-enable").addEventListener("change", () => {
+// 磁力计总开关：同时切换三个融合算法的 MARG 路径。
+// 注意必须在初始化时同步一次：HTML 里 checkbox 默认勾选，但不触发 change 事件——
+// 曾经只靠 change 同步，导致默认状态下 UI 显示「MARG 开」而估计器实际没用磁力计。
+function applyMagEnable(): void {
   const on = ($("mag-enable") as HTMLInputElement).checked;
   for (const e of ests) e.magEnabled = on;
   updateMagLegend();
-});
+}
+$("mag-enable").addEventListener("change", applyMagEnable);
 
 // ---------- 万向节锁演示（独立于主仿真） ----------
 const gimState = { yawDeg: 0, pitchDeg: 0, rollDeg: 0 };
@@ -664,15 +730,44 @@ const projState = {
   /** 当前画面上实际显示的 q（动画中途连按时从这里无缝续接，不跳变） */
   current: qId() as Quat,
   anim: null as null | { from: Quat; to: Quat; t: number; dur: number; reset?: boolean },
+  /** 已左乘 i/j/k 的次数（重置清零）：每按一次 = 绕基轴 180°，读数把它折算成累计转角 */
+  presses: 0,
 };
 const PROJ_I: Quat = { w: 0, x: 1, y: 0, z: 0 };
 const PROJ_J: Quat = { w: 0, x: 0, y: 1, z: 0 };
 const PROJ_K: Quat = { w: 0, x: 0, y: 0, z: 1 };
 
+/**
+ * 累计旋转读数：本模式下 q 只会被左乘 i/j/k 改变，从单位姿态出发必然落在
+ * {±1, ±i, ±j, ±k} 八点上。按主导分量归类并给出「哪张皮」的解说——
+ * 连按同一按钮两次（累计 360°）3D 姿态复原而 q 变号、四次（720°）才真正回 +1，
+ * 双重覆盖从结论句变成随按钮实时刷新的数字。
+ */
+function updateProjTurn(q: Quat): void {
+  const el = document.getElementById("proj-turn");
+  if (!el) return;
+  const { w, x, y, z } = q;
+  const aw = Math.abs(w), ax = Math.abs(x), ay = Math.abs(y), az = Math.abs(z);
+  const max = Math.max(aw, ax, ay, az);
+  let name: string, note: string;
+  if (max === aw) {
+    name = w >= 0 ? "+1" : "−1";
+    note = w >= 0
+      ? "单位姿态（0° 或 720°：两张皮在此重合）"
+      : "累计 360°：3D 姿态已复原，q 却变号——转一圈 ≠ 没转";
+  } else {
+    const axis: [string, number] = max === ax ? ["i", x] : max === ay ? ["j", y] : ["k", z];
+    name = (axis[1] >= 0 ? "+" : "−") + axis[0];
+    note = `物理 = 绕 ${axis[0]} 轴转 180°（S³ 赤道，${axis[1] >= 0 ? "第一" : "第二"}张皮）`;
+  }
+  el.textContent = `已左乘 ${projState.presses} 次 · 累计 ${projState.presses * 180}° · q = ${name}（${note}）`;
+}
+
 function projApply(q: Quat): void {
   projState.current = { ...q };
   $("quat-readout").textContent = `[${[q.w, q.x, q.y, q.z].map((a) => a.toFixed(3)).join(", ")}]`;
   sceneHandles.quatView.setProjection(q);
+  updateProjTurn(q);
 }
 
 function projAnimateTo(target: Quat, isReset = false): void {
@@ -680,10 +775,19 @@ function projAnimateTo(target: Quat, isReset = false): void {
   // 起点取「当前显示帧」——动画中途再按按钮时从画面位置无缝续接
   projState.anim = { from: { ...projState.current }, to: target, t: 0, dur: 0.7, reset: isReset };
 }
-$("btn-proj-i").addEventListener("click", () => projAnimateTo(qMul(projState.q, PROJ_I)));
-$("btn-proj-j").addEventListener("click", () => projAnimateTo(qMul(projState.q, PROJ_J)));
-$("btn-proj-k").addEventListener("click", () => projAnimateTo(qMul(projState.q, PROJ_K)));
-$("btn-proj-reset").addEventListener("click", () => projAnimateTo(qId(), true));
+/**
+ * 连按的叠加基准：动画进行中取「目标链尾」（anim.to）而非 projState.q——
+ * 后者只在动画完成时更新，快速连按（0.7s 内）会让第二次的目标仍基于旧值，
+ * 导致「连按两次 = −q」落空、累计读数与实际姿态脱节。链尾叠加后每次按键
+ * 恰好等于左乘一次基向量，presses 计数与 q 的实际累计严格一致。
+ */
+function projChainBase(): Quat {
+  return projState.anim ? projState.anim.to : projState.q;
+}
+$("btn-proj-i").addEventListener("click", () => { projState.presses++; projAnimateTo(qMul(projChainBase(), PROJ_I)); });
+$("btn-proj-j").addEventListener("click", () => { projState.presses++; projAnimateTo(qMul(projChainBase(), PROJ_J)); });
+$("btn-proj-k").addEventListener("click", () => { projState.presses++; projAnimateTo(qMul(projChainBase(), PROJ_K)); });
+$("btn-proj-reset").addEventListener("click", () => { projState.presses = 0; projAnimateTo(qId(), true); });
 
 $("quat-mode").addEventListener("change", () => {
   const proj = ($("quat-mode") as HTMLSelectElement).value === "proj";
@@ -854,7 +958,11 @@ $("btn-reset").addEventListener("click", resetSim);
 
 function resetSim(): void {
   world.reset();
-  for (const e of ests) e.reset();
+  // 「初始姿态偏差」演示：勾选后重置时给所有算法同一个随机初始姿态（20–35°，真值仍从水平出发）——
+  // 观察幻影（真值）不动、各算法从错误初值收敛：互补/Mahony/Madgwick 靠启动增益 ramp 加速，
+  // 卡尔曼靠大初始协方差；偏航 40° 门控的边界效应见文档·控制项手册。
+  const q0 = ($("init-offset-toggle") as HTMLInputElement).checked ? randomInitOffset() : undefined;
+  for (const e of ests) e.reset(q0);
   attChart.clear();
   errChart.clear();
   attPrev.fill(undefined);
@@ -862,6 +970,20 @@ function resetSim(): void {
   state.lastImu = null;
   simErrorShown = false;
 }
+
+/** 随机初始姿态偏差：均匀球面随机轴 + 20–35° 转角（上限留在卡尔曼 40° 新息门控之内） */
+function randomInitOffset(): Quat {
+  const az = Math.random() * 2 * Math.PI;
+  const pol = Math.acos(2 * Math.random() - 1);
+  const axis: V3 = [
+    Math.sin(pol) * Math.cos(az),
+    Math.sin(pol) * Math.sin(az),
+    Math.cos(pol),
+  ];
+  return qFromAxisAngle(axis, (20 + 15 * Math.random()) * RAD);
+}
+
+$("init-offset-toggle").addEventListener("change", resetSim);
 
 // ---------- 读数 ----------
 const fmtSigned = (v: number, d = 1): string => {
@@ -1097,6 +1219,8 @@ function frame(): void {
   const dt = Math.min((now - lastNow) / 1000, 0.05);
   lastNow = now;
   if (compDemoRunning) stepCompDemo(dt);
+  if (orderDemoRunning) stepOrderDemo(dt);
+  if (calibDemoRunning) stepCalibDemo(dt);
 
   frames++;
   fpsAcc += dt;
@@ -1138,6 +1262,22 @@ function frame(): void {
     sceneHandles.headingArrow.setDirection(
       new THREE.Vector3(Math.cos(eu.yaw), 0, Math.sin(eu.yaw)),
     );
+  }
+
+  // 等效旋转轴（轴角表示，青色）：q 的世界系固定旋转轴，长度随转角缩放。
+  // q 与 −q 同轴同角（qToAxisAngle 落短路径）；显示真实姿态时无解算意义，隐藏。
+  const axisToggle = $("axis-toggle") as HTMLInputElement;
+  sceneHandles.axisArrow.visible =
+    state.view === "attitude" && axisToggle.checked && state.source !== "truth";
+  if (sceneHandles.axisArrow.visible) {
+    const { axis, angle } = qToAxisAngle(q);
+    if (angle < 0.02) {
+      sceneHandles.axisArrow.visible = false; // 近零旋转：轴无定义，藏起避免误导
+    } else {
+      const d = toDisplayVec(axis);
+      sceneHandles.axisArrow.setDirection(new THREE.Vector3(d[0], d[1], d[2]).normalize());
+      sceneHandles.axisArrow.setLength(1.0 + 0.5 * (angle / Math.PI), 0.12, 0.07);
+    }
   }
 
   controls.update();
@@ -1203,7 +1343,7 @@ function showDocPage(id: string, restore = false): void {
   for (const b of docModuleBtns) b.classList.toggle("active", b.dataset.doc === docModuleOf(id));
   buildChapterToc(page);
   docPagesEl.scrollTop = restore ? (docScrollMemory.get(id) ?? 0) : 0;
-  updateCompDemoRun();
+  updateFigDemoRun();
 }
 
 function setDocsOpen(open: boolean): void {
@@ -1215,7 +1355,7 @@ function setDocsOpen(open: boolean): void {
     docScrollMemory.set(activeDocPage, docPagesEl.scrollTop);
     document.body.style.overflow = "";
   }
-  updateCompDemoRun();
+  updateFigDemoRun();
 }
 $("btn-docs").addEventListener("click", () => setDocsOpen(true));
 $("btn-docs-close").addEventListener("click", () => setDocsOpen(false));
@@ -1274,9 +1414,11 @@ const CD_HOLD = 1.4; // 画满后的停顿秒数
 let cdHoldT = 0;
 const CD_COLORS = ["#16202f", "#e5484d", "#94a3b8", "#d97706"];
 
-/** 仅当文档层打开且停留在滤波概览页时运转（主循环里每帧调用一次步进） */
-function updateCompDemoRun(): void {
+/** 文档页小演示的运转开关：文档层开着且停留在对应页才运转（主循环里每帧调用一次步进） */
+function updateFigDemoRun(): void {
   compDemoRunning = !docsOverlay.hidden && activeDocPage === "filters" && compDemoCtx !== null;
+  orderDemoRunning = !docsOverlay.hidden && activeDocPage === "math" && orderDemoCtx !== null;
+  calibDemoRunning = !docsOverlay.hidden && activeDocPage === "math" && calibDemoCtx !== null;
 }
 
 function stepCompDemo(dt: number): void {
@@ -1410,8 +1552,271 @@ function drawCompDemo(): void {
   ctx.fillText(scaleLabel, 6, mid - 28 * sc + 4);
 }
 
+// ---------- 文档页小演示：旋转顺序不可交换（两颗骰子） ----------
+// 同一对「偏航 ψ（绕竖直轴）+ 横滚 φ（绕水平轴）」按不同先后施加，终姿态不同——
+// 四元数乘法 q₁⊗q₂ ≠ q₂⊗q₁ 的几何现场。ψ = φ 随时间平滑往返 0°..90°。
+const orderDemoCanvas = document.getElementById("fig-order-demo") as HTMLCanvasElement | null;
+const orderDemoCtx = orderDemoCanvas ? orderDemoCanvas.getContext("2d") : null;
+let orderDemoRunning = false;
+let orderDemoT = 0;
+
+/** 行主序 3×3 乘法 */
+function odMul3(a: number[], b: number[]): number[] {
+  const o = new Array<number>(9).fill(0);
+  for (let i = 0; i < 3; i++)
+    for (let j = 0; j < 3; j++)
+      o[i * 3 + j] = a[i * 3] * b[j * 3] + a[i * 3 + 1] * b[3 + j] + a[i * 3 + 2] * b[6 + j];
+  return o;
+}
+
+/** 固定视角正交投影：x 向右，y 向上，z 向左上（画面坐标 y 向下为正，故取负） */
+function odProject(v: number[]): [number, number] {
+  return [v[0] - 0.55 * v[2], -v[1] + 0.35 * v[2]];
+}
+
+const OD_CORNERS: number[][] = [];
+for (const x of [-0.5, 0.5]) for (const y of [-0.5, 0.5]) for (const z of [-0.5, 0.5]) OD_CORNERS.push([x, y, z]);
+const OD_EDGES: Array<[number, number]> = [
+  [0, 1], [0, 2], [0, 4], [1, 3], [1, 5], [2, 3], [2, 6], [3, 7],
+  [4, 5], [4, 6], [5, 7], [6, 7],
+];
+
+function odHaloText(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, fill: string, font = "12px sans-serif"): void {
+  ctx.font = font;
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = "rgba(255,255,255,0.92)";
+  ctx.strokeText(text, x, y);
+  ctx.fillStyle = fill;
+  ctx.fillText(text, x, y);
+}
+
+function odDrawPanel(
+  ctx: CanvasRenderingContext2D, cx: number, cy: number, label: string, M: number[],
+): void {
+  const S = 58;
+  // 世界系坐标轴（两个面板完全相同）：x 红（横滚轴）、y 绿（偏航轴·竖直）、z 紫
+  const axes: Array<[string, number[], number, string]> = [
+    ["横滚轴 x", [1, 0, 0], 74, "#e5484d"],
+    ["偏航轴 y", [0, 1, 0], 74, "#059669"],
+    ["z", [0, 0, 1], 60, "#7c3aed"],
+  ];
+  for (const [, dir, len, color] of axes) {
+    const [px, py] = odProject(dir);
+    const x2 = cx + px * len, y2 = cy + py * len;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.8;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+    // 小箭头（沿方向反向张开的两短线）
+    const dx = x2 - cx, dy = y2 - cy, dl = Math.hypot(dx, dy) || 1;
+    const ux = dx / dl, uy = dy / dl;
+    ctx.beginPath();
+    ctx.moveTo(x2, y2);
+    ctx.lineTo(x2 - 7 * ux + 3.5 * uy, y2 - 7 * uy - 3.5 * ux);
+    ctx.moveTo(x2, y2);
+    ctx.lineTo(x2 - 7 * ux - 3.5 * uy, y2 - 7 * uy + 3.5 * ux);
+    ctx.stroke();
+  }
+  // 骰子（线框立方体），顶点经 M 变换后投影
+  const pts = OD_CORNERS.map((v) => {
+    const tv = [
+      M[0] * v[0] + M[1] * v[1] + M[2] * v[2],
+      M[3] * v[0] + M[4] * v[1] + M[5] * v[2],
+      M[6] * v[0] + M[7] * v[1] + M[8] * v[2],
+    ];
+    const [px, py] = odProject(tv);
+    return [cx + px * S * 1.6, cy + py * S * 1.6] as [number, number];
+  });
+  ctx.strokeStyle = "#16202f";
+  ctx.lineWidth = 1.8;
+  ctx.lineJoin = "round";
+  for (const [a, b] of OD_EDGES) {
+    ctx.beginPath();
+    ctx.moveTo(pts[a][0], pts[a][1]);
+    ctx.lineTo(pts[b][0], pts[b][1]);
+    ctx.stroke();
+  }
+  odHaloText(ctx, label, cx, cy - 86, "#16202f", "12.5px sans-serif");
+}
+
+function drawOrderDemo(angDeg: number): void {
+  if (!orderDemoCtx || !orderDemoCanvas) return;
+  const ctx = orderDemoCtx;
+  const W = orderDemoCanvas.width, H = orderDemoCanvas.height;
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, W, H);
+  const a = (angDeg * Math.PI) / 180;
+  const c = Math.cos(a), s = Math.sin(a);
+  // 世界系旋转：先偏航（绕 y）再横滚（绕 x）= Rx·Ry；先横滚再偏航 = Ry·Rx
+  const Ry = [c, 0, s, 0, 1, 0, -s, 0, c];
+  const Rx = [1, 0, 0, 0, c, -s, 0, s, c];
+  const A = odMul3(Rx, Ry);
+  const B = odMul3(Ry, Rx);
+  // 两姿态的相对旋转角：R_rel = A·Bᵀ，θ = acos((tr−1)/2)
+  const Bt = [B[0], B[3], B[6], B[1], B[4], B[7], B[2], B[5], B[8]];
+  const R = odMul3(A, Bt);
+  const tr = R[0] + R[4] + R[8];
+  const relDeg = (Math.acos(Math.max(-1, Math.min(1, (tr - 1) / 2))) * 180) / Math.PI;
+
+  odDrawPanel(ctx, 185, 118, "先偏航 ψ · 再横滚 φ", A);
+  odDrawPanel(ctx, 535, 118, "先横滚 φ · 再偏航 ψ", B);
+  // 中缝分隔
+  ctx.strokeStyle = "#e2e8f2";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(360, 18);
+  ctx.lineTo(360, 210);
+  ctx.stroke();
+
+  odHaloText(ctx, `ψ = φ = ${angDeg.toFixed(0)}°`, 360, 20, "#16202f", "13px sans-serif");
+  const rel =
+    relDeg < 0.05
+      ? "两姿态暂时重合（角度为 0，顺序还看不出差别）"
+      : `两个终姿态的夹角 ${relDeg.toFixed(1)}° —— 顺序不同，结果就不同`;
+  odHaloText(ctx, rel, 360, 224, relDeg < 0.05 ? "#64748c" : "#c026a3", "12.5px sans-serif");
+}
+
+function stepOrderDemo(dt: number): void {
+  if (!orderDemoCtx || !orderDemoCanvas) return;
+  orderDemoT += dt;
+  const sweep = 90 * (0.5 - 0.5 * Math.cos(orderDemoT * 0.55)); // 0..90° 平滑往返
+  drawOrderDemo(sweep);
+}
+
+// ---------- 文档页小演示：磁力计「校准舞蹈」（畸变椭球 → 标定后收圆） ----------
+// 合成已知的硬铁偏移 + 软铁刻度（真实标定靠椭球拟合反推这三个参数），
+// 虚拟机体做「六面翻滚舞蹈」采集点云：左面板原始读数（偏移椭球），右面板标定后（居中球面）。
+const calibDemoCanvas = document.getElementById("fig-calib-demo") as HTMLCanvasElement | null;
+const calibDemoCtx = calibDemoCanvas ? calibDemoCanvas.getContext("2d") : null;
+let calibDemoRunning = false;
+let calibDemoT = 0;
+let calibHoldT = 0;
+const CAL_N = 240;
+const CAL_HOLD = 1.6;
+const CAL_HARD: V3 = [9, -6, 13]; // 硬铁偏移（μT）——点云椭球中心离开原点
+const CAL_SOFT: V3 = [1.18, 0.88, 1.0]; // 软铁刻度（三轴不一致）——椭球轴向伸缩
+const CAL_B: V3 = [32.8, 0, 37.7]; // 世界磁场 NED（与模拟 IMU 的磁倾角 49° 一致）
+const calibRaw: Array<[number, number, number]> = [];
+const calibCal: Array<[number, number, number]> = [];
+
+/** 校准舞蹈的姿态脚本：三轴 Lissajous 翻滚 + 确定性伪随机抖动——
+ *  纯轨迹是条曲线，加抖动才能让采样方向铺满球面（覆盖度反馈才有意义） */
+function calibPose(i: number): Quat {
+  const t = (i / CAL_N) * Math.PI * 2;
+  const rnd = (k: number): number => {
+    const x = Math.sin(i * 127.1 + k * 311.7) * 43758.5453;
+    return x - Math.floor(x); // [0,1) 确定性伪随机（同帧序列可复现）
+  };
+  return qFromEuler(
+    (38 * Math.sin(1.0 * t + 0.9) + 52 * (rnd(1) - 0.5)) * RAD,
+    (42 * Math.sin(0.62 * t + 2.1) + 52 * (rnd(2) - 0.5)) * RAD,
+    (55 * Math.sin(0.83 * t + 4.0) + 62 * (rnd(3) - 0.5)) * RAD,
+  );
+}
+
+function calibSample(i: number): void {
+  const mBody = qRotInv(calibPose(i), CAL_B);
+  const raw: [number, number, number] = [
+    CAL_SOFT[0] * mBody[0] + CAL_HARD[0],
+    CAL_SOFT[1] * mBody[1] + CAL_HARD[1],
+    CAL_SOFT[2] * mBody[2] + CAL_HARD[2],
+  ];
+  const cal: [number, number, number] = [
+    (raw[0] - CAL_HARD[0]) / CAL_SOFT[0],
+    (raw[1] - CAL_HARD[1]) / CAL_SOFT[1],
+    (raw[2] - CAL_HARD[2]) / CAL_SOFT[2],
+  ];
+  calibRaw.push(raw);
+  calibCal.push(cal);
+}
+
+function calibReset(): void {
+  calibRaw.length = 0;
+  calibCal.length = 0;
+  calibHoldT = 0;
+}
+
+function drawCalibCloud(
+  ctx: CanvasRenderingContext2D, cx: number, cy: number, pts: Array<[number, number, number]>,
+  color: string, label: string,
+): void {
+  // 坐标轴十字（μT 值 × 2.2 缩放：50μT 场强 → 半径 ~50px，硬铁偏移 ~13μT 清晰可见）
+  const K = 2.2;
+  for (const d of [[1, 0, 0], [0, 1, 0], [0, 0, 1]] as V3[]) {
+    const [px, py] = odProject(d);
+    ctx.strokeStyle = "#d7dfeb";
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(cx - px * K * 26, cy - py * K * 26);
+    ctx.lineTo(cx + px * K * 26, cy + py * K * 26);
+    ctx.stroke();
+  }
+  for (const p of pts) {
+    const [px, py] = odProject(p);
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(cx + px * K, cy + py * K, 2.2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  odHaloText(ctx, label, cx, cy - 88, "#16202f", "12.5px sans-serif");
+}
+
+function drawCalibDemo(): void {
+  if (!calibDemoCtx || !calibDemoCanvas) return;
+  const ctx = calibDemoCtx;
+  const W = calibDemoCanvas.width, H = calibDemoCanvas.height;
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, W, H);
+  const n = calibRaw.length;
+  drawCalibCloud(ctx, 185, 122, calibRaw, "#e5484d", "原始读数：偏移 + 伸缩的椭球");
+  drawCalibCloud(ctx, 535, 122, calibCal, "#059669", "标定后：球心回原点、三轴等宽");
+  // 中缝与状态
+  ctx.strokeStyle = "#e2e8f2";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(360, 18);
+  ctx.lineTo(360, 218);
+  ctx.stroke();
+  odHaloText(ctx, `校准舞蹈：已采 ${n} / ${CAL_N} 点`, 360, 20, "#16202f", "13px sans-serif");
+  const done = n >= CAL_N;
+  odHaloText(
+    ctx,
+    done ? "点云铺满球面 → 拟合出硬铁偏移与软铁刻度，反解补偿即可" : "继续翻滚采集……覆盖度不足时拟合会把误差抄进参数",
+    360, 232,
+    done ? "#059669" : "#64748c",
+    "12.5px sans-serif",
+  );
+  // 底部进度条（覆盖度）
+  const L = 40, R = 8;
+  ctx.fillStyle = "#e5eaf2";
+  ctx.fillRect(L, H - 9, W - L - R, 4);
+  ctx.fillStyle = "#d97706";
+  ctx.fillRect(L, H - 9, ((W - L - R) * n) / CAL_N, 4);
+}
+
+function stepCalibDemo(dt: number): void {
+  if (!calibDemoCtx || !calibDemoCanvas) return;
+  const n = calibRaw.length;
+  if (n >= CAL_N) {
+    calibHoldT += dt;
+    if (calibHoldT < CAL_HOLD) return;
+    calibReset();
+    drawCalibDemo();
+    return;
+  }
+  calibDemoT += dt;
+  // 每帧补 2 个样本：约 2s 采满一轮
+  for (let k = 0; k < 2 && calibRaw.length < CAL_N; k++) calibSample(calibRaw.length);
+  drawCalibDemo();
+}
+
 // ---------- 初始化 ----------
 updateSourceChip();
+applyMagEnable(); // 复选框默认勾选但不触发 change：必须显式同步一次 MARG 状态
 setGimbalAngles(0, 0, 0);
 applyView("attitude"); // 视图不持久化，始终从四轴姿态视图开始
 setTelemetryVisible(false); // 玻璃盒默认关闭，写 body[data-telemetry] 供 CSS 使用

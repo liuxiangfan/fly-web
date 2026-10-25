@@ -4,7 +4,7 @@
  */
 import { World } from "../src/core/world";
 import { manualTarget, scenarios } from "../src/core/scenarios";
-import { simulateImu, type ImuParams } from "../src/core/imu";
+import { G_ACC, simulateImu, type ImuParams } from "../src/core/imu";
 import { Gauss, mulberry32 } from "../src/core/rng";
 import {
   ComplementaryEstimator,
@@ -25,10 +25,12 @@ import {
   qIntegrate,
   qNorm,
   qRot,
+  qRotInv,
   qSlerp,
   qToAxisAngle,
   qToEuler,
   qToMatrix,
+  type V3,
 } from "../src/core/quat";
 import {
   GIMBAL_DEMO_DURATION,
@@ -685,6 +687,110 @@ const dirty: ImuParams = { gyroBiasDps: 1, gyroNoiseDps: 0.2, accelNoise: 0.15, 
     maxErr = Math.max(maxErr, err);
   }
   check("等效旋转矢量往返一致", maxErr < 1e-9, `60 组随机姿态 q → φ=θ·n̂ → q 最大分量偏差 ${maxErr.toExponential(2)}`);
+}
+
+// 25. 初始姿态偏差收敛：从 30°（横滚主导）偏差出发（含启动 ramp + MARG），四种融合算法 8s 内贴住真值
+//     偏差轴刻意横滚主导：纯偏航偏差对加计不可观（MARG 开着则由磁场收敛）；
+//     30° 新息 < 卡尔曼 40° 门限，观测放行——这也是 UI「偏差上限 35°」设计约定的依据
+{
+  const qTrue = qFromEuler(30 * RAD, 20 * RAD, 0);
+  const axRaw: [number, number, number] = [1, 0.4, 0.15]; // 横滚主导（z 分量小 → 偏航占比小）
+  const axN = Math.hypot(axRaw[0], axRaw[1], axRaw[2]);
+  const q0 = qFromAxisAngle([axRaw[0] / axN, axRaw[1] / axN, axRaw[2] / axN], 30 * RAD);
+  const names = ["互补", "Mahony", "Madgwick", "卡尔曼"];
+  const ests = [
+    new ComplementaryEstimator(),
+    new MahonyEstimator(),
+    new MadgwickEstimator(),
+    new KalmanEstimator(),
+  ];
+  for (const e of ests) {
+    e.magEnabled = true; // 与 UI 默认（MARG 开）一致：偏航由磁场收敛
+    e.reset(q0);
+  }
+  const g = new Gauss(mulberry32(61));
+  for (let i = 0; i < Math.round(8 / H); i++) {
+    const s = simulateImu(qTrue, [0, 0, 0], i * H, clean, g, 1);
+    for (const e of ests) e.update(s.gyro, s.accel, s.mag, H);
+  }
+  const errs = ests.map((e) => qAngleBetween(e.q, qTrue) * DEG);
+  const maxErr = Math.max(...errs);
+  check(
+    "初始偏差 30° 八秒收敛（四种融合）",
+    maxErr < 5,
+    `${names.map((n, i) => `${n} ${errs[i].toFixed(2)}°`).join("；")}（均须 <5°，含启动 ramp 与卡尔曼大初始协方差）`,
+  );
+}
+
+// 26. 启动增益 ramp 的 A/B 对照：reset 后 1.5s 时刻，带 ramp 的误差必须显著小于不带
+//     这是「初始对准加速」的直接证据（rampEnabled 开关专为该对照暴露）。
+//     初值取 30° 横滚偏差——加计可直接观测的通道（纯偏航偏差不可观，对任何算法都拉不回）。
+{
+  const qTrue = qFromEuler(30 * RAD, 20 * RAD, 0);
+  const q0 = qFromAxisAngle([1, 0, 0], 30 * RAD);
+  const makeTrio = (): Array<[string, ComplementaryEstimator | MahonyEstimator | MadgwickEstimator]> => [
+    ["互补", new ComplementaryEstimator()],
+    ["Mahony", new MahonyEstimator()],
+    ["Madgwick", new MadgwickEstimator()],
+  ];
+  const on = makeTrio();
+  const off = makeTrio();
+  for (const [, e] of off) e.rampEnabled = false;
+  for (const m of [on, off]) for (const [, e] of m) {
+    e.reset(q0);
+    e.accelGate = false; // 隔离变量：本测试只考 ramp，关闭方向门控（30° 偏差会被 20° 门限拒收而干扰对照）
+  }
+  const gOn = new Gauss(mulberry32(71));
+  const gOff = new Gauss(mulberry32(71)); // 同噪声序列，只差 ramp
+  for (let i = 0; i < Math.round(1.5 / H); i++) {
+    const sOn = simulateImu(qTrue, [0, 0, 0], i * H, clean, gOn, 1);
+    const sOff = simulateImu(qTrue, [0, 0, 0], i * H, clean, gOff, 1);
+    for (const [, e] of on) e.update(sOn.gyro, sOn.accel, sOn.mag, H);
+    for (const [, e] of off) e.update(sOff.gyro, sOff.accel, sOff.mag, H);
+  }
+  const detail = on
+    .map(([n, e], i) => `${n} ramp ${(qAngleBetween(e.q, qTrue) * DEG).toFixed(1)}° vs 无 ${(qAngleBetween(off[i][1].q, qTrue) * DEG).toFixed(1)}°`)
+    .join("；");
+  const allFaster = on.every(([n, e], i) => qAngleBetween(e.q, qTrue) * DEG < qAngleBetween(off[i][1].q, qTrue) * DEG);
+  check("启动 ramp 加速初始对准（A/B）", allFaster, `reset 后 1.5s：${detail}（带 ramp 须全部更快）`);
+}
+
+// 27. 加速度计观测门控 A/B：持续侧向线加速度（协调转弯的向心加速度）场景。
+//     这是方向门控的主场：污染方向恒定偏 22°、范数只偏 8%——幅度门控是二阶量看不见它，
+//     零均值假设也不成立（滤波器平均不掉）；门控开的估计钉在真值，门关的被持续拽偏。
+{
+  const qTrue = qFromEuler(15 * RAD, 25 * RAD, 40 * RAD);
+  const gBody = qRotInv(qTrue, [0, 0, G_ACC]);
+  const accelDisturbed: V3 = [gBody[0] + 4.0, gBody[1], gBody[2]]; // 持续侧向 4 m/s²（≈22° 方向偏移，范数仅偏 8%）
+  const runPair = (make: () => MahonyEstimator | ComplementaryEstimator) => {
+    const gated = make();
+    const raw = make();
+    raw.accelGate = false;
+    for (const e of [gated, raw]) {
+      e.reset(qTrue); // 从真值出发：误差全部来自受扰观测的拉拽
+      e.rampEnabled = false; // 隔离 ramp：纯门控 A/B
+    }
+    const steps = Math.round(10 / H);
+    for (let i = 0; i < steps; i++) {
+      const s = { gyro: [0, 0, 0] as V3, accel: accelDisturbed, mag: [0, 0, 0] as V3 };
+      gated.update(s.gyro, s.accel, s.mag, H);
+      raw.update(s.gyro, s.accel, s.mag, H);
+    }
+    return { gated: qAngleBetween(gated.q, qTrue) * DEG, raw: qAngleBetween(raw.q, qTrue) * DEG };
+  };
+  const mah = runPair(() => new MahonyEstimator());
+  const comp = runPair(() => {
+    const c = new ComplementaryEstimator();
+    c.alpha = 2;
+    return c;
+  });
+  const ok = mah.gated < 1 && comp.gated < 1 && mah.raw > 15 && comp.raw > 15;
+  check(
+    "加速度计方向门控 A/B（持续侧向加速度）",
+    ok,
+    `10s 持续侧向 4 m/s²（方向偏 22°、范数仅偏 8%）：Mahony 门控 ${mah.gated.toFixed(2)}° vs 关 ${mah.raw.toFixed(2)}°；` +
+      `互补 门控 ${comp.gated.toFixed(2)}° vs 关 ${comp.raw.toFixed(2)}°（门控开须 <1°，关须 >15°）`,
+  );
 }
 
 console.log(failures === 0 ? "\n全部通过 ✅" : `\n${failures} 项失败 ❌`);

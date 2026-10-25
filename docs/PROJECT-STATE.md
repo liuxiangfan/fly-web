@@ -1,7 +1,7 @@
 # 项目状态 · 四元数姿态解算学习演示装置
 
 > **本文件是项目的恢复锚点。** 会话上下文被压缩后，从这里可以快速接续全部关键信息。
-> 最后更新：2026-10-25（外部评估修复轮：解卷绕有界/Mahony 符号/窄屏目录条/README 同步等 15 项）
+> 最后更新：2026-10-25（外部资料落地轮·三：幅度+方向双门控/等效旋转轴开关/校准舞蹈演示/Slerp 递推备注；自检增至 53 项）
 
 ## 一句话
 
@@ -15,7 +15,7 @@
 
 - Vite + TypeScript（无框架）+ Three.js（three ^0.170）
 - `npm run dev` / `npm run build`（= `tsc --noEmit && vite build` → `dist/`）/ `npm run preview`
-- `npm run check` = `selftest`（Node 数值自检）+ `scenecheck`（Node 下构建真实 three.js 场景图做几何校验），共 50 项
+- `npm run check` = `selftest`（Node 数值自检）+ `scenecheck`（Node 下构建真实 three.js 场景图做几何校验），共 53 项
 - 诊断脚本：`scripts/diag.ts`（收敛时间线）、`scripts/diag-violent.ts`（剧烈机动复现）
 - 源码改动后必须 `npm run build` 并在浏览器 **Ctrl+F5 强刷**（preview 服务的是构建产物）
 - 部署：`.github/workflows/deploy.yml`（wrangler v4），依赖 GitHub secrets 里的 Cloudflare 凭据
@@ -31,8 +31,8 @@
 | `core/imu.ts` | IMU 模拟：accel = Rᵀ·(0,0,g) + 线加速度扰动 + 振动 + 白噪声；陀螺零偏方向 [1,−0.7,0.5]；**磁链**：`MAG_WORLD_NED`（磁倾角 49°，~50μT）+ `simulateMag`（投影→硬铁→交变干扰→噪声），磁参数全零时不消耗 gauss.next() |
 | `core/scenarios.ts` | 6 种机动剧本（hover/manual/roll360/pitch/composite/violent）+ 共享 `manualTarget`；`setScenario` 对未知 id 回落 hover |
 | `core/world.ts` | 真实姿态积分 + 姿态跟踪控制器（K=5，ω_max=4.2 rad/s）+ IMU 生成 |
-| `estimators/index.ts` | 五估计器统一 `Estimator` 接口：`update(gyro,accel,mag,dt)` + `magEnabled` + `telemetry`（rate/rawGyro/correction/predictedGravity/measuredGravity/accelNorm/accelValid/magValid/detail）。Mahony MARG：磁误差 z 分量并入；Madgwick：独立偏航方向分量；互补：`tiltCompensatedYaw`；**KalmanEstimator**：ES-EKF/MEKF（6 维误差状态 [δθ,δb]，重力+磁场观测，40° 新息门控，可估计陀螺仪零偏，参数 Q=gyroNoiseDps / R=obsNoise） |
-| `scene/setup.ts` | 渲染器/相机/灯光/地面/网格/罗盘/主四轴+幻影/万向环架；`toDisplay`、`setView`、`syncVisibility` |
+| `estimators/index.ts` | 五估计器统一 `Estimator` 接口：`update(gyro,accel,mag,dt)` + `reset(initial?)`（initial 缺省=水平；传非单位姿态即「初始姿态偏差」演示）+ `magEnabled` + `telemetry`（rate/rawGyro/correction/predictedGravity/measuredGravity/accelNorm/accelValid/magValid/detail）。Mahony MARG：磁误差 z 分量并入；Madgwick：独立偏航方向分量；互补：`tiltCompensatedYaw`；**KalmanEstimator**：ES-EKF/MEKF（6 维误差状态 [δθ,δb]，重力+磁场观测，40° 新息门控，可估计陀螺仪零偏，参数 Q=gyroNoiseDps / R=obsNoise）。**启动增益 ramp**：互补/Mahony/Madgwick 共用 rampK()——reset 后 2.5s 内修正增益从 6 倍线性衰减（Fusion 同款，只放比例/梯度项），`rampEnabled` 公开供自检 A/B。**加速度计观测门控 accelGate**（同三家）：幅度（‖a‖ 偏 g 超 35%）+ 方向（与预测夹角超 `ACCEL_GATE_DEG=20°`）双层拒绝，ramp 期间关闭（Fusion 语义），被拒帧退化纯积分 |
+| `scene/setup.ts` | 渲染器/相机/灯光/地面/网格/罗盘/主四轴+幻影/万向环架；`toDisplay`、`setView`、`syncVisibility`；玻璃盒双箭头 + 磁航向箭头 + 等效旋转轴箭头 `axisArrow`（青色，`#axis-toggle` 控制） |
 | `scene/quad.ts` | `buildQuad(ghost, {axes})` 程序化四轴（PBR 质感版）：RoundedBox 亮漆机身+云台球+锥形机臂+电机铃+前后航行灯（前青后红）+桨叶与半透明桨盘；ghost=EdgesGeometry 轮廓线；桨尖径向包络 ≤0.68（scenecheck 穿模断言守护） |
 | `scene/gimbal.ts` | 平衡环架：外环偏航（蓝）→ 中环俯仰（金）→ 内环横滚（绿）；枢轴销连接相邻环；环标签随环转动；环内嵌四轴 scale 1.15 |
 | `scene/quatview.ts` | 四元数视图（球面参考方案）：参考球+赤道环+极轴；Slerp 白 / 欧拉品红双 Tube 弧（r=0.012）+ 滑动 marker；起终点蓝/橙球；中央四轴 0.55 + 机头箭头 + 轴角青箭头；q/−q 并排组（X ±0.95）。`parts.slerpPoints/eulerPoints` 采样点数组供 scenecheck 断言。`SPHERE_RADIUS=0.85`。**4D 立体投影模式**（`projGroup`）：S³ 从南极 (−1,0,0,0) 投影 p=(x,y,z)/(1+w)，赤道 w=0 恰为参考球；青点 q（球内）/品红 −q（球外，倒易 |p(q)|·|p(−q)|=1）/轨迹线/i-j-k 基架/中央姿态四轴；lastDir 方向延续防极点跳变。API：`setInterpolation/setNegation/showNegation/setProjection/showProjection`；parts 增 `projGroup/projQPos/projNegPos` |
@@ -82,6 +82,10 @@
 
 ## 参考资料（2026-10-25 内容丰富轮）
 
+- **[外部资料汇编](RESEARCH-NOTES.md)（docs/RESEARCH-NOTES.md）**：2026-10-25 四线网络调研 47 条资源
+  （A 数学教学可视化 / B 算法论文教程 / C 开源实现官方文档 / D 教学设计与传感器实践），
+  关键内容（公式/参数/流程）已内联摘录、无需联网，附 P1/P2/P3 综合改进建议——**后续模型完善项目时从这里开始读**。
+  本轮（外部资料落地轮）已落地其中 P1 全部 + P2 器件预设，见下方里程碑。
 - [i2Nav《惯性导航姿态算法》讲义](http://i2nav.com/ueditor/jsp/upload/file/20220419/1650373794259063852.pdf)（四种姿态表示框架）与 [KF-GINS](https://github.com/i2Nav-WHU/KF-GINS)（ESKF 架构）
 - [eater.net 可视化四元数](https://eater.net/quaternions)（4D 立体投影交互思路）
 - [euclideanspace 四元数](https://www.euclideanspace.com/maths/algebra/realNormedAlgebra/quaternions/index.htm)（为什么四个数/球面直觉/i-j-k 旋转解释）
@@ -90,6 +94,74 @@
 
 ## 已完成里程碑
 
+- **外部资料落地轮·三**（2026-10-25，依据 RESEARCH-NOTES.md §6 P2-9/10/11/12③）：
+  - **加速度计观测门控（幅度+方向双层）**：互补/Mahony/Madgwick 加 `accelGate`（默认开，公开供自检 A/B）——
+    幅度（‖a‖ 偏 g 超 35%）+ **方向**（实测与预测重力夹角超 `ACCEL_GATE_DEG=20°`）；
+    启动 ramp 期间按 Fusion 语义关闭拒绝（否则初始偏差被拒收卡死）；被拒帧整帧退化为纯积分（磁航向一并跳过）。
+    关键认知（selftest 调参时实证）：**垂直于重力的污染对范数只有二阶影响**（4 m/s² 侧向 → 范数仅偏 8%），
+    幅度门控对它盲——方向门控才是主手段（Fusion 同款）；而高频零均值振动反而该让滤波器平均、
+    方向门控在该场景更差——门控的真正主场是**持续单向线加速度（协调转弯）**
+  - **selftest 第 27 项**：「持续侧向 4 m/s² A/B」——门控开 0.00° vs 关 24.9°（手工构造恒定侧向加速度样本，
+    非 simulateImu 正弦）；ramp A/B 组同步关 accelGate（单变量隔离）
+  - **等效旋转轴开关**（`#axis-toggle`）：setup.ts 加 `axisArrow`（青 0x22d3ee，挂场景、从机体中心沿
+    世界系轴伸出，长度随转角）；main.ts frame() 每帧更新（qToAxisAngle，近零旋转隐藏）
+  - **磁力计「校准舞蹈」canvas 演示**（`#fig-calib-demo`，m-practice）：合成已知硬铁 [9,-6,13]μT +
+    软铁 diag(1.18,0.88,1)，Lissajous+确定性伪随机抖动翻滚采 240 点；左原始椭球（红）/右标定后球（绿），
+    底部覆盖度进度条；`stepCalibDemo` 挂主循环、`updateFigDemoRun` 统一管三个文档演示
+  - **文档**：f-compare 新增「观测可信度管理」段（三套门控对比：幅度/方向/新息，Fusion 10°+恢复窗，
+    启动期关闭的取舍）；m-frame ② 门控行改双门控口径；d-imu 机动线加速度条目同步；
+    m-slerp 加「等步长递推 p_{k+1}=c·p_k−p_{k-1}」实现备注（Shoemake/维基出处）；d-display 加轴开关条目
+  - 验证：tsc/check(53)/build 全绿；浏览器实测轴箭头（45° 横滚 → 沿世界北向轴伸出）、校准舞蹈
+    （像素级红/绿点云断言 + 86/240 截图）、控制台零错误
+- **外部资料落地轮·二**（2026-10-25，依据 RESEARCH-NOTES.md §6 P2-5 + P3 快赢）：
+  - **初始姿态偏差 + 启动增益 ramp**（P2-5）：`Estimator.reset(initial?)`；互补/Mahony/Madgwick 加
+    rampK()（2.5s 增益 6→1 线性衰减，只放比例/梯度项）；面板新开关「重置时随机初始姿态偏差」
+    （`#init-offset-toggle`，五家共用同一随机初值 20–35°，上限刻意留在卡尔曼 40° 门控内；
+    开关 change 即触发 resetSim）；`randomInitOffset()` 均匀球面随机轴
+  - **selftest +2（共 52 项）**：25「初始偏差 30° 八秒收敛（四种融合）」（偏差轴横滚主导 + MARG 开——
+    纯偏航偏差加计不可观，第一版用 z 主导轴误设计已修正）；26「启动 ramp A/B 对照」
+    （1.5s 时带 ramp 全部 0.0° vs 无 ramp 3–4.5°，同噪声序列只差 rampEnabled）
+  - **修复既有 bug：MARG 默认状态不同步**——mag-enable checkbox 默认勾选但不触发 change，
+    ests[].magEnabled 初始全 false，UI 显示「MARG 开」而算法实际没用磁力计（琥珀箭头照漂）。
+    改为 applyMagEnable() + 初始化显式调用
+  - **比力符号口径修正**（P3-15，调研核对时发现的文档自相矛盾）：m-sensor 原文 f=Rᵀ(a−g)（静止=机体「上」）
+    与后文「读数 [0,0,+9.8] 沿机体下」矛盾；现明确两层：真实器件输出比力本尊（静止沿「上」），
+    本装置取反号 ã=Rᵀ·g（读数=重力投影方向，沿「下」），归一化后与算法等价；d-coords 对应条目同步改写
+  - **文档深化**：m-practice 初始对准节扩写（粗对准/精对准、ramp、陀螺仪偏航不可观、门控拒绝救援两条红线）
+    + 新增「片上融合 vs 软件融合：BNO055 的另一条路」小节（P3-14）；
+    f-kalman-detail 新增第七步「与文献标准做法的逐项对照」表（Φ 一阶截断/Joseph 形式/40° 固定门控 vs χ²
+    马氏距离/注入后协方差重置，P3-16）
+  - 验证：tsc/check(52)/build 全绿；浏览器（4177 端口，4176 被旧进程占用属已知坑）实测开关收敛流程：
+    重置 0.4s 各融合在 ramp 作用下猛拉（互补 7.4°/Mahony 2.7°/卡尔曼 1.4°）、5s 后全部 ≤1.8°、
+    纯积分停在偏差处线性爬升（对照行为正确）；主视图截图确认误差曲线高台骤降形态；控制台零错误
+- **外部资料落地轮**（2026-10-25，依据 RESEARCH-NOTES.md §6 的 P1/P2 建议）：
+  - **IMU 器件预设**（P2-8）：`main.ts` IMU_PRESETS（MPU-9250 / ICM-42688-P / BNO055 / 自定义），
+    噪声密度 × √(500/2) 采样换算写滑块；手动碰预设管理的滑块自动回「自定义」；
+    文档 d-imu 新增「器件预设」条目 + 三器件规格对照表。预设接管的三滑块绑定存 `imuSliders` 对象
+  - **4D 投影「累计旋转」读数**（P1-1）：`updateProjTurn` 把按 i/j/k 的次数折算累计转角与「哪张皮」解说
+    （0 次/+1、2 次/−1、4 次/+1），面板 `#proj-turn` 行 + hint 重写 + 文档 m-4d 补「纬度=半角」段；
+    **顺带修复真 bug**：`projAnimateTo` 目标原来基于 `projState.q`（动画完成才更新），0.7s 内快速连按
+    第二次目标仍基于旧值 →「连按两次=−q」落空、读数与实际脱节；新增 `projChainBase()`（动画中取 anim.to 链尾叠加），
+    node 验证快速双击→−1、慢速两次→−1、四次→+1 全部成立
+  - **旋转顺序不可交换演示**（P1-3）：文档数学页新 figure `#fig-order-demo`（Canvas，720×240），
+    两颗骰子「先偏航后横滚 vs 先横滚后偏航」（世界系 Rx·Ry / Ry·Rx），ψ=φ 在 0–90° 往返，
+    底部实时显示两姿态夹角（矩阵迹反解轴角）；`stepOrderDemo` 挂主循环，
+    `updateCompDemoRun` 改名 **`updateFigDemoRun`**（同时管互补演示与顺序演示的运转开关）
+  - **万向节锁矩阵证据 + 欧拉复合公式纠错**（P1-2）：文档原写 R = Rx(φ)·Ry(θ)·Rz(ψ) 与代码
+    `qFromEuler`（实为 R = Rz(ψ)·Ry(θ)·Rx(φ)）矛盾，已数值验证并改正；
+    新增矩阵证据 formula（θ=90° 时矩阵只含 (φ−ψ)，R(10°,90°,0°)≡R(0°,90°,−10°)）；
+    面板/文档的演示描述修正为「横滚 +60° vs 偏航 −60°」（与 gimbal.ts 实际脚本一致）
+  - **qToEuler 换 atan2 稳定 pitch 公式**（P1-6）：2·atan2(√(1+2d), √(1−2d))−π/2（d=q.w·q.y−q.z·q.x），
+    与 asin 形式在 20 万随机四元数上最大差 5.6e-16 rad，±90° 附近数值更稳
+  - **参数物理含义标注**（P1-4）：d-algo 的 Kp/Ki/β 条目与 f-mahony/f-madg 页新增实战锚点
+    （Kp≈1.5/Ki≈0.005、twoKp=2×Kp 约定、β=√(3/4)·ζ̄ 单位 rad/s、原始代码默认 β=0.1、
+    运算量 IMU 109/MARG 277、Mahony 2008 出处与 k₁/k₂ 加权讨论）
+  - **约定与性能口径**（P1-6b）：数学页新增 **Hamilton vs JPL/Shuster 约定对照表**
+    （ij=k vs ij=−k、分量顺序、使用者清单）+ m-reps 计算量对照段（复合 28 vs 45 次、
+    qRot 交叉积式省 30%、Madgwick 109 次）；d-coords 补约定行
+  - 验证：tsc/check/build 全绿；浏览器验证预设三档写入与回落、turn 初值、文档九项内容断言、
+    四张截图（三栏布局/规格表/矩阵证据/顺序演示动画活帧 ψ=7° 夹角 14.8°），控制台零错误；
+    rAF 间歇停摆期间以 scenecheck 几何断言与 node 逻辑验证补位（既有已知坑）
 - **M1 + M2**（`0315075`）：3D 可视化、模拟 IMU、四算法、双图表、6 种机动、手动控制
 - **M3**（`3635b9c` + `64a5432`）：平衡环架万向节锁演示 + 机体轴标签 + 滑块数值/步距输入 + 术语统一
 - **前端重设计**（`64a5432`）：Dark Mode(OLED) 设计系统、自定义滑杆、可访问性达标（对比度 5.2–17.9:1）
@@ -141,7 +213,7 @@
 
 ## 验证体系
 
-- `npx tsc --noEmit` → `npm run check`（44 项全 PASS）→ `npm run build`
+- `npx tsc --noEmit` → `npm run check`（53 项全 PASS）→ `npm run build`
 - `selftest` 覆盖：欧拉↔四元数往返、无零偏不漂、零偏线性漂移、抗扰、动态跟踪、剧本切换、
   万向环链条≡主视图、死锁判定、演示全相位、锁定态等价、磁力计（含参数全零守护）、
   轴角双覆盖（qToAxisAngle 对 q 与 −q 恒等）、欧拉插值端点与区分度
@@ -152,6 +224,10 @@
 ## 待办
 
 - 候选增强：A/B 参数对比、深链分享 + PWA、闭环控制演示、IMU 误差模型升级（Allan 方差级噪声）
+- **RESEARCH-NOTES.md §6 尚未落地的建议**（长线，均为大型设计任务）：Squad 多关键帧插值扩展、
+  文档叙事重构（钩子/沙盒模式）、立体投影「抬升-变换-投影」三段式镜头、三段式初始对准的静止检测部分、
+  交叉轴/非线性/磁量化新误差滑块
+  （门控/校准舞蹈/Slerp 递推/等效旋转轴/初始对准/器件预设/比力/BNO055/ES-EKF 对照均已落地）
 - **安全**：Cloudflare API token 曾在对话中暴露（已写入 GitHub 加密 secrets，未入代码库），
   **用户仍未确认轮换，需再次提醒**
 

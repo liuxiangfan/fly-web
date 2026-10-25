@@ -32,6 +32,9 @@ export interface SceneHandles {
   };
   /** 磁航向指示：水平面内指向估计姿态的机头方位（琥珀色），挂四轴组（随偏航转） */
   headingArrow: THREE.ArrowHelper;
+  /** 等效旋转轴指示（轴角表示，青色）：挂场景、从机体中心沿世界系旋转轴伸出，
+   *  长度随转角缩放。由 main.ts 每帧更新（开关控制显隐） */
+  axisArrow: THREE.ArrowHelper;
 }
 
 /** 两个视图各自的取景 */
@@ -150,6 +153,16 @@ export function createScene(container: HTMLElement): SceneHandles {
   headingArrow.position.set(0, 1.0, 0);
   scene.add(headingArrow);
 
+  // 等效旋转轴（轴角表示）：q 从单位姿态转到当前姿态所绕的世界系固定轴。
+  // 青色与「四元数」视图的轴角箭头同色系——两个视图互相印证「瞬时旋转轴在哪」。
+  // 挂场景（不随机体转动）：轴角的世界系轴在旋转过程中方向恒定（Slerp 大圆的几何根源）。
+  const axisArrow = new THREE.ArrowHelper(
+    new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 0, 0), 1.4, 0x22d3ee, 0.12, 0.07,
+  );
+  axisArrow.position.set(0, 1.0, 0);
+  axisArrow.visible = false; // 默认关闭，由 UI 开关控制
+  scene.add(axisArrow);
+
   // 万向节锁演示装置（默认隐藏，由 setView 控制）
   const gimbal = buildGimbal();
   gimbal.group.position.y = 1.15;
@@ -205,7 +218,7 @@ export function createScene(container: HTMLElement): SceneHandles {
   new ResizeObserver(resize).observe(container);
 
   return {
-    renderer, scene, camera, controls, quad, ghost, gimbal, quatView, gravityArrows, headingArrow,
+    renderer, scene, camera, controls, quad, ghost, gimbal, quatView, gravityArrows, headingArrow, axisArrow,
     toDisplay, setView, syncVisibility,
   };
 }

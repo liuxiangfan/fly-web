@@ -101,12 +101,18 @@ export interface Euler {
   yaw: number;
 }
 
-/** 四元数 → 欧拉角（弧度），与 qFromEuler 互逆 */
+/**
+ * 四元数 → 欧拉角（弧度），与 qFromEuler 互逆。
+ * 复合顺序 R = R_z(ψ)·R_y(θ)·R_x(φ)（ZYX：先偏航再俯仰后横滚的内旋序，
+ * 等价于绕固定轴先横滚、再俯仰、后偏航）。
+ * pitch 用 atan2 双参数形式而非 asin：在 ±90°（万向节锁）附近数值更稳——
+ * asin 在 |参数|→1 处导数发散，atan2 两侧始终良态（Wikipedia 收录的稳定公式）。
+ */
 export function qToEuler(q: Quat): Euler {
-  const sinp = 2 * (q.w * q.y - q.z * q.x);
+  const d = Math.max(-0.5, Math.min(0.5, q.w * q.y - q.z * q.x)); // ½·sin(pitch)
   return {
     roll: Math.atan2(2 * (q.w * q.x + q.y * q.z), 1 - 2 * (q.x * q.x + q.y * q.y)),
-    pitch: Math.asin(Math.max(-1, Math.min(1, sinp))),
+    pitch: 2 * Math.atan2(Math.sqrt(1 + 2 * d), Math.sqrt(1 - 2 * d)) - Math.PI / 2,
     yaw: Math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z)),
   };
 }

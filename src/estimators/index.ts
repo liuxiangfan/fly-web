@@ -53,7 +53,35 @@ export interface Estimator {
   /** magEnabled=true 时启用磁力计（MARG），偏航由磁场约束 */
   magEnabled: boolean;
   update(gyro: V3, accel: V3, mag: V3, dt: number): void;
-  reset(): void;
+  /**
+   * 重置到初始状态。initial 缺省 = 单位姿态（水平）；传入非单位姿态即
+   * 「初始姿态偏差」演示——观察各算法从错误初值收敛到观测（初始对准的逆过程）。
+   */
+  reset(initial?: Quat): void;
+}
+
+/**
+ * 启动增益 ramp（Fusion 库同款思想）：reset 后 RAMP_SEC 秒内把修正增益从
+ * RAMP_BOOST 倍线性降回 1 倍——初始姿态偏差大时快速「拉」到观测，之后恢复
+ * 用户整定的稳态增益。只放大比例/梯度修正，不放大积分项（避免暂态 windup）。
+ */
+const RAMP_SEC = 2.5;
+const RAMP_BOOST = 6;
+function rampK(age: number, enabled: boolean): number {
+  return enabled && age < RAMP_SEC ? 1 + (RAMP_BOOST - 1) * (1 - age / RAMP_SEC) : 1;
+}
+
+/**
+ * 加速度计观测门控（互补/Mahony/Madgwick，卡尔曼用自己的 40° 新息门控）：
+ * ① 幅度门控——‖a‖ 偏离 g 超 35%（线加速度沿重力分量/自由落体）；
+ * ② 方向门控——实测方向与预测重力夹角超过 20°（垂直于重力的污染对范数只有
+ *    二阶影响，幅度门控看不见它，Fusion 库同样以方向拒绝为主手段）。
+ * 启动 ramp 期间（Fusion 同款语义）两类拒绝都关闭——初始偏差演示里的收敛
+ * 正需要「硬拉」，此时拒绝会把估计卡死在错误姿态上。
+ */
+const ACCEL_GATE_DEG = 20;
+function accelGateActive(gateOn: boolean, rampEnabled: boolean, age: number): boolean {
+  return gateOn && !(rampEnabled && age < RAMP_SEC);
 }
 
 /** 世界磁场参考模长（μT），用于磁力计可信度判定 */
@@ -120,8 +148,8 @@ export class PureGyroEstimator implements Estimator {
       detail: { alignErrorDeg: angleBetweenDeg(this.telemetry.predictedGravity, this.telemetry.measuredGravity) },
     };
   }
-  reset(): void {
-    this.q = qId();
+  reset(initial?: Quat): void {
+    this.q = initial ? { ...initial } : qId();
     this.telemetry = emptyTelemetry();
   }
 }
@@ -133,21 +161,38 @@ export class ComplementaryEstimator implements Estimator {
   color = "#ffa657";
   q = qId();
   alpha = 1; // 加计融合速率（1/s）
+  /** 启动增益 ramp 开关（自检 A/B 对照用）：reset 后 RAMP_SEC 秒内增益放大后线性衰减 */
+  rampEnabled = true;
+  /** 加速度计观测门控：幅度（‖a‖ 偏 g 超 35%）+ 方向（与预测重力夹角超 20°）双重拒绝 */
+  accelGate = true;
+  private age = 0;
   telemetry = emptyTelemetry();
   magEnabled = false;
   update(gyro: V3, accel: V3, mag: V3, dt: number): void {
+    this.age += dt;
     const qGyro = qIntegrate(this.q, gyro, dt);
     const norm = Math.hypot(accel[0], accel[1], accel[2]);
-    if (norm < 1e-6) {
+    const accelValid = Math.abs(norm - G) < 0.35 * G;
+    const axN = norm > 1e-6 ? [accel[0] / norm, accel[1] / norm, accel[2] / norm] : [0, 0, 0];
+    const { w: pw, x: px, y: py, z: pz } = qGyro;
+    const predicted: V3 = [2 * (px * pz - pw * py), 2 * (pw * px + py * pz), 1 - 2 * px * px - 2 * py * py];
+    const alignDeg = angleBetweenDeg(predicted, axN as V3);
+    const gateActive = accelGateActive(this.accelGate, this.rampEnabled, this.age);
+    const usable = norm > 1e-6 && (!gateActive || (accelValid && alignDeg < ACCEL_GATE_DEG));
+    if (!usable) {
+      // 受扰（幅度/方向门控拦截）或近似自由落体：跳过加计修正——磁航向的倾斜补偿
+      // 依赖可信姿态，一并跳过，本帧退化为纯陀螺仪积分
       this.q = qGyro;
       this.telemetry = {
-        ...this.telemetry,
         rate: [gyro[0], gyro[1], gyro[2]],
         rawGyro: [gyro[0], gyro[1], gyro[2]],
         correction: [0, 0, 0],
-        accelNorm: 0,
-        accelValid: false,
-        detail: { accelWeight: 0 },
+        predictedGravity: predicted,
+        measuredGravity: axN as V3,
+        accelNorm: norm,
+        accelValid,
+        magValid: false,
+        detail: { accelWeight: 0, alignErrorDeg: alignDeg },
       };
       return;
     }
@@ -166,7 +211,7 @@ export class ComplementaryEstimator implements Estimator {
       yaw = qToEuler(qGyro).yaw;
     }
     const qAcc = qFromEuler(rollAcc, pitchAcc, yaw);
-    const wAcc = 1 - Math.exp(-this.alpha * dt);
+    const wAcc = 1 - Math.exp(-this.alpha * rampK(this.age, this.rampEnabled) * dt);
     this.q = qSlerp(qGyro, qAcc, wAcc);
 
     const { w, x, y, z } = this.q;
@@ -183,7 +228,7 @@ export class ComplementaryEstimator implements Estimator {
       predictedGravity: [2 * (x * z - w * y), 2 * (w * x + y * z), 1 - 2 * x * x - 2 * y * y],
       measuredGravity: [ax, ay, az],
       accelNorm: norm,
-      accelValid: Math.abs(norm - G) < 0.35 * G,
+      accelValid,
       magValid: magOk,
       detail: {
         accelWeight: wAcc,
@@ -196,8 +241,9 @@ export class ComplementaryEstimator implements Estimator {
       },
     };
   }
-  reset(): void {
-    this.q = qId();
+  reset(initial?: Quat): void {
+    this.q = initial ? { ...initial } : qId();
+    this.age = 0;
     this.telemetry = emptyTelemetry();
   }
 }
@@ -210,10 +256,17 @@ export class MahonyEstimator implements Estimator {
   q = qId();
   kp = 1;
   ki = 0.05;
+  /** 启动增益 ramp 开关：只放大比例项（Kp），不放大积分项（避免暂态 windup） */
+  rampEnabled = true;
+  /** 加速度计幅度门控：受扰时跳过整帧修正（比例/积分/磁误差都不注入） */
+  accelGate = true;
   private eInt: V3 = [0, 0, 0];
+  private age = 0;
   telemetry = emptyTelemetry();
   magEnabled = false;
   update(gyro: V3, accel: V3, mag: V3, dt: number): void {
+    this.age += dt;
+    const kP = this.kp * rampK(this.age, this.rampEnabled);
     const { w, x, y, z } = this.q;
     const norm = Math.hypot(accel[0], accel[1], accel[2]);
     let omega: V3 = [gyro[0], gyro[1], gyro[2]];
@@ -224,7 +277,10 @@ export class MahonyEstimator implements Estimator {
     let iUsage = 0;
     let magOk = false;
     let yawMagDeg = NaN;
-    if (norm > 1e-6) {
+    const accelValid = Math.abs(norm - G) < 0.35 * G;
+    const alignDeg = angleBetweenDeg(predicted, measured);
+    const gateActive = accelGateActive(this.accelGate, this.rampEnabled, this.age);
+    if (norm > 1e-6 && (!gateActive || (accelValid && alignDeg < ACCEL_GATE_DEG))) {
       const ax = measured[0], ay = measured[1], az = measured[2];
       const vx = predicted[0], vy = predicted[1], vz = predicted[2];
       // 误差 = 实测 × 预测（叉积）
@@ -249,7 +305,7 @@ export class MahonyEstimator implements Estimator {
       this.eInt = [this.eInt[0] + ex * dt, this.eInt[1] + ey * dt, this.eInt[2] + ez * dt];
       const iCap = Math.hypot(this.eInt[0], this.eInt[1], this.eInt[2]);
       const scale = iCap > 5 ? 5 / iCap : 1; // 积分限幅
-      pTerm = [this.kp * ex, this.kp * ey, this.kp * ez];
+      pTerm = [kP * ex, kP * ey, kP * ez];
       iTerm = [this.ki * this.eInt[0] * scale, this.ki * this.eInt[1] * scale, this.ki * this.eInt[2] * scale];
       iUsage = Math.min(1, iCap / 5); // 限幅用量：0 表示积分项空载，1 表示已顶格
       omega = [gyro[0] + pTerm[0] + iTerm[0], gyro[1] + pTerm[1] + iTerm[1], gyro[2] + pTerm[2] + iTerm[2]];
@@ -264,20 +320,21 @@ export class MahonyEstimator implements Estimator {
       predictedGravity: predicted,
       measuredGravity: measured,
       accelNorm: norm,
-      accelValid: Math.abs(norm - G) < 0.35 * G,
+      accelValid,
       magValid: magOk,
       detail: {
         pShare: magP + magI > 1e-12 ? magP / (magP + magI) : 0, // 比例项占比（供双色条）
         iUsage,
         eIntMag: Math.hypot(this.eInt[0], this.eInt[1], this.eInt[2]),
-        alignErrorDeg: angleBetweenDeg(predicted, measured),
+        alignErrorDeg: alignDeg,
         ...(magOk ? { yawMagDeg, magEnabled: 1 } : { magEnabled: 0 }),
       },
     };
   }
-  reset(): void {
-    this.q = qId();
+  reset(initial?: Quat): void {
+    this.q = initial ? { ...initial } : qId();
     this.eInt = [0, 0, 0];
+    this.age = 0;
     this.telemetry = emptyTelemetry();
   }
 }
@@ -289,9 +346,16 @@ export class MadgwickEstimator implements Estimator {
   color = "#7ee787";
   q = qId();
   beta = 0.1;
+  /** 启动增益 ramp 开关：放大梯度下降步长 */
+  rampEnabled = true;
+  /** 加速度计幅度门控：受扰时跳过梯度步 */
+  accelGate = true;
+  private age = 0;
   telemetry = emptyTelemetry();
   magEnabled = false;
   update(gyro: V3, accel: V3, mag: V3, dt: number): void {
+    this.age += dt;
+    const betaEff = this.beta * rampK(this.age, this.rampEnabled);
     const { w, x, y, z } = this.q;
     // 陀螺微分项：q̇ = ½ q ⊗ ω（此处不乘 dt，最后统一乘）
     const gdW = 0.5 * (-x * gyro[0] - y * gyro[1] - z * gyro[2]);
@@ -306,7 +370,10 @@ export class MadgwickEstimator implements Estimator {
     let residual = 0;
     let magOk = false;
     let yawMagDeg = NaN;
-    if (norm > 1e-6) {
+    const accelValid = Math.abs(norm - G) < 0.35 * G;
+    const alignDeg = angleBetweenDeg(predicted, measured);
+    const gateActive = accelGateActive(this.accelGate, this.rampEnabled, this.age);
+    if (norm > 1e-6 && (!gateActive || (accelValid && alignDeg < ACCEL_GATE_DEG))) {
       const ax = measured[0], ay = measured[1], az = measured[2];
       // 目标函数 f = 预测重力方向 − 实测方向
       const f1 = 2 * (x * z - w * y) - ax;
@@ -342,10 +409,10 @@ export class MadgwickEstimator implements Estimator {
       const sNorm = Math.hypot(s0, s1, s2, s3);
       if (sNorm > 1e-9) {
         s0 /= sNorm; s1 /= sNorm; s2 /= sNorm; s3 /= sNorm;
-        dw -= this.beta * s0;
-        dx -= this.beta * s1;
-        dy -= this.beta * s2;
-        dz -= this.beta * s3;
+        dw -= betaEff * s0;
+        dx -= betaEff * s1;
+        dy -= betaEff * s2;
+        dz -= betaEff * s3;
       }
     }
     this.q = qNorm({ w: w + dw * dt, x: x + dx * dt, y: y + dy * dt, z: z + dz * dt });
@@ -360,18 +427,19 @@ export class MadgwickEstimator implements Estimator {
       predictedGravity: predicted,
       measuredGravity: measured,
       accelNorm: norm,
-      accelValid: Math.abs(norm - G) < 0.35 * G,
+      accelValid,
       magValid: magOk,
       detail: {
         residual,
         stepNorm: Math.hypot(dx, dy, dz) * dt,
-        alignErrorDeg: angleBetweenDeg(predicted, measured),
+        alignErrorDeg: alignDeg,
         ...(magOk ? { yawMagDeg, magEnabled: 1 } : { magEnabled: 0 }),
       },
     };
   }
-  reset(): void {
-    this.q = qId();
+  reset(initial?: Quat): void {
+    this.q = initial ? { ...initial } : qId();
+    this.age = 0;
   }
 }
 
@@ -588,8 +656,8 @@ export class KalmanEstimator implements Estimator {
     this.P = Pn;
   }
 
-  reset(): void {
-    this.q = qId();
+  reset(initial?: Quat): void {
+    this.q = initial ? { ...initial } : qId();
     this.bias = [0, 0, 0];
     this.initCovariance();
     this.telemetry = emptyTelemetry();
