@@ -1153,21 +1153,27 @@ body[data-view="quat"] .section-quat { display: block; }
   display: inline-block;
   font-style: normal;
   padding: 0 0.06em;
+  vertical-align: baseline; /* 不位移基线：记号悬于字母正常行框上方 */
 }
+/* 记号本体用 CSS 形状（非字形）：点 = 实心圆，帽 = Λ 形带——尺寸按 em 缩放、清晰可见 */
 .od::after, .oh::after {
+  content: "";
   position: absolute;
   left: 50%;
   transform: translateX(-50%);
-  font-size: 0.62em;
-  line-height: 1;
+  background: currentColor;
 }
 .od::after {
-  content: "˙";
-  top: -0.58em;
+  top: -0.08em;
+  width: 0.2em;
+  height: 0.2em;
+  border-radius: 50%;
 }
 .oh::after {
-  content: "ˆ";
-  top: -0.5em;
+  top: -0.02em;
+  width: 0.52em;
+  height: 0.26em;
+  clip-path: polygon(0 100%, 50% 0, 100% 100%, 100% 74%, 50% 30%, 0 74%);
 }
 
 /* 变量含义表：紧跟公式的注释行 */
