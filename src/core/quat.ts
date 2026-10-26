@@ -36,11 +36,21 @@ export function qNorm(q: Quat): Quat {
   return { w: q.w / n, x: q.x / n, y: q.y / n, z: q.z / n };
 }
 
-/** q ← q + ½·q⊗(0,ω)·dt，再归一化（一阶积分，500 Hz 下足够精确） */
+/**
+ * 姿态积分：q ← q ⊗ Δq(ω·dt)，Δq 为**精确指数映射**
+ *   Δq = [cos(θ/2), ω̂·sin(θ/2)]，θ = ‖ω‖·dt
+ * 恒定角速度假设下与微分方程 q̇ = ½·q⊗ω 的解析解完全一致——
+ * 不像一阶欧拉积分那样在步长变大（真实串口 100–200 Hz）或高速旋转时
+ * 引入 O(θ³) 的缩放误差。小角时 Δq ≈ [1, ω·dt/2]，与旧式一阶更新等价。
+ */
 export function qIntegrate(q: Quat, omega: V3, dt: number): Quat {
-  const h = 0.5 * dt;
-  const d = qMul(q, { w: 0, x: omega[0] * h, y: omega[1] * h, z: omega[2] * h });
-  return qNorm({ w: q.w + d.w, x: q.x + d.x, y: q.y + d.y, z: q.z + d.z });
+  const wx = omega[0], wy = omega[1], wz = omega[2];
+  const wMag = Math.hypot(wx, wy, wz);
+  const angle = wMag * dt;
+  if (!(angle > 1e-12)) return { w: q.w, x: q.x, y: q.y, z: q.z };
+  const half = angle / 2;
+  const k = Math.sin(half) / wMag; // Δq 的虚部 = ω·sin(θ/2)/‖ω‖
+  return qNorm(qMul(q, { w: Math.cos(half), x: wx * k, y: wy * k, z: wz * k }));
 }
 
 /** 欧拉角（ZYX：偏航 ψ 绕 z、俯仰 θ 绕 y、横滚 φ 绕 x，NED 航空约定）→ 四元数，单位弧度 */
@@ -72,9 +82,9 @@ export function qFromAxisAngle(axis: V3, angle: number): Quat {
 export function qToAxisAngle(q: Quat): { axis: V3; angle: number } {
   // 落到短路径：w ≥ 0（q 与 −q 中取 w 非负的那个），保证 angle ∈ [0, π]
   const s = q.w < 0 ? -1 : 1;
-  const w = s * q.w;
+  const w = Math.min(1, Math.max(-1, s * q.w));
   const v: V3 = [s * q.x, s * q.y, s * q.z];
-  const angle = 2 * Math.acos(Math.min(1, w));
+  const angle = 2 * Math.acos(w);
   const vn = Math.hypot(v[0], v[1], v[2]);
   if (vn < 1e-12) return { axis: [1, 0, 0], angle: 0 }; // 零旋转
   return { axis: [v[0] / vn, v[1] / vn, v[2] / vn], angle };
@@ -117,9 +127,18 @@ export function qToEuler(q: Quat): Euler {
   };
 }
 
-/** 两姿态间的夹角（弧度） */
+/**
+ * 两姿态间的夹角（弧度，[0, π]）。
+ * 用相对四元数 r = a⊗b⁻¹ 的 atan2(‖vec r‖, |w r|) 而非 acos(|dot|)：
+ * acos 在零夹角附近的导数发散——1e-16 的点积误差会被放大成 ~1e-8 rad 的角度，
+ * 端点断言和「收敛到 0.000°」的读数都受它限制；atan2 形式在整个 [0, π] 上良态。
+ */
 export function qAngleBetween(a: Quat, b: Quat): number {
-  return 2 * Math.acos(Math.min(1, Math.abs(qDot(a, b))));
+  const w = a.w * b.w + a.x * b.x + a.y * b.y + a.z * b.z;
+  const vx = -a.w * b.x + a.x * b.w - a.y * b.z + a.z * b.y;
+  const vy = -a.w * b.y + a.x * b.z + a.y * b.w - a.z * b.x;
+  const vz = -a.w * b.z - a.x * b.y + a.y * b.x + a.z * b.w;
+  return 2 * Math.atan2(Math.hypot(vx, vy, vz), Math.abs(w));
 }
 
 /** v 沿 q 旋转（体→世界）：v + 2w(u×v) + 2u×(u×v) */
@@ -144,11 +163,18 @@ export function qRotInv(q: Quat, v: V3): V3 {
   return qRot(qConj(q), v);
 }
 
-/** 球面线性插值，短路径 */
+/**
+ * 球面线性插值，短路径。
+ * 端点直接返回输入（而不是经过 sin 权重回算）：t=1 时精确等于 b 的**同一符号**，
+ * 动画终点/采样端点不会因浮点残差落在 −b 上（q 与 −q 同姿态但分量不同，
+ * 对需要逐分量对齐的测试与插值链更有意义）。
+ */
 export function qSlerp(a: Quat, b: Quat, t: number): Quat {
+  if (t <= 0) return { w: a.w, x: a.x, y: a.y, z: a.z };
+  if (t >= 1) return { w: b.w, x: b.x, y: b.y, z: b.z };
   let d = qDot(a, b);
   const bb = d < 0 ? { w: -b.w, x: -b.x, y: -b.y, z: -b.z } : b;
-  d = Math.abs(d);
+  d = Math.min(1, Math.abs(d));
   if (d > 0.9995) {
     return qNorm({
       w: a.w + (bb.w - a.w) * t,

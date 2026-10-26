@@ -77,6 +77,7 @@ html, body {
 body {
   display: grid;
   grid-template-rows: auto 1fr auto auto;
+  grid-template-columns: minmax(0, 1fr);
   height: 100vh;
 }
 
@@ -217,16 +218,19 @@ button:disabled { cursor: default; }
    ========================================================================== */
 #app-main {
   display: grid;
-  grid-template-columns: 1fr 352px;
+  grid-template-columns: minmax(0, 1fr) 352px;
   min-height: 0;
+  min-width: 0;
 }
 
 #viewport {
   position: relative;
   min-height: 0;
+  min-width: 0;
   overflow: hidden;
 }
-#viewport canvas { display: block; }
+/* 画布尺寸由 ResizeObserver 写 style；这里兜底约束到容器，窄屏不会撑破 grid */
+#viewport canvas { display: block; width: 100%; height: 100%; }
 
 /* ---- 视口覆盖层 ---- */
 .overlay {
@@ -254,7 +258,7 @@ button:disabled { cursor: default; }
 #readout-source { font-weight: 600; letter-spacing: 0.01em; }
 #readout-imu { font-size: 11px; color: var(--text-dim); }
 #viewport-hint {
-  right: 14px;
+  left: 14px;
   bottom: 12px;
   font-size: 11.5px;
   color: var(--text-faint);
@@ -271,10 +275,12 @@ button:disabled { cursor: default; }
   border-left: 1px solid var(--border);
   background: var(--bg-panel);
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 14px;
   display: flex;
   flex-direction: column;
   gap: 11px;
+  min-width: 0;
 }
 
 .panel-section {
@@ -283,6 +289,7 @@ button:disabled { cursor: default; }
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
   padding: 13px 15px;
+  min-width: 0;
 }
 /* 每节标题左侧的强调短竖条，形成统一的节奏 */
 .panel-section h2 {
@@ -340,6 +347,14 @@ button:disabled { cursor: default; }
   font-size: 12.5px;
 }
 .check-row input { accent-color: #c7d3e6; width: 14px; height: 14px; cursor: pointer; }
+
+/* A/B 那一行：长说明 + 按钮并排会挤成三行，改成上下两块 */
+#sec-algo .row.check-row:has(#btn-ab-snapshot) {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+#sec-algo .row.check-row:has(#btn-ab-snapshot) .btn { align-self: flex-start; }
 
 .sub-group {
   border-top: 1px dashed var(--border-strong);
@@ -461,94 +476,147 @@ button:disabled { cursor: default; }
 }
 
 /* ==========================================================================
-   图表区
+   图表区（顶部工具条 + 三块可独立折叠的曲线面板）
    ========================================================================== */
 #charts {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  grid-template-areas:
-    "att err"
-    "imu imu";
-  gap: 11px;
-  padding: 11px 14px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 10px 11px;
+  padding: 0 14px 11px;
   border-top: 1px solid var(--border);
   background: var(--bg-panel);
 }
-.chart-block.att { grid-area: att; }
-.chart-block.err { grid-area: err; }
-.chart-block.imu { grid-area: imu; }
-/* 折叠面板：点标题栏箭头收起/展开 canvas（IMU 面板默认收起） */
+/* 展开的面板：两列自适应（窄屏自然退化为单列），不会留半格空洞 */
+.chart-block {
+  flex: 1 1 420px;
+  min-width: 0;
+  order: 1;
+}
+/* 折叠的面板：沉到底部成一条细标题栏，整行占位，点箭头即可再展开 */
+.chart-block.collapsed {
+  flex: 0 0 100%;
+  align-self: flex-start;
+  order: 9;
+}
+
+/* ---- 曲线工具条：一行放下「标题 + 显隐 chips + 窗口说明」 ---- */
+.charts-bar {
+  flex: 0 0 100%;
+  align-self: flex-start;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 0 1px;
+  min-width: 0;
+}
+.cb-title {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  flex: none;
+}
+.cb-toggles { display: flex; gap: 3px; flex: none; }
+.cb-chip {
+  padding: 3px 11px;
+  font-family: inherit;
+  font-size: 11.5px;
+  color: var(--text-faint);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
+  transition: color var(--t-fast), border-color var(--t-fast), background var(--t-fast);
+}
+.cb-chip:hover { color: var(--text); background: var(--bg-hover); }
+.cb-chip.active {
+  color: var(--text);
+  border-color: var(--border-strong);
+  background: var(--bg-card);
+}
+.cb-chip.active::before {
+  content: "";
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  vertical-align: 1px;
+}
+.cb-meta { margin-left: auto; font-size: 10.5px; color: var(--text-faint); flex: none; }
+
+/* ---- 折叠箭头 ---- */
 .fold-btn {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  flex: none;
+  padding: 0;
   background: none;
   border: none;
+  border-radius: var(--r-sm);
   color: var(--text-faint);
-  font-size: 11px;
   cursor: pointer;
-  padding: 2px 6px;
-  line-height: 1;
-  transition: transform 0.18s ease, color 0.15s ease;
+  transition: color var(--t-fast), background var(--t-fast);
 }
-.fold-btn:hover { color: var(--accent); }
-.chart-block.collapsed .fold-btn { transform: rotate(-90deg); }
+.fold-btn:hover { color: var(--text); background: var(--bg-hover); }
+.fold-btn .chev {
+  width: 7px;
+  height: 7px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: translateY(-2px) rotate(45deg);
+  transition: transform 0.18s ease;
+}
+.chart-block.collapsed .fold-btn .chev { transform: translateY(-1px) rotate(-45deg); }
 .chart-block.collapsed canvas,
-.chart-block.collapsed .chart-legend { display: none; }
-/* 真实 IMU 串口行与状态提示 */
-.serial-row { display: flex; gap: 8px; align-items: center; margin: 6px 0; }
-.serial-row select { flex: 1; }
-#serial-status { margin: 4px 0; font-size: 11px; }
-#serial-status.warn { color: #f85149; }
+.chart-block.collapsed .chart-legend,
+.chart-block.collapsed .chart-tabs { display: none; }
+.chart-block.collapsed { padding-bottom: 8px; }
+
 .chart-block {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
-  padding: 9px 11px 7px;
+  padding: 7px 11px 8px;
   min-width: 0;
 }
 .chart-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 5px;
-  flex-wrap: wrap;
+  gap: 9px;
   min-height: 26px;
+  min-width: 0;
+}
+.chart-head-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: none;
 }
 .chart-title {
   font-size: 12.5px;
   font-weight: 600;
   color: var(--text);
   letter-spacing: 0.02em;
+  white-space: nowrap;
 }
-
-/* 分段控件（图表通道页签） */
-.chart-tabs { display: flex; gap: 3px; }
-.chart-tabs .tab {
-  padding: 3px 12px;
-  font-family: inherit;
-  font-size: 12px;
-  border: 1px solid transparent;
-  border-radius: var(--r-md);
-  background: transparent;
-  color: var(--text-dim);
-  transition: color var(--t-fast), background var(--t-fast), border-color var(--t-fast);
+.chart-summary {
+  font-size: 10.5px;
+  color: var(--text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  flex: 1 1 auto;
 }
-.chart-tabs .tab:hover { color: var(--text); background: var(--bg-hover); }
-.chart-tabs { border-bottom: 1px solid var(--border); }
-.chart-tabs .tab {
-  border-bottom: 1px solid transparent;
-  margin-bottom: -1px;
-}
-.chart-tabs .tab.active {
-  background: transparent;
-  color: var(--text);
-  border-bottom: 1px solid var(--accent);
-  font-weight: 600;
-}
-
-.chart-legend { display: flex; gap: 11px; flex-wrap: wrap; }
+.chart-block:not(.collapsed) .chart-summary { display: none; }
+.chart-legend { display: flex; gap: 10px; flex-wrap: wrap; margin-left: auto; justify-content: flex-end; }
 /* A/B 对比关闭时隐藏 B 组图例（main.ts 以 body[data-ab] 同步） */
 body:not([data-ab="on"]) #err-legend-b { display: none; }
-/* 等效旋转轴 / S³ 剖面 inset 等面板内小画布 */
 .panel canvas#proj-section {
   width: 100%;
   height: auto;
@@ -560,11 +628,15 @@ body:not([data-ab="on"]) #err-legend-b { display: none; }
   display: flex;
   align-items: center;
   gap: 5px;
+  font-family: inherit;
   font-size: 11px;
+  line-height: 1.5;
   cursor: pointer;
   color: var(--text);
   user-select: none;
-  padding: 1px 2px;
+  padding: 1px 3px;
+  background: transparent;
+  border: 0;
   border-radius: var(--r-sm);
   transition: opacity var(--t-fast), background var(--t-fast);
 }
@@ -576,10 +648,18 @@ body:not([data-ab="on"]) #err-legend-b { display: none; }
   flex: none;
 }
 .legend-chip.off { opacity: 0.3; }
-.legend-chip .val { color: var(--text-dim); min-width: 48px; }
+.legend-chip .val { color: var(--text-dim); min-width: 44px; font-variant-numeric: tabular-nums; }
 
 /* 图表画布：用类选择器（ID 优先级会压过 .collapsed 的 display:none 折叠规则） */
-.chart-block canvas { width: 100%; height: 150px; display: block; }
+.chart-block canvas { width: 100%; height: 146px; display: block; }
+/* 三块全开：IMU 独占一行（并排会把三条曲线挤成细缝） */
+#charts[data-open-count="3"] .chart-block.imu { flex-basis: 100%; }
+/* 单块展开时铺满整行 */
+#charts[data-open-count="1"] .chart-block:not(.collapsed) { flex-basis: 100%; }
+/* 面板越少，单块画布越高（空间不被浪费，读数更清楚） */
+#charts[data-open-count="1"] .chart-block:not(.collapsed) canvas { height: 168px; }
+#charts[data-open-count="2"] .chart-block:not(.collapsed) canvas { height: 146px; }
+#charts[data-open-count="3"] .chart-block:not(.collapsed) canvas { height: 128px; }
 
 /* ==========================================================================
    底栏
@@ -672,6 +752,17 @@ body[data-telemetry="on"] #gravity-legend { display: flex; }
   line-height: 1.5;
 }
 body[data-view="quat"] #quat-legend { display: flex; }
+body[data-view="quat"] #quat-legend-proj { display: none; }
+body[data-view="quat"][data-quat-mode="proj"] #quat-legend { display: none; }
+body[data-view="quat"][data-quat-mode="proj"] #quat-legend-proj { display: flex; }
+#quat-legend-proj {
+  display: none;
+  flex-direction: column;
+  gap: 3px;
+  border-left: 3px solid #e879f9;
+  line-height: 1.5;
+}
+#quat-legend-proj .lg-item,
 #quat-legend .lg-item {
   display: flex;
   align-items: center;
@@ -679,7 +770,8 @@ body[data-view="quat"] #quat-legend { display: flex; }
   font-size: 11.5px;
   color: var(--text-dim);
 }
-#quat-legend .lg-dot {
+#quat-legend .lg-dot,
+#quat-legend-proj .lg-dot {
   width: 10px;
   height: 3px;
   border-radius: 2px;
@@ -769,6 +861,7 @@ body[data-view="attitude"] #mag-legend { display: block; }
 /* ==========================================================================
    玻璃盒：算法内部读数块
    ========================================================================== */
+/* 玻璃盒面板：由 body[data-telemetry] 决定是否出现；出现时默认展开（手风琴仍可手动收起） */
 .section-telemetry { display: none; }
 body[data-telemetry="on"] .section-telemetry { display: block; }
 
@@ -838,13 +931,18 @@ body[data-telemetry="on"] .section-telemetry { display: block; }
 #gimbal-overlay,
 .section-gimbal,
 .section-telemetry,
-.section-quat,
-#quat-legend { display: none; }
+.section-quat { display: none; }
 
 body[data-telemetry="on"] .section-telemetry { display: block; }
 
 body[data-view="quat"] #quat-legend { display: flex; }
+body[data-view="quat"] #quat-legend-proj { display: none; }
+body[data-view="quat"][data-quat-mode="proj"] #quat-legend { display: none; }
+body[data-view="quat"][data-quat-mode="proj"] #quat-legend-proj { display: flex; }
 body[data-view="quat"] .section-quat { display: block; }
+/* 四元数视图：保留左上覆盖层容器，但只显示四元数图例（其它读数 chips 与姿态视图无关） */
+body[data-view="quat"] #readout-overlay { display: flex; }
+body[data-view="quat"] #readout-overlay > .ov-chip:not(#quat-legend):not(#quat-legend-proj) { display: none; }
 
 body[data-view="gimbal"] #readout-overlay,
 body[data-view="gimbal"] #charts,
@@ -853,6 +951,9 @@ body[data-view="gimbal"] .section-view,
 body[data-view="gimbal"] .section-telemetry,
 body[data-view="gimbal"] .section-imu,
 body[data-view="gimbal"] .section-algo,
+body[data-view="gimbal"] .section-experiments,
+body[data-view="gimbal"] .section-magcal,
+body[data-view="gimbal"] .section-metrics,
 body[data-view="gimbal"] .section-principles { display: none; }
 
 body[data-view="gimbal"] .section-gimbal { display: block; }
@@ -865,31 +966,335 @@ body[data-view="quat"] .section-view,
 body[data-view="quat"] .section-telemetry,
 body[data-view="quat"] .section-imu,
 body[data-view="quat"] .section-algo,
-body[data-view="quat"] .section-principles,
-body[data-view="quat"] #readout-overlay { display: none; }
+body[data-view="quat"] .section-experiments,
+body[data-view="quat"] .section-magcal,
+body[data-view="quat"] .section-metrics,
+body[data-view="quat"] .section-principles { display: none; }
 
 body[data-view="quat"] .section-quat { display: block; }
+/* 四元数视图：保留左上覆盖层容器，但只显示四元数图例（其它读数 chips 与姿态视图无关） */
+body[data-view="quat"] #readout-overlay { display: flex; }
+body[data-view="quat"] #readout-overlay > .ov-chip:not(#quat-legend):not(#quat-legend-proj) { display: none; }
+
+/* ==========================================================================
+   右侧面板：工具条 + 手风琴（信息密度分层）
+   ========================================================================== */
+.panel-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 2px;
+  flex: none;
+}
+.pt-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  color: var(--text-faint);
+  margin-right: auto;
+}
+.pt-btn {
+  padding: 3px 9px;
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--text-faint);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  transition: color var(--t-fast), border-color var(--t-fast), background var(--t-fast);
+}
+.pt-btn:hover { color: var(--text); border-color: var(--border-strong); background: var(--bg-hover); }
+
+/* 面板标题：整行可点，右侧箭头指示开合 */
+.panel-section > .panel-head { margin: 0; }
+.panel-toggle {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 0;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: 0.04em;
+  background: none;
+  border: 0;
+  text-align: left;
+  cursor: pointer;
+}
+.panel-toggle:hover .ph-title { color: var(--accent); }
+.ph-title { flex: none; transition: color var(--t-fast); }
+.ph-summary {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 10.5px;
+  font-weight: 400;
+  color: var(--text-faint);
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ph-chev {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  margin-right: 2px;
+  border-right: 1.5px solid var(--text-faint);
+  border-bottom: 1.5px solid var(--text-faint);
+  transform: translateY(-2px) rotate(45deg);
+  transition: transform 0.18s ease;
+}
+.panel-section.collapsed .ph-chev { transform: translateY(-1px) rotate(-45deg); }
+.panel-section.collapsed { padding-bottom: 11px; }
+.panel-section.collapsed > .panel-body { display: none; }
+.panel-body { margin-top: 11px; }
+/* 折叠时标题下不再有 11px 空档 */
+.panel-section.collapsed > .panel-head { margin-bottom: 0; }
+
+/* ==========================================================================
+   实验库 / 评测表 / 磁校准（本轮新增面板）
+   ========================================================================== */
+.h2-note {
+  margin-left: auto;
+  font-size: 10.5px;
+  font-weight: 400;
+  color: var(--text-faint);
+  letter-spacing: 0.02em;
+}
+.section-experiments { padding-bottom: 11px; }
+.experiment-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+.exp-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  padding: 7px 9px;
+  font-family: inherit;
+  text-align: left;
+  background: var(--bg-input);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  transition: border-color var(--t-fast), background var(--t-fast);
+}
+.exp-chip:hover { border-color: var(--accent-line); background: var(--bg-hover); }
+.exp-chip.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.exp-name { font-size: 12px; font-weight: 600; }
+.exp-tag {
+  font-size: 10px;
+  color: var(--text-faint);
+  letter-spacing: 0.06em;
+}
+.experiment-note {
+  margin-top: 9px;
+  padding: 8px 10px;
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: var(--text-dim);
+  background: var(--accent-soft);
+  border-left: 3px solid var(--accent-line);
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+}
+.experiment-note b { color: var(--accent); }
+
+.real-mode-note {
+  margin: 0 0 10px;
+  padding: 7px 10px;
+  font-size: 11.5px;
+  line-height: 1.65;
+  color: #ffc9c4;
+  border: 1px solid var(--danger);
+  border-radius: var(--r-sm);
+  background: rgba(248, 81, 73, 0.14);
+}
+
+.metrics-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.metrics-table th,
+.metrics-table td {
+  padding: 4px 5px;
+  border-bottom: 1px solid var(--border);
+  text-align: right;
+  white-space: nowrap;
+}
+.metrics-table th:first-child,
+.metrics-table td:first-child { text-align: left; }
+.metrics-table th {
+  color: var(--text-faint);
+  font-weight: 500;
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+}
+.metrics-table td { color: var(--text-dim); }
+.metrics-table tr.best td { color: var(--ok); }
+.metrics-table tr.ref td { color: var(--text-faint); }
+.m-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 5px;
+  border-radius: 2px;
+  vertical-align: 0;
+}
+
+#magcal-status,
+#magcal-result {
+  width: 100%;
+  margin: 5px 0;
+  font-size: 11px;
+  line-height: 1.65;
+  color: var(--text-dim);
+}
+#magcal-result { color: var(--text-faint); }
+#magcal-result:empty { display: none; }
+
+.footer-keys { font-size: 11px; }
+
+/* 全局提示层：不依附于某个视图的 overlay（姿态/万向节/四元数/文档打开时都能看到） */
+.toast-layer {
+  position: fixed;
+  left: 50%;
+  bottom: 42px;
+  transform: translateX(-50%);
+  z-index: 150;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  pointer-events: none;
+  max-width: min(92vw, 560px);
+}
+.toast-layer .ov-chip {
+  border-color: var(--accent-line);
+  background: #0b1424;
+  text-align: center;
+}
+
+/* 真实模式：模拟控件明确置灰（JS 同时设置 disabled，这里只负责视觉） */
+body[data-imu-mode="real"] .section-scenario input:disabled,
+body[data-imu-mode="real"] .section-scenario select:disabled,
+body[data-imu-mode="real"] .section-imu input:disabled,
+body[data-imu-mode="real"] .section-imu select:disabled,
+body[data-imu-mode="real"] .exp-chip:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+body[data-imu-mode="real"] .section-experiments .hint::before {
+  content: "真实模式下实验库停用 · ";
+  color: var(--warn);
+}
+
+
+/* 4D 投影：累计旋转读数（整行显示，标签不再被挤成竖排） */
+.proj-turn-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 4px 0 8px;
+  padding: 6px 9px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-dim);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+.ptr-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+}
+#proj-turn { color: var(--text); font-variant-numeric: tabular-nums; }
+
+/* 四元数视图：两条路径的量化读数 */
+.quat-arcinfo {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin: 2px 0 8px;
+  padding: 6px 9px;
+  font-size: 11px;
+  color: var(--text-faint);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+.quat-arcinfo b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.quat-arcinfo b.warn { color: var(--warn); }
+
+/* 四元数分量读数：单独一行、不参与 label 的行内换行 */
+.quat-only-extra { display: block; }
+.quat-only-extra label { display: block; }
+#quat-readout {
+  display: block;
+  margin-top: 3px;
+  font-size: 11px;
+  letter-spacing: 0;
+  white-space: nowrap;
+  overflow-x: auto;
+}
 
 /* ==========================================================================
    响应式
    ========================================================================== */
+@media (min-width: 1800px) {
+  /* 大屏给控制台更多宽度：滑块 + 数值 + 步距三列不再挤在一起 */
+  #app-main { grid-template-columns: minmax(0, 1fr) 400px; }
+}
 @media (max-width: 1200px) {
-  #app-main { grid-template-columns: 1fr 330px; }
+  #app-main { grid-template-columns: minmax(0, 1fr) 330px; }
   .slider-row.with-inputs { grid-template-columns: 70px minmax(48px, 1fr) 60px 46px; }
+}
+
+@media (max-width: 600px) {
+  #viewport { height: 52vh; }
+  /* 手机：视图切换独占顶部一行，读数 chips 下移，避免两者叠字 */
+  #view-seg-wrap { top: 8px; left: 10px; right: auto; }
+  #readout-overlay { top: 48px; left: 10px; right: 10px; gap: 4px; }
+  #readout-source,
+  #readout-quat,
+  #readout-imu,
+  #readout-axes,
+  #gravity-legend,
+  #mag-legend { display: none !important; }
+  #readout-overlay .ov-chip { font-size: 11px; padding: 3px 8px; }
+  #view-seg .seg-btn { padding: 3px 8px; font-size: 11px; }
+  #viewport-hint { display: none; }
+  #quat-legend { max-width: 100%; }
 }
 
 @media (max-width: 960px) {
   body {
     overflow: auto;
-    grid-template-rows: auto auto auto auto auto;
+    grid-template-rows: auto auto auto auto;
     height: auto;
     min-height: 100vh;
   }
-  #app-main { grid-template-columns: 1fr; }
+  #app-main { grid-template-columns: minmax(0, 1fr); }
   #viewport { height: 46vh; }
-  #panel { border-left: none; border-top: 1px solid var(--border); }
-  #charts { grid-template-columns: 1fr; grid-template-areas: "att" "err" "imu"; }
+  #panel { border-left: none; border-top: 1px solid var(--border); width: 100%; }
+  .chart-block { flex: 1 1 100%; }
+  .chart-block, .chart-header, .chart-legend { min-width: 0; }
   .title-block h1 span { display: none; }
+  #app-header { flex-wrap: wrap; gap: 8px 12px; padding: 10px 14px; }
+  .header-controls { flex-wrap: wrap; gap: 8px; }
+  #clock { min-width: 0; text-align: left; }
+  #app-footer { flex-wrap: wrap; gap: 4px 14px; }
 }
 
 /* ==========================================================================
@@ -1387,8 +1792,17 @@ body[data-view="quat"] .section-quat { display: block; }
   .doc-page { padding: 24px 22px 70px; }
 }
 @media (max-width: 860px) {
-  #docs-overlay { overflow-y: auto; }
-  .docs-shell { grid-template-columns: 1fr; height: auto; }
+  #docs-overlay { overflow-y: auto; overflow-x: hidden; }
+  .docs-shell { grid-template-columns: minmax(0, 1fr); height: auto; }
+  /* 复位 1280px 断点留下的显式网格位置——否则单列布局会隐式生成第二列（600px 溢出） */
+  .docs-toc, .doc-pages, .docs-chapter-toc { grid-column: auto; grid-row: auto; min-width: 0; }
+  /* 手机/窄屏：模块导航 → 本页目录（横条）→ 正文 */
+  .docs-toc { order: 1; }
+  .docs-chapter-toc { order: 2; }
+  .doc-pages { order: 3; }
+  .doc-pages, .doc-page { max-width: 100%; min-width: 0; }
+  .doc-page { padding: 24px 16px 70px; }
+  .doc-page .formula, .doc-page .mtx, .doc-page .tscroll { max-width: 100%; }
   .docs-toc {
     height: auto;
     flex-direction: row;

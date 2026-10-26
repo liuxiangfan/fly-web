@@ -53,6 +53,22 @@ function remount(v: V3, m: Mounting): V3 {
 /** 固件帧总长（含帧头与 CRC） */
 export const FRAME_LEN = 28;
 
+/** 固件名义帧间隔（200 Hz）——tick 缺失/回绕/异常时的兜底 dt */
+export const NOMINAL_FRAME_MS = 5;
+
+/**
+ * 由相邻两帧的固件 tick（u32 毫秒）求真实积分步长（秒）。
+ * 用固件时间而不是主机到达时间：串口缓冲/浏览器调度会抖动，但 tick 是
+ * 采样时刻的真值；`>>> 0` 处理 u32 回绕（约 49.7 天一圈）。
+ * 异常情况（首帧、回绕后的巨跳、超过 200ms 的空洞）退回名义帧间隔，
+ * 最终夹在 [1ms, 50ms]——坏时间戳不会把滤波器一步推飞。
+ */
+export function frameDtSec(prevTickMs: number, tickMs: number, nominalMs = NOMINAL_FRAME_MS): number {
+  const deltaMs = (tickMs - prevTickMs) >>> 0;
+  const ms = deltaMs > 0 && deltaMs <= 200 ? deltaMs : nominalMs;
+  return Math.min(0.05, Math.max(0.001, ms / 1000));
+}
+
 const le16 = (d: Uint8Array, i: number): number => d[i] | (d[i + 1] << 8);
 const lei16 = (d: Uint8Array, i: number): number => {
   const v = le16(d, i);

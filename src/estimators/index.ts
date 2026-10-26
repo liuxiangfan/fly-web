@@ -260,7 +260,8 @@ export class ComplementaryEstimator implements Estimator {
         accelWeight: wAcc,
         rollAccDeg: rollAcc * (180 / Math.PI),
         pitchAccDeg: pitchAcc * (180 / Math.PI),
-        alignErrorDeg: angleBetweenDeg(this.telemetry.predictedGravity, [ax, ay, az]),
+        // 用本帧预测方向（qGyro），不能读 this.telemetry——那是上一帧的旧值（曾有一帧滞后）
+        alignErrorDeg: angleBetweenDeg(predicted, [ax, ay, az]),
         ...(yawMag !== undefined
           ? { yawMagDeg: yawMag * (180 / Math.PI), magEnabled: 1 }
           : { magEnabled: 0 }),
@@ -479,6 +480,7 @@ export class MadgwickEstimator implements Estimator {
   reset(initial?: Quat): void {
     this.q = initial ? { ...initial } : qId();
     this.age = 0;
+    this.telemetry = emptyTelemetry(); // 与其它估计器一致：重置后不残留上一轮读数
   }
   getParams(): Record<string, number> {
     return { beta: this.beta };
@@ -545,6 +547,12 @@ function obsMatrix(v: V3): number[] {
     sk[6], sk[7], sk[8], 0, 0, 0,
   ];
 }
+
+/** 零偏物理限幅（rad/s）：真实 MEMS 零偏远小于 1 rad/s（≈57°/s），
+ *  限幅只在异常数据/数值发散时兜底，正常教学范围内绝不触发。 */
+const BIAS_LIMIT = 1.0;
+/** 协方差对角线下限：保证 P 永远正定，防止长时间运行后矩阵病态 */
+const P_FLOOR = 1e-12;
 
 export class KalmanEstimator implements Estimator {
   id = "kalman" as const;
@@ -685,19 +693,38 @@ export class KalmanEstimator implements Estimator {
       y: qw * hy - qx * hz + qy * hw + qz * hx,
       z: qw * hz + qx * hy - qy * hx + qz * hw,
     });
-    this.bias = [this.bias[0] + dx[3], this.bias[1] + dx[4], this.bias[2] + dx[5]];
-    // P ← (I − K·H)·P，并对称化（数值稳定）
+    let bx = this.bias[0] + dx[3];
+    let by = this.bias[1] + dx[4];
+    let bz = this.bias[2] + dx[5];
+    // 限幅按**向量模长**（逐分量限幅的模长上限是 √3·LIMIT，仍可能飞出）
+    const bn = Math.hypot(bx, by, bz);
+    if (bn > BIAS_LIMIT) {
+      const k = BIAS_LIMIT / bn;
+      bx *= k;
+      by *= k;
+      bz *= k;
+    }
+    this.bias = [bx, by, bz];
+    // Joseph 形式协方差更新：P ← (I−KH)·P·(I−KH)ᵀ + K·R·Kᵀ
+    // 比教科书简写 (I−KH)·P 多一次转置乘法，但**对任意 K 都保持对称正定**——
+    // 长时间运行、强非线性观测（磁场翻转/门控边界）时不会把 P 推出正定域。
     const KH = matMul(K, H, 6, 3, 6);
     const IKH = new Array<number>(36).fill(0);
     for (let i = 0; i < 6; i++)
       for (let j = 0; j < 6; j++) IKH[i * 6 + j] = (i === j ? 1 : 0) - KH[i * 6 + j];
-    const Pn = matMul(IKH, this.P, 6, 6, 6);
+    const IKHt = matTranspose(IKH, 6, 6);
+    const Pn = matMul(matMul(IKH, this.P, 6, 6, 6), IKHt, 6, 6, 6);
+    // K·R·Kᵀ（R = rVar·I₃）
+    const KR = K.map((v) => v * rVar);
+    const KRKt = matMul(KR, matTranspose(K, 6, 3), 6, 3, 6);
+    for (let i = 0; i < 36; i++) Pn[i] += KRKt[i];
     for (let i = 0; i < 6; i++)
       for (let j = 0; j < i; j++) {
         const avg = (Pn[i * 6 + j] + Pn[j * 6 + i]) / 2;
         Pn[i * 6 + j] = avg;
         Pn[j * 6 + i] = avg;
       }
+    for (let i = 0; i < 6; i++) Pn[i * 6 + i] = Math.max(P_FLOOR, Pn[i * 6 + i]);
     this.P = Pn;
   }
 
@@ -713,5 +740,9 @@ export class KalmanEstimator implements Estimator {
   setParams(p: Record<string, number>): void {
     if (Number.isFinite(p.gyroNoiseDps)) this.gyroNoiseDps = p.gyroNoiseDps;
     if (Number.isFinite(p.obsNoise)) this.obsNoise = p.obsNoise;
+  }
+  /** 协方差矩阵只读快照（自检/诊断用）：验证对称性与正定性 */
+  getCovariance(): number[] {
+    return [...this.P];
   }
 }

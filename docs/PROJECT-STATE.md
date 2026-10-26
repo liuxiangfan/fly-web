@@ -1,7 +1,7 @@
 # 项目状态 · 四元数姿态解算学习演示装置
 
 > **本文件是项目的恢复锚点。** 会话上下文被压缩后，从这里可以快速接续全部关键信息。
-> 最后更新：2026-10-25（真实 IMU 串口接入 + A/B 视觉修复 + 曲线区可折叠面板；自检 60 项）
+> 最后更新：2026-10-26（交互重做轮：面板手风琴、曲线折叠修复、万向环/四元数视图重建、两个新教学模块；自检 80 项 + 冒烟 24 项）
 
 ## 一句话
 
@@ -15,7 +15,7 @@
 
 - Vite + TypeScript（无框架）+ Three.js（three ^0.170）
 - `npm run dev` / `npm run build`（= `tsc --noEmit && vite build` → `dist/`）/ `npm run preview`
-- `npm run check` = `selftest`（Node 数值自检）+ `scenecheck`（Node 下构建真实 three.js 场景图做几何校验），共 60 项
+- `npm run check` = `selftest`（58 项数值）+ `scenecheck`（10 项三维场景几何）+ `htmlcheck`（12 项 HTML↔TS 契约/可访问性/静态资源），共 80 项
 - 诊断脚本：`scripts/diag.ts`（收敛时间线）、`scripts/diag-violent.ts`（剧烈机动复现）
 - 源码改动后必须 `npm run build` 并在浏览器 **Ctrl+F5 强刷**（preview 服务的是构建产物）
 - 部署：`.github/workflows/deploy.yml`（wrangler v4），依赖 GitHub secrets 里的 Cloudflare 凭据
@@ -33,15 +33,22 @@
 | `core/world.ts` | 真实姿态积分 + 姿态跟踪控制器（K=5，ω_max=4.2 rad/s）+ IMU 生成 |
 | `estimators/index.ts` | 五估计器统一 `Estimator` 接口：`update(gyro,accel,mag,dt)` + `reset(initial?)`（initial 缺省=水平；传非单位姿态即「初始姿态偏差」演示）+ `magEnabled` + `telemetry`（rate/rawGyro/correction/predictedGravity/measuredGravity/accelNorm/accelValid/magValid/detail）。Mahony MARG：磁误差 z 分量并入；Madgwick：独立偏航方向分量；互补：`tiltCompensatedYaw`；**KalmanEstimator**：ES-EKF/MEKF（6 维误差状态 [δθ,δb]，重力+磁场观测，40° 新息门控，可估计陀螺仪零偏，参数 Q=gyroNoiseDps / R=obsNoise）。**启动增益 ramp**：互补/Mahony/Madgwick 共用 rampK()——reset 后 2.5s 内修正增益从 6 倍线性衰减（Fusion 同款，只放比例/梯度项），`rampEnabled` 公开供自检 A/B。**加速度计观测门控 accelGate**（同三家）：幅度（‖a‖ 偏 g 超 35%）+ 方向（与预测夹角超 `ACCEL_GATE_DEG=20°`）双层拒绝，ramp 期间关闭（Fusion 语义），被拒帧退化纯积分 |
 | `scene/setup.ts` | 渲染器/相机/灯光/地面/网格/罗盘/主四轴+幻影/万向环架；`toDisplay`、`setView`、`syncVisibility`；玻璃盒双箭头 + 磁航向箭头 + 等效旋转轴箭头 `axisArrow`（青色，`#axis-toggle` 控制） |
-| `core/serial.ts` | 真实 IMU 串口帧解析（纯函数）：CRC8/粘包重同步/安装方向重排/`buildFrame` 测试往返；帧协议见 `firmware/gy87.h` |
-| `firmware/` | STM32F4 + GY-87 固件参考（`gy87.h` 帧规格表；用户自行实现并已验证） |
+| `core/serial.ts` | 真实 IMU 串口帧解析（纯函数）：CRC8/粘包重同步/安装方向重排/`buildFrame` 测试往返；**`frameDtSec` 用固件 tick 差算真实积分步长**（u32 回绕/空洞/1–50 ms 夹紧）；帧协议见 `firmware/gy87.h` 与新增 `firmware/README.md` |
+| `core/magcal.ts` | 磁力计校准纯数学：代数球面拟合（4×4 高斯消元）→ 硬铁球心 + 各轴半极差软铁缩放 + 残差；最少 12 点、三轴覆盖检查；`applyMagCalibration` |
+| `core/stats.ts` | `ErrorTracker`：均值/RMSE/峰值/收敛时刻（连续低于阈值 hold 秒），曲线与评测表同源 |
+| `firmware/` | STM32F4 + GY-87 固件参考：`gy87.h` 帧规格表 + **`README.md` 协议/接线/组帧 CRC 参考/排障表**（用户自行实现并已验证） |
 | `scene/quad.ts` | `buildQuad(ghost, {axes})` 程序化四轴（PBR 质感版）：RoundedBox 亮漆机身+云台球+锥形机臂+电机铃+前后航行灯（前青后红）+桨叶与半透明桨盘；ghost=EdgesGeometry 轮廓线；桨尖径向包络 ≤0.68（scenecheck 穿模断言守护） |
-| `scene/gimbal.ts` | 平衡环架：外环偏航（蓝）→ 中环俯仰（金）→ 内环横滚（绿）；枢轴销连接相邻环；环标签随环转动；环内嵌四轴 scale 1.15 |
-| `scene/quatview.ts` | 四元数视图（球面参考方案）：参考球+赤道环+极轴；Slerp 白 / 欧拉品红双 Tube 弧（r=0.012）+ 滑动 marker；起终点蓝/橙球；中央四轴 0.55 + 机头箭头 + 轴角青箭头；q/−q 并排组（X ±0.95）。`parts.slerpPoints/eulerPoints` 采样点数组供 scenecheck 断言。`SPHERE_RADIUS=0.85`。**4D 立体投影模式**（`projGroup`）：S³ 从南极 (−1,0,0,0) 投影 p=(x,y,z)/(1+w)，赤道 w=0 恰为参考球；青点 q（球内）/品红 −q（球外，倒易 |p(q)|·|p(−q)|=1）/轨迹线/i-j-k 基架/中央姿态四轴；lastDir 方向延续防极点跳变。API：`setInterpolation/setNegation/showNegation/setProjection/showProjection`；parts 增 `projGroup/projQPos/projNegPos` |
+| `scene/gimbal.ts` | 平衡环架（重做）：环带 + 连接轴轴承 + 三根轴向虚线 + 轴端标签 + 载荷组（四轴+机体轴箭头）+ 底座刻度环；`setAngles` 立即 / `setTargetAngles`+`step` 指数阻尼；死锁时环与轴变红 + 环心脉冲环；`parts.axles/axisLabels/payload` 供 scenecheck |
+| `scene/quatview.ts` | 四元数视图（重做）：参考球+赤道环+极轴；Slerp 白 / 欧拉品红双 Tube 弧（r=0.012）+ 滑动 marker；起终点蓝/橙球；中央四轴 0.55 + 机头箭头 + 轴角青箭头；q/−q 并排组（X ±0.95）。`parts.slerpPoints/eulerPoints` 采样点数组供 scenecheck 断言。`SPHERE_RADIUS=0.85`。
+  重做要点：经纬网格球 + 南北极标注、**偏差带**（三角条带，宽度=角距离）、球外两侧起点/终点线框四轴、
+  marker 机头小锥、`setPair`（按姿态对缓存几何）/`setProgress`（每帧零分配，noseLine 就地写顶点）、
+  `arcInfo()` 供面板读数、4D 模式 q 标签切向避让。**4D 立体投影模式**（`projGroup`）：S³ 从南极 (−1,0,0,0) 投影 p=(x,y,z)/(1+w)，赤道 w=0 恰为参考球；青点 q（球内）/品红 −q（球外，倒易 |p(q)|·|p(−q)|=1）/轨迹线/i-j-k 基架/中央姿态四轴；lastDir 方向延续防极点跳变。API：`setInterpolation/setNegation/showNegation/setProjection/showProjection`；parts 增 `projGroup/projQPos/projNegPos` |
 | `scene/labels.ts` | `makeTextSprite(text, color, {size, bold, alwaysOnTop})` 通用文字标签 |
 | `ui/mode.ts` | 视图策略（纯函数）+ `narrateGimbal`；**精简模式已删除** |
-| `ui/chart.ts` | `RollingChart` 手绘 canvas 时序图；系列构造时固定 |
-| `main.ts` | 装配层：500 Hz 定步长仿真（追帧上限 0.25 s）、滑块三件套、视图切换、磁航向箭头、受扰黏性提示（1.5 s）、文档页开关（按钮/Esc）+ 目录 IntersectionObserver 高亮 |
+| `ui/chart.ts` | `RollingChart` 手绘 canvas 时序图；系列构造时固定；起点附近屏外刻度不再绘制 |
+| `ui/experiments.ts` | 实验库纯数据：10 个「参数快照 + 观察要点」（漂移/门控/振动/磁干扰/初始对准/闭环/卡尔曼调参/万向节锁/Slerp/4D） |
+| `ui/b64.ts` | UTF-8 base64url 深链编解码（独立可测，兼容旧链接） |
+| `main.ts` | 装配层：模拟 500 Hz 定步长 + **真实串口帧队列回放（固件 tick dt）**、统一 `state.simTime`、滑块三件套、视图切换、磁航向/轴角箭头、受扰黏性提示、文档页开关 + 目录高亮、实验库/评测表/磁校准/CSV/深链/快捷键 |
 
 ## 关键约定（改代码前必读）
 
@@ -55,6 +62,22 @@
   读数由数值输入框承担，**不要再引入 `<output>`**（曾被批量转换脚本删光，导致 14 个滑块初始化中断）。
 - **事件回调**：不能直接写 `addEventListener("input", stopDemo)`——事件对象会误入 `keepConclusion` 参数，
   必须包一层 `() => stopDemo()`。
+- **时钟**：界面/曲线/统计/静止检测统一用 `state.simTime`（模拟模式 = `world.t`，真实模式按固件 tick 累加）。
+  `world.t` 只用于剧本求值——**不要再用它做 UI 时间**（旧版真实模式因此冻结在 0）。
+- **真实模式数据流**：串口帧先入 `serialState.queue`（上限 128、溢出丢最旧），主循环按 rAF 消费；
+  每帧只更新一次估计器，dt = `frameDtSec(prevTick, tick)`；无帧不推进。模拟控件由
+  `setSimControlsDisabled()` 置灰，`body[data-imu-mode="real"]` 负责视觉。
+- **磁校准**：估计器吃 `magForEstimation(sample.mag)`；`state.lastImu` 保留原始读数供波形面板对照。
+- **图例**：统一由 `buildLegend` 生成 `<button aria-pressed>`；IMU 图例按页签重建（`rebuildImuLegend`），
+  可见性 = 页签掩码 ∧ 用户选择。
+- **曲线折叠**：`chartState` + `layoutCharts()` 单一状态源；布局靠 flex（展开块 `flex:1 1 420px`、
+  折叠块 `order:9; flex-basis:100%`），**不要再写死 grid-template-areas**（旧版就是它造成空洞）。
+- **面板手风琴**：`.panel-section > .panel-head > .panel-toggle` + `.panel-body`；折叠=`.collapsed`；
+  摘要由 `updatePanelSummaries()` 在 2 Hz 块里刷新，`#sum-{key}`。
+- **动画 vs 物理时间**：`dt`（≤50 ms）给仿真，`dtAnim`（≤250 ms）给演示/播放/相机过渡。
+- **快捷键守卫**：input/select/textarea 全让位；button/a 只让位空格。
+- **字体**：`src/fonts.css` 指向 `public/fonts/*.woff2`（自托管子集），不再有 Google Fonts 外链。
+- **SW**：`public/sw.js` 导航 network-first、`/assets/` 与 `/fonts/` cache-first；改策略先改 `CACHE` 版本。
 - **术语**：界面与文档一律用全称「陀螺仪」「加速度计」，不用「陀螺」「加计」简称（用户明确要求）。
 - **图标**：`public/favicon.svg`（四轴俯视 X 机架 + 四色旋翼环 + 机头向量），由 index.html `<link rel=icon>` 引用。
 - **显隐机制**：`body[data-view=attitude|gimbal|quat]` 驱动 CSS（quat 视图隐藏 charts/scenario/view/telemetry/imu/algo/readout）。
@@ -96,6 +119,84 @@
 
 ## 已完成里程碑
 
+- **交互重做 + 3D 模型重建轮**（2026-10-26，用户反馈驱动）：
+  - **曲线折叠真 bug**：旧版 grid 固定 `"att err" / "imu imu"`，收起任一块都留半格空洞，
+    用户只能「同时折叠上面两块」。现改 **flex 换行**：展开块自适应两列、折叠块 `order:9 + flex-basis:100%`
+    沉底成细标题条；`data-open-count` 驱动画布高度（1 块 168px / 2 块 146px / 3 块 128px）；
+    工具条 `cb-chip` 与面板箭头同源（`setChartOpen` 一处改状态）；折叠时标题行显示 `chart-summary` **实时读数**
+    （姿态角：六条曲线当前值；误差：最大/最优；IMU：三轴当前值+单位），收起也不丢信息
+  - **右侧栏密度**：10 个 `panel-section` 全部改**手风琴**（`.panel-toggle` 整行可点 + `aria-expanded`），
+    标题右侧 `ph-summary` **实时摘要**（机动/零偏噪声/MARG 增益/模型来源/最优 RMSE/姿态对/环角），
+    顶部「全部展开 / 全部收起 / 真实 IMU 快捷入口」；默认展开 scenario/algo/metrics/quat/gimbal，
+    收起 experiments/imu/magcal/view/telemetry —— 信息不删，只分层；
+    打开玻璃盒开关会自动展开该分区并滚进视野（旧版开关"看起来没反应"）
+  - **万向环模型重建**：环带（CylinderGeometry 侧壁 + 两侧倒角 Torus 亮边，非细线圆环）+
+    贯穿净空的**连接轴 + 轴承**（scenecheck 断言覆盖 rInner→rOuter）+ 三根**轴向虚线**（随上级转动）+
+    轴端标签「偏航轴 ψ / 俯仰轴 θ / 横滚轴 φ」+ 载荷组（四轴 + 机体轴三箭头）+ 底座刻度环；
+    **指数阻尼跟随** `setTargetAngles`/`step(dt)`（K=14，UI 丝滑，`setAngles` 仍立即生效供自检）；
+    死锁时外/内环 + 两根轴虚线变红 + 环心**脉冲环**；去掉环体文字精灵（死锁时必然叠字，改由轴标签+图例标识）
+  - **四元数视图重建**：参考球加**经纬网格**与南北极标注（「机头朝上/朝下」）；两弧之间加**偏差带**
+    （三角条带，宽度=角距离）；起点/终点**线框四轴**移到球外两侧展示位；marker 加机头小锥；
+    `setPair`（几何按姿态对缓存）+ `setProgress`（每帧只移动 marker，noseLine 就地写顶点）——
+    修掉旧版「每帧重建 TubeGeometry」的卡顿；面板 `#quat-arcinfo` 显示端点转角/欧拉路径累计/中点分叉；
+    4D 投影模式独立图例（`body[data-quat-mode]` 驱动）+ q 标签在球面上时切向避让 i/j/k
+  - **动画/物理时间轴分离**：`dt`（≤50ms，物理）与 `dtAnim`（≤250ms，动画）；旧版用 dt 驱动
+    万向节演示，低帧率下 14 秒演示播成 28 秒（实测抓到）
+  - **快捷键守卫分级**：input/select/textarea 全部让位；button/a 只让位空格——
+    修「文档返回后焦点在『文档』按钮上，1/2/3 全失灵」
+  - 离开四元数视图自动停止插值播放（不再后台空烧 CPU + 进度偷偷走远）
+  - **文档**：新增「四元数的四种直觉」（轴+半角/乘法=复合/双重覆盖/姿态可测 + 对照表）、
+    「卡尔曼滤波的三层直觉」（两台秤/协方差椭圆/误差状态 ESKF）、「怎么读这张图：五条曲线的诊断手册」
+    （9 条症状→病因→复现）；手册补手风琴、曲线折叠、环架结构、死锁可视化、4D 投影按钮、弧线读数
+  - **测试**：冒烟扩到 24 项（新增曲线三态无空洞、面板手风琴、四元数弧线读数、万向节阻尼+死锁可视化）；
+    scenecheck 改「轴标签层级与方向」（轴上一点绕自身轴转动本就不动——旧断言数学上错，已纠正）
+  - **使用者视角全量实测**（本轮收尾）：
+    · 三视图 × 面板全展开：无横向溢出（panel scrollW 351 ≤ clientW 351）
+    · 25 个滑块：写入落在步距格点、数值框同步、越界自动夹紧（上限/下限各测一次）
+    · 16 个开关/下拉：全部可切换；`magcal-apply` 未校准时正确禁用、拟合后自动启用
+    · 文档 7 页（manual/math/filters + 4 个推导页）：全部可打开、章节锚点零断链、每页都有目录（9/17/7/4/5/5/7 条）、无横向溢出
+    · 三个新模块在位：四元数直觉（4 公式 1 表 2537 字）、卡尔曼直觉（3 公式 1 表 2139 字）、曲线诊断（1 表 1751 字）
+    · Esc 关闭文档 + 焦点恢复 btn-docs
+    · 七种分辨率（390/768/1024/1280/1440/1920/2560）：无横向溢出、画布尺寸正常、可见 chips 互不重叠、控制台零错误
+  - 验证：tsc/check(80)/build 全绿；`npm run smoke` 24 项全 PASS（连跑 3 次稳定）；七分辨率截图复核
+
+- **全面优化轮**（2026-10-26，底层数值 → 应用交互 → 文档/测试全链路）：
+  - **真实串口模式重做**：旧版用 500 Hz 主循环反复积分同一帧（把 200 Hz 数据当 500 Hz，
+    且 `world.t` 不前进 → 曲线全挤在 t=0、时钟冻结、静止对准冷却失效）。现改为
+    **帧队列 + 固件 tick 差 dt**（`frameDtSec`，u32 回绕/空洞/夹紧）+ 独立 `state.simTime`；
+    主循环真实模式按 rAF 消化队列（每次最多 64 帧），断流不再空转；状态行显示帧率/dt/seq 丢帧/积压丢弃；
+    1.5 s 断流看门狗；进入真实模式明确置灰模拟控件并显示红色说明条；断线/重连重置队列与时钟
+  - **数值层**：`qIntegrate` 改**精确指数映射**（大步长/低采样率不再有缩放误差）；
+    `qAngleBetween` 改相对四元数 atan2（零角分辨率从 ~1e-6° 提升到 1e-15 量级，端点断言不再受 acos 限制）；
+    `qToAxisAngle` 夹紧 w；`qSlerp` 端点精确返回输入（含符号）；Kalman 改 **Joseph 形式**协方差更新 +
+    向量模长零偏限幅 + 协方差对角下限；互补遥测对齐差改用本帧预测（修一帧滞后）；Madgwick reset 清遥测
+  - **磁力计校准（真实可用）**：`core/magcal.ts` 球拟合（硬铁球心 + 对角软铁 + 残差/覆盖度检查），
+    面板支持「模拟数据自动采集 / 真实串口实时采集 / 拟合并应用 / 旁路」；新增**硬铁偏移滑块**（旧版只在 ImuParams 里）
+  - **评测表**：`ErrorTracker` 统计当前/均值/RMSE/峰值/收敛时刻；A/B 时 B 组单独统计；最优 RMSE 高亮
+    （真实模式 Mahony 为基准不参评）；修正旧写法「dt 累加在 10 Hz UI 块」导致刷新慢 6 倍
+  - **实验库**：10 个数据驱动实验（`ui/experiments.ts`），一键应用参数/开关/视图并显示观察要点；
+    真实模式停用；沙盒复用同一套 setter
+  - **观测门控开关**：`#gate-toggle` 公开三家融合算法的幅度+方向门控，便于当场 A/B
+  - **CSV 导出**：25 Hz 全量姿态/误差 + 参数注释头；UTF-8 BOM 兼容 Excel
+  - **IMU 图例**：`#imu-legend` 旧版从未填充（图上有 6 条线、图例空白）；现按页签生成 3 实测 + 3 真值芯片、
+    数值读数、键盘可达（图例统一改 `<button aria-pressed>`）
+  - **四元数读数**：`#quat-readout` 所在行旧版带 `hidden` 永久不可见——已恢复；进入四元数视图按当前模式
+    初始化内部演示组（修「深链设了 proj 但切视图不显示」）
+  - **深链 v2**：UTF-8 base64url（`ui/b64.ts`）+ 视图状态 + 硬铁/门控 + **曲线开合与面板收起列表**；兼容 v1 旧链接；
+    插值播放时不写 hash（避免 10 Hz replaceState）；quat-mode 在后台切换不再抢相机
+  - **可访问性**：滑杆 aria-label/aria-valuetext（JS 自动从 label 注入）、canvas role/aria-label、
+    图表 tablist/aria-selected、图例按钮化、文档 `role=dialog aria-modal` + 焦点进入/循环/恢复、
+    折叠按钮 aria-label、页脚快捷键提示
+  - **字体/PWA**：Fira Sans/Code latin/greek/latin-ext/symbols 子集自托管到 `public/fonts`（13 个 woff2，
+    删 Google Fonts 外链）；PNG 192/512 + apple-touch-icon（`npm run icons`）；SW 改 **导航 network-first**
+    （修「部署后旧页面必须手清缓存」）、hash 资产 cache-first、其余 SWR
+  - **构建/测试**：`vite.config.ts` 拆 three vendor chunk；新增 `scripts/htmlcheck.ts`（parse5：id 唯一、
+    JS 引用存在、滑块三件套、canvas 可访问性、锚点/折叠/实验库控件契约）；selftest +8 项
+    （精确积分/夹角全区间/统计器/磁拟合/帧时钟/base64url/Kalman 协方差/实验库）；共 **80 项**
+  - **浏览器冒烟**：新增 `scripts/browser-smoke.mjs`（puppeteer-core + 本机 Edge headless，`npm run smoke`）——
+    覆盖真 rAF 仿真推进/WebGL/评测统计/实验库/磁校准/四元数图例/文档焦点/A/B/CSV/深链/快捷键/
+    窄屏无溢出/**假 Web Serial 端口端到端**（帧时钟、真实模式控件停用、断开恢复），共 20 项
+  - 验证：tsc/check/build 全绿；`npm run smoke` 20 项全 PASS（控制台零错误）
 - **A/B 视觉修复 + 曲线区可折叠**（2026-10-25，用户反馈驱动）：
   - 用户报「B 组颜色不对/纯积分 B 取消不掉/卡尔曼 B 不存在」——排查实为**视觉假象**：B 是 A 的参数克隆，
     未改参数时五对曲线逐点重合（纯积分 B 取消后红色 A 实线仍在原地、卡尔曼 B 被 A 完全遮挡）。
@@ -277,10 +378,12 @@
 
 ## 验证体系
 
-- `npx tsc --noEmit` → `npm run check`（60 项全 PASS）→ `npm run build`
+- `npx tsc --noEmit` → `npm run check`（80 项全 PASS）→ `npm run build` → `npm run smoke`（20 项浏览器端到端，需 preview）
 - `selftest` 覆盖：欧拉↔四元数往返、无零偏不漂、零偏线性漂移、抗扰、动态跟踪、剧本切换、
   万向环链条≡主视图、死锁判定、演示全相位、锁定态等价、磁力计（含参数全零守护）、
   轴角双覆盖（qToAxisAngle 对 q 与 −q 恒等）、欧拉插值端点与区分度
+- `htmlcheck`（parse5）校验：id 唯一、JS `$()/getElementById` 引用全部存在、25 个滑块三件套齐全、
+  canvas 全有 aria-label、文档锚点/折叠按钮/实验库引用的控件与选项全部命中
 - `scenecheck` 校验：内环姿态≡toDisplay（3.9e-16）、环面含自转轴、枢轴销连通、间隙不穿模、
   四轴不穿出内环、死锁轴重合、轴/环标签、四元数视图弧线端点与采样点数组、q/−q 恒等
 - UI 改动后浏览器截图确认 + 控制台零错误
@@ -339,3 +442,10 @@
 - `vite preview` 服务的是 `dist/`，改源码不重新构建就不会生效；4173 被旧进程占用时会自动换 4174，
   浏览器测试以实际输出端口为准。
 - GitHub 直连间歇性中断：push 失败多重试或稍后再推。
+- **测试环境 IAB 后台标签页 `document.hidden=true` 时 rAF 停摆**：仿真/曲线/时钟全部冻结（页面本身正常，
+  用户切到前台即恢复）。浏览器验收优先用前台标签或 Node 侧 scenecheck/selftest 补位；不要误判为代码 bug。
+- **定期刷新类 UI 不要用「帧 dt 累加」**：它们只在 10 Hz UI 块里收到一帧 dt，累计速度慢 6 倍；
+  用墙钟（`now - lastAt >= 500`）驱动评测表/校准面板刷新。
+- **字体子集**：`src/fonts.css` 的 13 个文件由 Google Fonts CSS 生成；改动字体族/字重时重新生成并保持
+  `unicode-range`，否则中文会整段回退（可接受）或希腊字母失效（不可接受）。
+- **SW 更新**：导航 network-first 才能保证部署后一次刷新生效；若改成 cache-first 必须同步提升 CACHE 版本。

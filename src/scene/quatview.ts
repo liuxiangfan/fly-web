@@ -37,16 +37,24 @@ export const SPHERE_RADIUS = 0.85;
 export const PROJ_RADIUS = 0.62;
 /** 参考向量：机头方向（NED +X）。弧线 = 该向量末端在球面上的轨迹 */
 const REF_VEC: [number, number, number] = [1, 0, 0];
+const ARC_SAMPLES = 72;
 
 export interface QuatViewRig {
   group: THREE.Group;
   /** 插值演示的当前姿态四轴（由 t 驱动） */
   quad: QuadModel;
   /**
-   * 设置插值演示：姿态对（NED 欧拉角，度）与进度 t。
-   * 重建两条弧线几何、移动当前四轴到插值姿态、更新轴角箭头与滑动 marker。
+   * 设置姿态对并重建轨迹几何（**只在姿态对变化时调用**）。
    * path（四关键帧 [p0,p1=from,p2=to,p3]）缺省时不画 Squad 弧；提供时额外采样 Squad。
    */
+  setPair(
+    fromDeg: [number, number, number],
+    toDeg: [number, number, number],
+    path?: Array<[number, number, number]>,
+  ): void;
+  /** 只更新进度 t（轻量：移动 marker/四轴/轴角箭头，不重建几何） */
+  setProgress(t: number): void;
+  /** 兼容旧 API：设置姿态对 + 进度（内部会判断是否需要重建） */
   setInterpolation(
     fromDeg: [number, number, number],
     toDeg: [number, number, number],
@@ -63,6 +71,8 @@ export interface QuatViewRig {
   clearProjectionTrails(): void;
   /** 切换 4D 投影组与其它组的可见性 */
   showProjection(show: boolean): void;
+  /** 当前进度与弧长信息（面板读数用） */
+  arcInfo(): { t: number; slerpDeg: number; eulerDeg: number; deviationDeg: number };
   /** 供 scenecheck 检视的内部结构 */
   parts: {
     interpGroup: THREE.Group;
@@ -80,19 +90,110 @@ export interface QuatViewRig {
     /** 4D 投影：q 与 −q 的投影位置（显示坐标），供 scenecheck 断言 */
     projQPos: THREE.Vector3;
     projNegPos: THREE.Vector3;
+    /** 起点/终点姿态的线框四轴（让「插的是姿态，不是箭头」一眼可见） */
+    ghostFrom: QuadModel;
+    ghostTo: QuadModel;
   };
 }
 
 const SLERP_COLOR = 0xf1f5f9; // 白 = 理想路径（大圆）
 const EULER_COLOR = 0xe879f9; // 品红 = 欧拉插值（扭曲线）
-const ARC_SAMPLES = 64;
+const SQUAD_COLOR = 0xf0c674; // 琥珀 = Squad 多关键帧
+const DEVIATION_COLOR = 0x7f5af0; // 偏差带
+
+// ---------------- 内部工具 ----------------
+
+function clamp01(v: number): number {
+  return Math.min(1, Math.max(0, v));
+}
+
+/** NED 欧拉角（度）→ NED 四元数 */
+function quatFromEulerDeg(d: [number, number, number]): Quat {
+  const k = Math.PI / 180;
+  return qFromEuler(d[0] * k, d[1] * k, d[2] * k);
+}
+
+/** NED 世界系向量 → 显示坐标系 three.js 向量 */
+function vecToDisplay(v: [number, number, number]): THREE.Vector3 {
+  const d = toDisplayVec(v);
+  return new THREE.Vector3(d[0], d[1], d[2]);
+}
+
+/** 把 NED 四元数应用到 three.js 组（S·q·S⁻¹ 基变换） */
+function applyDisplayQuat(g: THREE.Object3D, qNed: Quat): void {
+  const r = toDisplayQ(qNed);
+  g.quaternion.set(r.x, r.y, r.z, r.w);
+}
+
+/** 参考球上的经纬网格线（比贴图便宜、比实心球清楚） */
+function buildSphereGrid(radius: number, color: number, opacity: number): THREE.LineSegments {
+  const pts: number[] = [];
+  const seg = 72;
+  // 纬线：每 30°，赤道单独加亮（另建）
+  for (let lat = -60; lat <= 60; lat += 30) {
+    const phi = (lat * Math.PI) / 180;
+    const r = Math.cos(phi) * radius;
+    const y = Math.sin(phi) * radius;
+    for (let i = 0; i < seg; i++) {
+      const a0 = (i / seg) * Math.PI * 2;
+      const a1 = ((i + 1) / seg) * Math.PI * 2;
+      pts.push(Math.cos(a0) * r, y, Math.sin(a0) * r, Math.cos(a1) * r, y, Math.sin(a1) * r);
+    }
+  }
+  // 经线：每 45°
+  for (let lon = 0; lon < 180; lon += 45) {
+    const th = (lon * Math.PI) / 180;
+    for (let i = 0; i < seg / 2; i++) {
+      const p0 = (i / (seg / 2)) * Math.PI * 2 - Math.PI / 2;
+      const p1 = ((i + 1) / (seg / 2)) * Math.PI * 2 - Math.PI / 2;
+      pts.push(
+        Math.cos(p0) * Math.cos(th) * radius, Math.sin(p0) * radius, Math.cos(p0) * Math.sin(th) * radius,
+        Math.cos(p1) * Math.cos(th) * radius, Math.sin(p1) * radius, Math.cos(p1) * Math.sin(th) * radius,
+      );
+    }
+  }
+  const geom = new THREE.BufferGeometry();
+  geom.setAttribute("position", new THREE.Float32BufferAttribute(pts, 3));
+  return new THREE.LineSegments(
+    geom,
+    new THREE.LineBasicMaterial({ color, transparent: true, opacity, depthWrite: false }),
+  );
+}
+
+/** 采样一条弧（NED 四元数序列 → 显示坐标点） */
+function sampleArc(quats: Quat[], radius: number, out: THREE.Vector3[]): void {
+  out.length = 0;
+  for (const q of quats) out.push(vecToDisplay(qRot(q, REF_VEC)).multiplyScalar(radius));
+}
+
+/** 两条弧之间的「偏差带」：三角形条带，宽度 = 两条路径在该处的角距离 */
+function buildDeviationRibbon(a: THREE.Vector3[], b: THREE.Vector3[]): THREE.BufferGeometry {
+  const n = Math.min(a.length, b.length);
+  const pos: number[] = [];
+  const idx: number[] = [];
+  for (let i = 0; i < n; i++) {
+    pos.push(a[i].x, a[i].y, a[i].z);
+    pos.push(b[i].x, b[i].y, b[i].z);
+  }
+  for (let i = 0; i < n - 1; i++) {
+    const k = i * 2;
+    idx.push(k, k + 1, k + 2, k + 1, k + 3, k + 2);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  return g;
+}
 
 /**
- * 四元数可视化视图（球面参考方案）：
- *  - 半透明参考球：插值轨迹贴着球面走，「旋转路径在球面上」一眼可读
- *  - Slerp（白管）/欧拉（品红管）两条管状弧 + 起终点小球 + 双滑动 marker
- *  - 中央实体四轴（缩小）+ 机头向量箭头 + 轴角箭头
- *  - q−q 并排组：两个四轴沿 X 轴偏移，姿态恒等（双覆盖可视化）
+ * 四元数可视化视图（重做版）：
+ *  - 参考球 = S² 上的机头方向空间（经纬网格 + 高亮赤道 + 极点标记）
+ *  - 白色 Slerp 弧 = 旋转群上的大圆；品红欧拉弧 = 欧拉角逐分量插值的扭曲线
+ *  - 两弧之间铺一层半透明**偏差带**：分叉多少一眼可量（角距离）
+ *  - 起点/终点各一个**线框四轴**，插值的是姿态本身而不是一个点
+ *  - 滑动 marker 带一个机头小锥，指示「此刻机头指向」
+ *  - 中心轴角箭头 = 当前姿态的等效旋转轴（与姿态视图的青色箭头同源）
  */
 export function buildQuatView(): QuatViewRig {
   const group = new THREE.Group();
@@ -101,92 +202,137 @@ export function buildQuatView(): QuatViewRig {
   const interpGroup = new THREE.Group();
   group.add(interpGroup);
 
-  // 参考球：低透明度球面 + 赤道环 + 极轴
+  // 球面：极淡的实心壳（提供体积感）+ 经纬网格（提供读数参考）
   const sphereMat = new THREE.MeshBasicMaterial({
-    color: 0x2a3b5e,
+    color: 0x1b2b47,
     transparent: true,
-    opacity: 0.1,
+    opacity: 0.16,
     depthWrite: false,
+    side: THREE.FrontSide,
   });
   const sphere = new THREE.Mesh(new THREE.SphereGeometry(SPHERE_RADIUS, 48, 32), sphereMat);
   interpGroup.add(sphere);
-  const equator = new THREE.Mesh(
-    new THREE.TorusGeometry(SPHERE_RADIUS, 0.005, 8, 96),
-    new THREE.MeshBasicMaterial({ color: 0x3d5080, transparent: true, opacity: 0.35 }),
-  );
-  equator.rotation.x = Math.PI / 2; // 赤道环放平（XZ 平面）
-  interpGroup.add(equator);
-  const polarAxis = new THREE.Line(
-    new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(0, -SPHERE_RADIUS, 0),
-      new THREE.Vector3(0, SPHERE_RADIUS, 0),
-    ]),
-    new THREE.LineBasicMaterial({ color: 0x3d5080, transparent: true, opacity: 0.3 }),
-  );
-  interpGroup.add(polarAxis);
+  const grid = buildSphereGrid(SPHERE_RADIUS, 0x33507a, 0.5);
+  interpGroup.add(grid);
 
-  // 起点（蓝球）/ 终点（橙球）标记
+  // 赤道（机头水平方向集合）加亮
+  const equator = new THREE.Mesh(
+    new THREE.TorusGeometry(SPHERE_RADIUS, 0.006, 8, 128),
+    new THREE.MeshBasicMaterial({ color: 0x4c6f9f, transparent: true, opacity: 0.55 }),
+  );
+  equator.rotation.x = Math.PI / 2;
+  interpGroup.add(equator);
+
+  // 极点：北极 = 机头朝上（俯仰 +90°），南极 = 朝下
+  const poleMat = new THREE.MeshBasicMaterial({ color: 0x6f8bb5 });
+  for (const [y, label] of [[1, "机头朝上"], [-1, "机头朝下"]] as Array<[number, string]>) {
+    const dot = new THREE.Mesh(new THREE.SphereGeometry(0.016, 10, 8), poleMat);
+    dot.position.set(0, y * SPHERE_RADIUS, 0);
+    interpGroup.add(dot);
+    const l = makeTextSprite(label, "#6f8bb5", { size: 0.075, bold: false });
+    l.position.set(0, y * (SPHERE_RADIUS + 0.075), 0);
+    interpGroup.add(l);
+  }
+
+  // 起点/终点标记球
   const startMarker = new THREE.Mesh(
-    new THREE.SphereGeometry(0.045, 16, 12),
+    new THREE.SphereGeometry(0.038, 16, 12),
     new THREE.MeshBasicMaterial({ color: 0x58a6ff }),
   );
   const endMarker = new THREE.Mesh(
-    new THREE.SphereGeometry(0.045, 16, 12),
+    new THREE.SphereGeometry(0.038, 16, 12),
     new THREE.MeshBasicMaterial({ color: 0xffa657 }),
   );
   interpGroup.add(startMarker, endMarker);
 
-  // 两条管状弧（TubeGeometry 由 setInterpolation 重建）
-  const slerpLine = new THREE.Mesh(
-    new THREE.BufferGeometry(),
+  // 起点/终点姿态的线框四轴：**放在球外两侧的「姿态展示位」**，
+  // 不压在球面上（旧版贴 0.62R 处，和弧线、网格混在一起像噪点）
+  const ghostFrom = buildQuad(true, { axes: false });
+  const ghostTo = buildQuad(true, { axes: false });
+  ghostFrom.group.scale.setScalar(0.46);
+  ghostTo.group.scale.setScalar(0.46);
+  ghostFrom.group.position.set(-1.12, 0.3, 0);
+  ghostTo.group.position.set(1.12, 0.3, 0);
+  interpGroup.add(ghostFrom.group, ghostTo.group);
+  const ghostFromLabel = makeTextSprite("起点姿态", "#8fb8d8", { size: 0.1, bold: false });
+  ghostFromLabel.position.set(-1.12, -0.24, 0);
+  const ghostToLabel = makeTextSprite("终点姿态", "#e0bc80", { size: 0.1, bold: false });
+  ghostToLabel.position.set(1.12, -0.24, 0);
+  interpGroup.add(ghostFromLabel, ghostToLabel);
+
+  // 两条管状弧
+  const makeTubeMat = (color: number, emissiveScale: number): THREE.MeshStandardMaterial =>
     new THREE.MeshStandardMaterial({
-      color: SLERP_COLOR,
-      emissive: new THREE.Color(SLERP_COLOR).multiplyScalar(0.35),
-      roughness: 0.4,
-    }),
-  );
-  const eulerLine = new THREE.Mesh(
-    new THREE.BufferGeometry(),
-    new THREE.MeshStandardMaterial({
-      color: EULER_COLOR,
-      emissive: new THREE.Color(EULER_COLOR).multiplyScalar(0.35),
-      roughness: 0.4,
-    }),
-  );
-  // Squad 弧（琥珀，仅四关键帧预设显示）：多关键帧的 C¹ 光滑插值对照组
-  const SQUAD_COLOR = 0xf0c674;
-  const squadLine = new THREE.Mesh(
-    new THREE.BufferGeometry(),
-    new THREE.MeshStandardMaterial({
-      color: SQUAD_COLOR,
-      emissive: new THREE.Color(SQUAD_COLOR).multiplyScalar(0.35),
-      roughness: 0.4,
-    }),
-  );
+      color,
+      emissive: new THREE.Color(color).multiplyScalar(emissiveScale),
+      roughness: 0.35,
+      metalness: 0.1,
+    });
+  const slerpLine = new THREE.Mesh(new THREE.BufferGeometry(), makeTubeMat(SLERP_COLOR, 0.4));
+  const eulerLine = new THREE.Mesh(new THREE.BufferGeometry(), makeTubeMat(EULER_COLOR, 0.45));
+  const squadLine = new THREE.Mesh(new THREE.BufferGeometry(), makeTubeMat(SQUAD_COLOR, 0.4));
   squadLine.visible = false;
   interpGroup.add(slerpLine, eulerLine, squadLine);
 
-  // 双滑动 marker：白球沿 Slerp 弧、品红球沿欧拉弧
-  const slerpMarker = new THREE.Mesh(
-    new THREE.SphereGeometry(0.035, 16, 12),
-    new THREE.MeshBasicMaterial({ color: 0xffffff }),
+  // 偏差带：两条弧之间的半透明面，宽度 = 该处的角差
+  const ribbon = new THREE.Mesh(
+    new THREE.BufferGeometry(),
+    new THREE.MeshBasicMaterial({
+      color: DEVIATION_COLOR,
+      transparent: true,
+      opacity: 0.16,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    }),
   );
-  const eulerMarker = new THREE.Mesh(
-    new THREE.SphereGeometry(0.035, 16, 12),
-    new THREE.MeshBasicMaterial({ color: 0xe879f9 }),
-  );
-  interpGroup.add(slerpMarker, eulerMarker);
+  interpGroup.add(ribbon);
 
-  // 当前姿态四轴（实体，缩小避免遮挡球体）
+  // 双滑动 marker：白球沿 Slerp、品红球沿欧拉；各带一个机头小锥
+  const makeMarker = (color: number): { ball: THREE.Mesh; cone: THREE.Mesh; group: THREE.Group } => {
+    const g = new THREE.Group();
+    const ball = new THREE.Mesh(
+      new THREE.SphereGeometry(0.028, 16, 12),
+      new THREE.MeshBasicMaterial({ color }),
+    );
+    const cone = new THREE.Mesh(
+      new THREE.ConeGeometry(0.022, 0.075, 14),
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9 }),
+    );
+    // ConeGeometry 的轴是 +Y，转到 +Z 后用 lookAt 对准球心→外侧方向
+    cone.rotation.x = Math.PI / 2;
+    cone.position.z = 0.05;
+    g.add(ball, cone);
+    return { ball, cone, group: g };
+  };
+  const slerpMarker = makeMarker(0xffffff);
+  const eulerMarker = makeMarker(EULER_COLOR);
+  interpGroup.add(slerpMarker.group, eulerMarker.group);
+
+  // 中心：当前姿态四轴
   const quad = buildQuad(false, { axes: false });
-  quad.group.scale.setScalar(0.55);
+  quad.group.scale.setScalar(0.5);
   interpGroup.add(quad.group);
+
+  // 中心→marker 的机头向量（细线，强化「弧线是机头尖端轨迹」）。
+  // 位置属性**复用**：播放时每帧只改两个顶点，不再 dispose/新建几何
+  const noseGeom = new THREE.BufferGeometry();
+  noseGeom.setAttribute("position", new THREE.Float32BufferAttribute(new Float32Array(6), 3));
+  const noseLine = new THREE.Line(
+    noseGeom,
+    new THREE.LineBasicMaterial({ color: 0x9fb4d0, transparent: true, opacity: 0.5 }),
+  );
+  interpGroup.add(noseLine);
 
   // 轴角箭头
   const axisArrow = new THREE.ArrowHelper(
     new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, 0), 0.85, 0x22d3ee, 0.1, 0.06,
   );
   interpGroup.add(axisArrow);
+
+  // 弧线标签（固定在弧中点外侧）
+  const slerpLabel = makeTextSprite("Slerp", "#dfe8f5", { size: 0.085, bold: false });
+  const eulerLabel = makeTextSprite("欧拉插值", "#f0a6e8", { size: 0.085, bold: false });
+  interpGroup.add(slerpLabel, eulerLabel);
 
   // ---------------- q 与 −q 组 ----------------
   const negGroup = new THREE.Group();
@@ -197,17 +343,19 @@ export function buildQuatView(): QuatViewRig {
   negA.group.position.x = -0.95;
   negB.group.position.x = 0.95;
   negGroup.add(negA.group, negB.group);
-  const labelA = makeTextSprite("q", "#8dbdf0", { size: 0.26 });
-  const labelB = makeTextSprite("−q", "#e0bc80", { size: 0.26 });
-  labelA.position.set(-0.95, 0.52, 0);
-  labelB.position.set(0.95, 0.52, 0);
+  const labelA = makeTextSprite("q", "#8dbdf0", { size: 0.22 });
+  const labelB = makeTextSprite("−q", "#e0bc80", { size: 0.22 });
+  labelA.position.set(-0.95, 0.5, 0);
+  labelB.position.set(0.95, 0.5, 0);
   negGroup.add(labelA, labelB);
-  // 两个并排姿态之间画一条「姿态相同」的提示虚线
   const tie = new THREE.Line(
-    new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(-0.55, 0.25, 0), new THREE.Vector3(0.55, 0.25, 0)]),
+    new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(-0.55, 0.24, 0), new THREE.Vector3(0.55, 0.24, 0)]),
     new THREE.LineBasicMaterial({ color: 0x3d5080, transparent: true, opacity: 0.5 }),
   );
   negGroup.add(tie);
+  const sameLabel = makeTextSprite("同一姿态", "#7b8aa3", { size: 0.09, bold: false });
+  sameLabel.position.set(0, 0.36, 0);
+  negGroup.add(sameLabel);
 
   const slerpPoints: THREE.Vector3[] = [];
   const eulerPoints: THREE.Vector3[] = [];
@@ -222,13 +370,14 @@ export function buildQuatView(): QuatViewRig {
   group.add(projGroup);
 
   const projSphereMat = new THREE.MeshBasicMaterial({
-    color: 0x2a3b5e, transparent: true, opacity: 0.1, depthWrite: false,
+    color: 0x1b2b47, transparent: true, opacity: 0.14, depthWrite: false,
   });
   const projSphere = new THREE.Mesh(new THREE.SphereGeometry(PROJ_RADIUS, 48, 32), projSphereMat);
   projGroup.add(projSphere);
+  projGroup.add(buildSphereGrid(PROJ_RADIUS, 0x33507a, 0.42));
   const projEquator = new THREE.Mesh(
-    new THREE.TorusGeometry(PROJ_RADIUS, 0.006, 8, 96),
-    new THREE.MeshBasicMaterial({ color: 0x3d5080, transparent: true, opacity: 0.4 }),
+    new THREE.TorusGeometry(PROJ_RADIUS, 0.007, 8, 128),
+    new THREE.MeshBasicMaterial({ color: 0x4c6f9f, transparent: true, opacity: 0.6 }),
   );
   projEquator.rotation.x = Math.PI / 2;
   projGroup.add(projEquator);
@@ -239,7 +388,7 @@ export function buildQuatView(): QuatViewRig {
   const project4d = (w: number, x: number, y: number, z: number): THREE.Vector3 => {
     const n = Math.hypot(x, y, z);
     if (n > 1e-9) lastDir = [x / n, y / n, z / n];
-    else lastDir = [1, 0, 0]; // 恰在极点（单位/负单位姿态）：钳制方向规范化——重置后 −q 落点永远一致
+    else lastDir = [1, 0, 0]; // 恰在极点：方向规范化——重置后 −q 落点永远一致
     const dir = lastDir;
     const denom = 1 + w; // 南极 w=−1 为投影极点
     const len = denom < 1e-6 ? Infinity : n / denom;
@@ -249,10 +398,10 @@ export function buildQuatView(): QuatViewRig {
 
   // q（青）/ −q（品红）标记与连线
   const projQ = new THREE.Mesh(
-    new THREE.SphereGeometry(0.05, 16, 12), new THREE.MeshBasicMaterial({ color: 0x22d3ee }),
+    new THREE.SphereGeometry(0.042, 18, 14), new THREE.MeshBasicMaterial({ color: 0x22d3ee }),
   );
   const projNeg = new THREE.Mesh(
-    new THREE.SphereGeometry(0.05, 16, 12), new THREE.MeshBasicMaterial({ color: 0xe879f9 }),
+    new THREE.SphereGeometry(0.042, 18, 14), new THREE.MeshBasicMaterial({ color: 0xe879f9 }),
   );
   projGroup.add(projQ, projNeg);
   const projTie = new THREE.Line(
@@ -260,15 +409,15 @@ export function buildQuatView(): QuatViewRig {
     new THREE.LineBasicMaterial({ color: 0x546a99, transparent: true, opacity: 0.55 }),
   );
   projGroup.add(projTie);
-  const projLabelQ = makeTextSprite("q", "#7fe3f5", { size: 0.22 });
-  const projLabelNeg = makeTextSprite("−q", "#f0a6e8", { size: 0.22 });
+  const projLabelQ = makeTextSprite("q", "#7fe3f5", { size: 0.18 });
+  const projLabelNeg = makeTextSprite("−q", "#f0a6e8", { size: 0.18 });
   projGroup.add(projLabelQ, projLabelNeg);
 
   // 轨迹：q 投影点走过的路径（青色细线，最近 240 点）
   const projTrailPts: THREE.Vector3[] = [];
   const projTrail = new THREE.Line(
     new THREE.BufferGeometry(),
-    new THREE.LineBasicMaterial({ color: 0x22d3ee, transparent: true, opacity: 0.4 }),
+    new THREE.LineBasicMaterial({ color: 0x22d3ee, transparent: true, opacity: 0.45 }),
   );
   const projTrailNegPts: THREE.Vector3[] = [];
   const projTrailNeg = new THREE.Line(
@@ -279,18 +428,14 @@ export function buildQuatView(): QuatViewRig {
 
   // 基向量架：1 投影到原点；i/j/k（w=0）恰落在球面上
   const projOne = new THREE.Mesh(
-    new THREE.SphereGeometry(0.02, 10, 8), new THREE.MeshBasicMaterial({ color: 0x93a2bb }),
+    new THREE.SphereGeometry(0.018, 10, 8), new THREE.MeshBasicMaterial({ color: 0x93a2bb }),
   );
   projGroup.add(projOne);
-  const projOneLabel = makeTextSprite("1", "#7f8da6", { size: 0.13 });
-  projOneLabel.position.set(0.07, -0.075, 0);
+  const projOneLabel = makeTextSprite("1", "#7f8da6", { size: 0.11, alwaysOnTop: true });
+  projOneLabel.position.set(0.09, -0.1, 0);
   projGroup.add(projOneLabel);
-  // w 语义锚点：球内=北半球（w>0），球外=南半球（w<0）——投影的「内外有别」一眼可读
-  const wInLabel = makeTextSprite("球内 · w > 0", "#8a9ab5", { size: 0.14 });
-  wInLabel.position.set(0, PROJ_RADIUS * 0.52, 0);
-  const wOutLabel = makeTextSprite("球外 · w < 0", "#8a9ab5", { size: 0.14 });
-  wOutLabel.position.set(0, PROJ_RADIUS + 0.3, 0);
-  projGroup.add(wInLabel, wOutLabel);
+  // 「球内 / 球外」的语义交给面板图例（3D 里的浮动文字会和 q 标记、网格打架）
+
   const projBasis = new THREE.Group();
   projGroup.add(projBasis);
   const BASIS: Array<[string, [number, number, number]]> = [
@@ -299,25 +444,138 @@ export function buildQuatView(): QuatViewRig {
   for (const [name, v] of BASIS) {
     const p = vecToDisplay(v).multiplyScalar(PROJ_RADIUS);
     const m = new THREE.Mesh(
-      new THREE.SphereGeometry(0.036, 12, 10), new THREE.MeshBasicMaterial({ color: 0x58a6ff }),
+      new THREE.SphereGeometry(0.032, 12, 10), new THREE.MeshBasicMaterial({ color: 0x58a6ff }),
     );
     m.position.copy(p);
-    const l = makeTextSprite(name, "#8dbdf0", { size: 0.19 });
-    l.position.copy(p.clone().multiplyScalar(1.14));
+    const l = makeTextSprite(name, "#8dbdf0", { size: 0.15, alwaysOnTop: true });
+    // 标签沿径向外推到球外，避免与球心的 q/−q 标记在屏幕上叠字
+    l.position.copy(p.clone().multiplyScalar(1.42));
     projBasis.add(m, l);
   }
 
-  // 姿态舞台：球下方的小四轴同步显示 q 代表的 3D 姿态——与球内 4D 点分离，互不遮挡
+  // 姿态舞台：球下方的小四轴同步显示 q 代表的 3D 姿态
   const projQuad = buildQuad(false, { axes: false });
-  projQuad.group.scale.setScalar(0.42);
+  projQuad.group.scale.setScalar(0.4);
   projQuad.group.position.set(0, -0.98, 0);
   projGroup.add(projQuad.group);
-  const projQuadLabel = makeTextSprite("3D 姿态（与 q 同步）", "#8a9ab5", { size: 0.14 });
-  projQuadLabel.position.set(0, -1.24, 0);
+  const projQuadLabel = makeTextSprite("3D 姿态（与 q 同步）", "#8a9ab5", { size: 0.12 });
+  projQuadLabel.position.set(0, -1.2, 0);
   projGroup.add(projQuadLabel);
 
   const projQPos = new THREE.Vector3();
   const projNegPos = new THREE.Vector3();
+
+  // ---------------- 状态：当前姿态对 + 进度 ----------------
+  let curFrom: Quat = qFromEuler(0, 0, 0);
+  let curTo: Quat = qFromEuler(0, 0, 0);
+  let curT = 0;
+  let curSlerpDeg = 0;
+  let curEulerDeg = 0;
+  let curDeviationDeg = 0;
+  let pairKey = "";
+
+  /** 重建两条弧（含偏差带、Squad、端点 ghost）——只在姿态对变化时调用 */
+  const rebuildArcs = (path?: Array<[number, number, number]>): void => {
+    const r0 = SPHERE_RADIUS;
+    const slerpQs: Quat[] = [];
+    const eulerQs: Quat[] = [];
+    for (let i = 0; i <= ARC_SAMPLES; i++) {
+      const u = i / ARC_SAMPLES;
+      slerpQs.push(qSlerp(curFrom, curTo, u));
+      eulerQs.push(eulerLerp(curFrom, curTo, u));
+    }
+    sampleArc(slerpQs, r0, slerpPoints);
+    sampleArc(eulerQs, r0, eulerPoints);
+
+    // 端点标记贴球面
+    startMarker.position.copy(slerpPoints[0]);
+    endMarker.position.copy(slerpPoints[slerpPoints.length - 1]);
+    // 端点姿态线框：固定在球外两侧展示位，只更新姿态
+    applyDisplayQuat(ghostFrom.group, curFrom);
+    applyDisplayQuat(ghostTo.group, curTo);
+
+    slerpLine.geometry.dispose();
+    slerpLine.geometry = new THREE.TubeGeometry(
+      new THREE.CatmullRomCurve3(slerpPoints), 96, 0.013, 8, false,
+    );
+    eulerLine.geometry.dispose();
+    eulerLine.geometry = new THREE.TubeGeometry(
+      new THREE.CatmullRomCurve3(eulerPoints), 96, 0.011, 8, false,
+    );
+    ribbon.geometry.dispose();
+    ribbon.geometry = buildDeviationRibbon(slerpPoints, eulerPoints);
+
+    // 弧标签放在中点外侧
+    const mid = Math.floor(ARC_SAMPLES / 2);
+    slerpLabel.position.copy(slerpPoints[mid].clone().multiplyScalar(1.22));
+    eulerLabel.position.copy(eulerPoints[mid].clone().multiplyScalar(1.3));
+
+    // Squad 弧（琥珀）：四关键帧的内积切线 + squad 混合；无 path 时隐藏
+    squadPoints.length = 0;
+    if (path && path.length === 4) {
+      const p0 = quatFromEulerDeg(path[0]);
+      const p1 = quatFromEulerDeg(path[1]);
+      const p2 = quatFromEulerDeg(path[2]);
+      const p3 = quatFromEulerDeg(path[3]);
+      const s1 = squadTangent(p0, p1, p2);
+      const s2 = squadTangent(p1, p2, p3);
+      const qs: Quat[] = [];
+      for (let i = 0; i <= ARC_SAMPLES; i++) qs.push(squad(p1, p2, s1, s2, i / ARC_SAMPLES));
+      sampleArc(qs, r0, squadPoints);
+      squadLine.geometry.dispose();
+      squadLine.geometry = new THREE.TubeGeometry(
+        new THREE.CatmullRomCurve3(squadPoints), 96, 0.012, 8, false,
+      );
+      squadLine.visible = true;
+    } else {
+      squadLine.geometry.dispose();
+      squadLine.geometry = new THREE.BufferGeometry();
+      squadLine.visible = false;
+    }
+
+    // 弧长信息：两端总转角与中点分叉角
+    curSlerpDeg = 2 * Math.acos(Math.min(1, Math.abs(curFrom.w * curTo.w + curFrom.x * curTo.x + curFrom.y * curTo.y + curFrom.z * curTo.z))) * 180 / Math.PI;
+    let eSum = 0;
+    for (let i = 1; i <= ARC_SAMPLES; i++) {
+      const a = eulerQs[i - 1], b = eulerQs[i];
+      const d = Math.abs(a.w * b.w + a.x * b.x + a.y * b.y + a.z * b.z);
+      eSum += 2 * Math.acos(Math.min(1, d));
+    }
+    curEulerDeg = eSum * 180 / Math.PI;
+    const qm1 = qSlerp(curFrom, curTo, 0.5);
+    const qm2 = eulerLerp(curFrom, curTo, 0.5);
+    curDeviationDeg = 2 * Math.acos(Math.min(1, Math.abs(qm1.w * qm2.w + qm1.x * qm2.x + qm1.y * qm2.y + qm1.z * qm2.z))) * 180 / Math.PI;
+  };
+
+  /** 轻量更新：marker / 四轴 / 轴角箭头 / 机头连线 */
+  const applyProgress = (t: number): void => {
+    const u = clamp01(t);
+    curT = u;
+    const i = Math.round(u * ARC_SAMPLES);
+    const pS = slerpPoints[i];
+    const pE = eulerPoints[i];
+    slerpMarker.group.position.copy(pS);
+    eulerMarker.group.position.copy(pE);
+    // marker 的机头锥朝外（球心→marker 方向）
+    for (const m of [slerpMarker, eulerMarker]) {
+      m.group.lookAt(m.group.position.clone().multiplyScalar(2));
+    }
+
+    const qCur = qSlerp(curFrom, curTo, u);
+    applyDisplayQuat(quad.group, qCur);
+
+    // 机头向量：球心 → 当前 Slerp marker（就地写顶点，零分配）
+    const npos = noseLine.geometry.getAttribute("position") as THREE.BufferAttribute;
+    npos.setXYZ(0, 0, 0, 0);
+    npos.setXYZ(1, pS.x, pS.y, pS.z);
+    npos.needsUpdate = true;
+    noseLine.geometry.computeBoundingSphere();
+
+    // 轴角箭头：当前姿态的等效旋转轴
+    const curNose = vecToDisplay(qRot(qCur, REF_VEC));
+    axisArrow.setDirection(curNose.clone().normalize());
+    axisArrow.setLength(0.52 + 0.22 * Math.sin(u * Math.PI), 0.09, 0.055);
+  };
 
   return {
     group,
@@ -335,74 +593,25 @@ export function buildQuatView(): QuatViewRig {
       sphere,
       projQPos,
       projNegPos,
+      ghostFrom,
+      ghostTo,
+    },
+    setPair(fromDeg, toDeg, path) {
+      const key = `${fromDeg.join(",")}|${toDeg.join(",")}|${path ? path.map((p) => p.join(",")).join(";") : ""}`;
+      curFrom = quatFromEulerDeg(fromDeg);
+      curTo = quatFromEulerDeg(toDeg);
+      if (key === pairKey) return; // 同一姿态对：不重建几何（播放时每帧调用也不掉帧）
+      pairKey = key;
+      rebuildArcs(path);
+      applyProgress(curT);
+    },
+    setProgress(t) {
+      if (slerpPoints.length === 0) return;
+      applyProgress(t);
     },
     setInterpolation(fromDeg, toDeg, t, path) {
-      const qFrom = quatFromEulerDeg(fromDeg);
-      const qTo = quatFromEulerDeg(toDeg);
-      const r0 = SPHERE_RADIUS;
-
-      // 端点标记贴球面
-      const noseFrom = vecToDisplay(qRot(qFrom, REF_VEC)).multiplyScalar(r0);
-      const noseTo = vecToDisplay(qRot(qTo, REF_VEC)).multiplyScalar(r0);
-      startMarker.position.copy(noseFrom);
-      endMarker.position.copy(noseTo);
-
-      // 采样两条弧：参考方向 = 机头 +X，插值四元数把机头转到球面上的新位置
-      slerpPoints.length = 0;
-      eulerPoints.length = 0;
-      for (let i = 0; i <= ARC_SAMPLES; i++) {
-        const u = i / ARC_SAMPLES;
-        const qs = qSlerp(qFrom, qTo, u);
-        const qe = eulerLerp(qFrom, qTo, u);
-        slerpPoints.push(vecToDisplay(qRot(qs, REF_VEC)).multiplyScalar(r0));
-        eulerPoints.push(vecToDisplay(qRot(qe, REF_VEC)).multiplyScalar(r0));
-      }
-      slerpLine.geometry.dispose();
-      slerpLine.geometry = new THREE.TubeGeometry(
-        new THREE.CatmullRomCurve3(slerpPoints), 96, 0.012, 10, false,
-      );
-      eulerLine.geometry.dispose();
-      eulerLine.geometry = new THREE.TubeGeometry(
-        new THREE.CatmullRomCurve3(eulerPoints), 96, 0.012, 10, false,
-      );
-
-      // Squad 弧（琥珀）：四关键帧的内积切线 + squad 混合；无 path 时隐藏
-      squadPoints.length = 0;
-      if (path && path.length === 4) {
-        const p0 = quatFromEulerDeg(path[0]);
-        const p1 = quatFromEulerDeg(path[1]);
-        const p2 = quatFromEulerDeg(path[2]);
-        const p3 = quatFromEulerDeg(path[3]);
-        const s1 = squadTangent(p0, p1, p2);
-        const s2 = squadTangent(p1, p2, p3);
-        for (let i = 0; i <= ARC_SAMPLES; i++) {
-          const u = i / ARC_SAMPLES;
-          const qs = squad(p1, p2, s1, s2, u);
-          squadPoints.push(vecToDisplay(qRot(qs, REF_VEC)).multiplyScalar(r0));
-        }
-        squadLine.geometry.dispose();
-        squadLine.geometry = new THREE.TubeGeometry(
-          new THREE.CatmullRomCurve3(squadPoints), 96, 0.012, 10, false,
-        );
-        squadLine.visible = true;
-      } else {
-        squadLine.geometry.dispose();
-        squadLine.geometry = new THREE.BufferGeometry();
-        squadLine.visible = false;
-      }
-
-      // 滑动 marker：当前 t 在两条路径上的位置
-      slerpMarker.position.copy(slerpPoints[Math.round(clamp01(t) * ARC_SAMPLES)]);
-      eulerMarker.position.copy(eulerPoints[Math.round(clamp01(t) * ARC_SAMPLES)]);
-
-      // 当前姿态四轴
-      const qCur = qSlerp(qFrom, qTo, clamp01(t));
-      applyDisplayQuat(quad.group, qCur);
-
-      // 机头向量箭头：从球心指向当前 Slerp 机头方向（长度随进度呼吸，中点最长）
-      const curNose = vecToDisplay(qRot(qCur, REF_VEC));
-      axisArrow.setDirection(curNose.clone().normalize());
-      axisArrow.setLength(0.6 + 0.25 * Math.sin(clamp01(t) * Math.PI), 0.1, 0.06);
+      this.setPair(fromDeg, toDeg, path);
+      applyProgress(t);
     },
     setNegation(rollDeg, pitchDeg, yawDeg) {
       const q = quatFromEulerDeg([rollDeg, pitchDeg, yawDeg]);
@@ -417,7 +626,6 @@ export function buildQuatView(): QuatViewRig {
       if (show) projGroup.visible = false;
     },
     setProjection(q) {
-      // 归一化输入，保证点在 S³ 上
       const n = Math.hypot(q.w, q.x, q.y, q.z);
       const qw = q.w / n, qx = q.x / n, qy = q.y / n, qz = q.z / n;
       const pq = project4d(qw, qx, qy, qz);
@@ -426,13 +634,19 @@ export function buildQuatView(): QuatViewRig {
       projNegPos.copy(pn);
       projQ.position.copy(pq);
       projNeg.position.copy(pn);
-      // 标签沿径向外推；q 近原点时给最小竖直偏移，避免与原点「1」重叠
-      projLabelQ.position.copy(
-        pq.length() > 0.14 ? pq.clone().multiplyScalar(1.18) : pq.clone().add(new THREE.Vector3(0, 0.13, 0)),
-      );
+      // q 标签避让：靠近原点时左上让位；落在球面（= 某个基向量位置）时
+      // 沿切向偏移，避免与 i/j/k 标签叠字——这是「按一次 i 之后 q 和 i 重合」的场景。
+      const onShell = Math.abs(pq.length() - PROJ_RADIUS) < 0.02 * PROJ_RADIUS;
+      if (pq.length() < 0.18) {
+        projLabelQ.position.copy(pq.clone().add(new THREE.Vector3(-0.16, 0.17, 0)));
+      } else if (onShell) {
+        projLabelQ.position.copy(pq.clone().multiplyScalar(1.02).add(new THREE.Vector3(0, 0.17, 0)));
+      } else {
+        projLabelQ.position.copy(pq.clone().multiplyScalar(1.2));
+      }
       projLabelNeg.position.copy(pn.clone().multiplyScalar(1.07));
-      projTie.geometry.setFromPoints([pq, pn]);
-      // 双轨迹：q（青）与 −q（品红）各留一条——对径点的内外互换一目了然
+      projTie.geometry.dispose();
+      projTie.geometry = new THREE.BufferGeometry().setFromPoints([pq, pn]);
       const last = projTrailPts[projTrailPts.length - 1];
       if (!last || last.distanceTo(pq) > 0.012) {
         projTrailPts.push(pq.clone());
@@ -465,29 +679,8 @@ export function buildQuatView(): QuatViewRig {
         sphere.visible = false;
       }
     },
+    arcInfo() {
+      return { t: curT, slerpDeg: curSlerpDeg, eulerDeg: curEulerDeg, deviationDeg: curDeviationDeg };
+    },
   };
-}
-
-// ---------------- 内部工具 ----------------
-
-function clamp01(v: number): number {
-  return Math.min(1, Math.max(0, v));
-}
-
-/** NED 欧拉角（度）→ NED 四元数（core/quat.qFromEuler 的度数封装） */
-function quatFromEulerDeg(d: [number, number, number]): Quat {
-  const k = Math.PI / 180;
-  return qFromEuler(d[0] * k, d[1] * k, d[2] * k);
-}
-
-/** NED 世界系向量 → 显示坐标系 three.js 向量 */
-function vecToDisplay(v: [number, number, number]): THREE.Vector3 {
-  const d = toDisplayVec(v);
-  return new THREE.Vector3(d[0], d[1], d[2]);
-}
-
-/** 把 NED 四元数应用到 three.js 组（S·q·S⁻¹ 基变换） */
-function applyDisplayQuat(g: THREE.Group, qNed: Quat): void {
-  const r = toDisplayQ(qNed);
-  g.quaternion.set(r.x, r.y, r.z, r.w);
 }

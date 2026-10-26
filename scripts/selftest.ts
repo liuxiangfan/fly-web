@@ -7,7 +7,9 @@ import { manualTarget, scenarios } from "../src/core/scenarios";
 import { G_ACC, simulateImu, simulateMag, type ImuParams } from "../src/core/imu";
 import { Gauss, mulberry32 } from "../src/core/rng";
 import {
+  FRAME_LEN,
   buildFrame,
+  frameDtSec,
   parseFrame,
   type Mounting,
 } from "../src/core/serial";
@@ -53,6 +55,10 @@ import {
   toDisplayQ,
 } from "../src/core/gimbal";
 import { narrateGimbal } from "../src/ui/mode";
+import { calibrateMag, fitMagSphere, applyMagCalibration } from "../src/core/magcal";
+import { ErrorTracker } from "../src/core/stats";
+import { b64urlDecode, b64urlEncode } from "../src/ui/b64";
+import { EXPERIMENTS } from "../src/ui/experiments";
 
 const H = 1 / 500;
 let failures = 0;
@@ -955,6 +961,7 @@ const dirty: ImuParams = { gyroBiasDps: 1, gyroNoiseDps: 0.2, gyroWalkDps: 0, ac
   const f = buildFrame(0x1234, 0xaabbccdd, gyro, accel, mag);
   const r1 = parseFrame(f, MOUNT);
   const roundTripOk =
+    f.length === FRAME_LEN &&
     r1.frame !== null &&
     r1.frame.seq === 0x1234 &&
     r1.frame.tickMs === 0xaabbccdd &&
@@ -996,6 +1003,182 @@ const dirty: ImuParams = { gyroBiasDps: 1, gyroNoiseDps: 0.2, gyroWalkDps: 0, ac
     roundTripOk && badOk && stickyOk && mountOk,
     `往返=${roundTripOk}；坏 CRC consumed=${r2.consumed}（应 2）=${badOk}；` +
       `粘包两帧 seq=${got.join(",")} off=${off}=${stickyOk}；y-left 重排机体y=${rm.frame ? rm.frame.gyroDps[1].toFixed(1) : "?"}=${mountOk}`,
+  );
+}
+
+// 35. 精确指数映射积分：恒定角速度下与解析解一致（大步长也不产生缩放误差）
+{
+  const axis: V3 = [1, 2, -3];
+  const an = Math.hypot(...axis);
+  const axN: V3 = [axis[0] / an, axis[1] / an, axis[2] / an];
+  const w: V3 = [axN[0] * 2.5, axN[1] * 2.5, axN[2] * 2.5];
+  const run = (dt: number): number => {
+    let q = qId();
+    for (let i = 0; i < Math.round(1 / dt); i++) q = qIntegrate(q, w, dt);
+    return qAngleBetween(q, qFromAxisAngle(axN, 2.5)) * DEG;
+  };
+  const e002 = run(0.002);
+  const e01 = run(0.1);
+  check(
+    "指数映射积分与解析解一致",
+    e002 < 1e-10 && e01 < 1e-10,
+    `ω=2.5 rad/s 绕单位轴 1 s：dt=2ms 误差 ${e002.toExponential(1)}°，dt=100ms 误差 ${e01.toExponential(1)}°（大步长也不退化）`,
+  );
+}
+
+// 36. 姿态夹角：零角附近可分辨 + 180° 端点精确（旧 acos 实现的分辨率瓶颈）
+{
+  const tiny = qFromAxisAngle([0, 0, 1], 1e-9);
+  const aTiny = qAngleBetween(tiny, qId());
+  const half = qFromAxisAngle([1, 0, 0], Math.PI);
+  const aPi = qAngleBetween(half, qId());
+  const rnd = mulberry32(2027);
+  let maxDiff = 0;
+  for (let i = 0; i < 2000; i++) {
+    const q1 = qNorm({ w: rnd() * 2 - 1, x: rnd() * 2 - 1, y: rnd() * 2 - 1, z: rnd() * 2 - 1 });
+    const q2 = qNorm({ w: rnd() * 2 - 1, x: rnd() * 2 - 1, y: rnd() * 2 - 1, z: rnd() * 2 - 1 });
+    const ref = 2 * Math.acos(Math.min(1, Math.abs(qDot(q1, q2))));
+    if (ref > 1e-3) maxDiff = Math.max(maxDiff, Math.abs(qAngleBetween(q1, q2) - ref));
+  }
+  check(
+    "姿态夹角全区间数值稳定",
+    Math.abs(aTiny - 1e-9) < 1e-15 && Math.abs(aPi - Math.PI) < 1e-12 && maxDiff < 1e-9,
+    `1e-9 rad 小角误差 ${Math.abs(aTiny - 1e-9).toExponential(1)}；180° 误差 ${Math.abs(aPi - Math.PI).toExponential(1)}；` +
+      `2000 组随机姿态与 acos 参考最大差 ${maxDiff.toExponential(1)} rad`,
+  );
+}
+
+// 37. 误差统计器：均值/RMSE/峰值/收敛时刻
+{
+  const t = new ErrorTracker({ thresholdDeg: 2, holdSec: 0 });
+  [3, 1, 1, 4].forEach((v, i) => t.add(v, i));
+  const s = t.summary();
+  const mean = (3 + 1 + 1 + 4) / 4;
+  const rmse = Math.sqrt((9 + 1 + 1 + 16) / 4);
+  const ok =
+    s.n === 4 &&
+    Math.abs(s.mean - mean) < 1e-12 &&
+    Math.abs(s.rmse - rmse) < 1e-12 &&
+    s.max === 4 &&
+    s.last === 4 &&
+    s.convergedAt === 1;
+  t.reset(10);
+  const empty = t.summary();
+  check(
+    "误差统计器（均值/RMSE/峰值/收敛）",
+    ok && empty.n === 0 && Number.isNaN(empty.mean),
+    `mean ${s.mean.toFixed(3)}（应 ${mean}）；RMSE ${s.rmse.toFixed(3)}（应 ${rmse.toFixed(3)}）；峰值 ${s.max}；收敛 ${s.convergedAt}s；reset 后 n=${empty.n}`,
+  );
+}
+
+// 38. 磁力计球拟合：已知硬铁 + 对角软铁 → 恢复球心与轴比；覆盖不足返回 null
+{
+  const B: V3 = [32.8, 0, 37.7];
+  const center: V3 = [9, -6, 13];
+  const soft: V3 = [1.2, 0.8, 1.0];
+  const g = new Gauss(mulberry32(2028));
+  const samples: V3[] = [];
+  for (let i = 0; i < 300; i++) {
+    const q = qNorm({ w: g.next(), x: g.next(), y: g.next(), z: g.next() });
+    const m = qRotInv(q, B);
+    samples.push([soft[0] * m[0] + center[0], soft[1] * m[1] + center[1], soft[2] * m[2] + center[2]]);
+  }
+  const cal = calibrateMag(samples);
+  const fit = fitMagSphere(samples);
+  const offsetErr = cal ? Math.hypot(cal.offset[0] - center[0], cal.offset[1] - center[1], cal.offset[2] - center[2]) : NaN;
+  const ratio = cal ? cal.scale[0] / cal.scale[1] : NaN;
+  const ratioRef = soft[1] / soft[0];
+  const correctedR = cal ? Math.hypot(...applyMagCalibration(samples[0], cal)) : NaN;
+  const flat: V3[] = [];
+  for (let i = 0; i < 120; i++) {
+    const q = qFromAxisAngle([0, 0, 1], (i / 120) * Math.PI * 2);
+    flat.push(qRotInv(q, B));
+  }
+  const flatCal = calibrateMag(flat);
+  check(
+    "磁力计球拟合（硬铁 + 对角软铁）",
+    cal !== null && offsetErr < 0.5 && Math.abs(ratio - ratioRef) < 0.03 && cal.residual < 0.06 &&
+      Math.abs(correctedR - (cal?.field ?? NaN)) < 0.05 * (cal?.field ?? 1) &&
+      fit !== null && Math.abs(fit.radius - Math.hypot(...B)) < 1.5 && flatCal === null,
+    cal
+      ? `球心误差 ${offsetErr.toFixed(3)} μT；轴比 ${ratio.toFixed(3)}（应 ${ratioRef.toFixed(3)}）；` +
+        `半径 ${fit!.radius.toFixed(1)} μT（真值 ${Math.hypot(...B).toFixed(1)}）；残差 ${(cal.residual * 100).toFixed(2)}%；` +
+        `单轴覆盖被拒=${flatCal === null}`
+      : "拟合返回 null",
+  );
+}
+
+// 39. 串口帧时钟：名义间隔、u32 回绕、空洞退回、夹紧
+{
+  const a = frameDtSec(1000, 1005);
+  const wrap = frameDtSec(0xfffffffe, 2);
+  const gap = frameDtSec(1000, 5000);
+  const tiny = frameDtSec(1000, 1000);
+  const huge = frameDtSec(1000, 1600);
+  const ok = Math.abs(a - 0.005) < 1e-12 && Math.abs(wrap - 0.004) < 1e-12 &&
+    Math.abs(gap - 0.005) < 1e-12 && Math.abs(tiny - 0.005) < 1e-12 && Math.abs(huge - 0.005) < 1e-12;
+  check(
+    "串口帧时钟（回绕/空洞/夹紧）",
+    ok,
+    `5ms→${(a * 1000).toFixed(1)}；u32 回绕→${(wrap * 1000).toFixed(1)}；空洞→${(gap * 1000).toFixed(1)}；` +
+      `同 tick→${(tiny * 1000).toFixed(1)}；600ms→${(huge * 1000).toFixed(1)} ms（退回名义）`,
+  );
+}
+
+// 40. base64url 深链编码：中文/符号往返、URL 安全字符集
+{
+  const text = JSON.stringify({ 场景: "复合机动 + 磁干扰", v: 2, view: "quat", 值: 1.25 });
+  const enc = b64urlEncode(text);
+  const dec = b64urlDecode(enc);
+  check(
+    "base64url 深链编码往返",
+    dec === text && !/[+/=]/.test(enc) && enc.length > 10,
+    `编码长度 ${enc.length}，字符集安全=${!/[+/=]/.test(enc)}，往返一致=${dec === text}`,
+  );
+}
+
+// 41. Kalman 协方差健康：Joseph 更新后对称、对角正；极端零偏下不发散
+{
+  const qTrue = qFromEuler(15 * RAD, 25 * RAD, 40 * RAD);
+  const kal = new KalmanEstimator();
+  const g = new Gauss(mulberry32(2029));
+  const p: ImuParams = { ...clean, gyroBiasDps: 100 };
+  for (let i = 0; i < Math.round(12 / H); i++) {
+    const s = simulateImu(qTrue, [0, 0, 0], i * H, p, g, 1);
+    kal.update(s.gyro, s.accel, s.mag, H);
+  }
+  const P = kal.getCovariance();
+  let sym = 0;
+  let minDiag = Infinity;
+  for (let i = 0; i < 6; i++) {
+    minDiag = Math.min(minDiag, P[i * 6 + i]);
+    for (let j = 0; j < 6; j++) sym = Math.max(sym, Math.abs(P[i * 6 + j] - P[j * 6 + i]));
+  }
+  const bias = kal.telemetry.detail.biasNormDps as number;
+  const qn = Math.hypot(kal.q.w, kal.q.x, kal.q.y, kal.q.z);
+  check(
+    "Kalman 协方差对称正定 + 零偏限幅",
+    Number.isFinite(bias) && bias <= 57.4 && sym < 1e-9 && minDiag > 0 && Math.abs(qn - 1) < 1e-12,
+    `100°/s 零偏 12s：|b|=${bias.toFixed(1)}°/s（限幅 57.3）；P 对称误差 ${sym.toExponential(1)}；最小对角 ${minDiag.toExponential(1)}；‖q‖=${qn.toFixed(12)}`,
+  );
+}
+
+// 42. 实验库数据完整性：id 唯一、必填字段齐全、动作非空
+{
+  const ids = new Set<string>();
+  let bad = 0;
+  for (const e of EXPERIMENTS) {
+    if (ids.has(e.id)) bad++;
+    ids.add(e.id);
+    if (!e.name || !e.tag || !e.observe) bad++;
+    const actions = Object.keys(e.sliders ?? {}).length + Object.keys(e.checks ?? {}).length +
+      Object.keys(e.selects ?? {}).length + (e.view ? 1 : 0);
+    if (actions === 0) bad++;
+  }
+  check(
+    "实验库数据完整性",
+    bad === 0 && EXPERIMENTS.length >= 8,
+    `${EXPERIMENTS.length} 个实验（${EXPERIMENTS.map((e) => e.name).join("/")}），id 唯一且字段齐全=${bad === 0}`,
   );
 }
 

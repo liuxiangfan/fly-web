@@ -4,20 +4,18 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#030712" />
-  <meta name="description" content="四元数姿态解算学习演示装置：模拟 IMU、四种解算算法实时对比、万向节锁平衡环架演示。" />
+  <meta name="color-scheme" content="dark" />
+  <meta name="description" content="四元数姿态解算学习演示装置：模拟/真实 IMU、五种解算算法实时对比、万向节锁、Slerp 与 4D 立体投影、磁力计校准与完整应用内推导。" />
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="四元数姿态解算 · 学习演示装置" />
+  <meta property="og:description" content="从传感器原始数据到四元数姿态：五种滤波算法实时对比、万向节锁、Slerp 与 4D 投影、磁校准与误差评测。" />
   <title>四元数姿态解算 · 学习演示装置</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <style>html { background: #030712; }</style>
-  <!-- Fira Sans / Fira Code 非阻塞加载；网络不可达时自动降级到系统字体，不影响使用 -->
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link
-    rel="stylesheet"
-    href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Fira+Sans:wght@400;500;600&display=swap"
-    media="print"
-    onload="this.media='all'"
-  />
+  <!-- Fira Sans / Fira Code 已自托管在 public/fonts（woff2 子集），不再依赖 Google Fonts；
+       CJK 字符按 font-family 栈回退到系统字体。 -->
 </head>
 <body>
   <header id="app-header">
@@ -29,6 +27,7 @@
       <button id="btn-pause" class="btn primary">暂停</button>
       <button id="btn-reset" class="btn">重置</button>
       <button id="btn-share" class="btn" title="把当前面板状态编码进链接复制">分享</button>
+      <button id="btn-export" class="btn" title="导出本轮姿态记录为 CSV（含算法参数头部）">导出 CSV</button>
       <button id="btn-docs" class="btn" title="文档（Esc 关闭）">文档</button>
     </div>
   </header>
@@ -36,7 +35,7 @@
   <main id="app-main">
     <div id="viewport">
       <div class="overlay" id="view-seg-wrap">
-        <div class="seg" id="view-seg">
+        <div class="seg" id="view-seg" role="group" aria-label="3D 视图切换">
           <button class="seg-btn active" data-view="attitude">四轴姿态</button>
           <button class="seg-btn" data-view="gimbal">万向节锁</button>
           <button class="seg-btn" data-view="quat">四元数</button>
@@ -58,7 +57,13 @@
         <div class="ov-chip" id="quat-legend">
           <span class="lg-item"><span class="lg-dot" style="background:#f1f5f9"></span>Slerp 轨迹（旋转群大圆，理想路径）</span>
           <span class="lg-item"><span class="lg-dot" style="background:#e879f9"></span>欧拉角插值轨迹（穿过欧拉空间，会扭）</span>
-          <span class="lg-item"><span class="lg-dot" style="background:#22d3ee"></span>当前插值姿态的旋转轴（轴角表示）</span>
+          <span class="lg-item"><span class="lg-dot" style="background:#7f5af0"></span>偏差带：两条路径之间的角距离</span>
+          <span class="lg-item"><span class="lg-dot" style="background:#22d3ee"></span>当前姿态的旋转轴（轴角表示）</span>
+        </div>
+        <div class="ov-chip" id="quat-legend-proj">
+          <span class="lg-item"><span class="lg-dot" style="background:#22d3ee"></span>q（球内，w &gt; 0）</span>
+          <span class="lg-item"><span class="lg-dot" style="background:#e879f9"></span>−q（球外，w &lt; 0）· 同一姿态</span>
+          <span class="lg-item"><span class="lg-dot" style="background:#58a6ff"></span>i / j / k 基向量（球面 = 180° 旋转）</span>
         </div>
         <div class="ov-chip" id="mag-legend"></div>
       </div>
@@ -75,8 +80,18 @@
     </div>
 
     <aside id="panel">
-      <section class="panel-section section-scenario">
-        <h2>数据源与机动</h2>
+      <div class="panel-tools">
+        <span class="pt-label">控制台</span>
+        <button type="button" class="pt-btn" id="btn-serial-quick" title="连接真实 IMU（自动展开 IMU 面板）">真实 IMU</button>
+        <button type="button" class="pt-btn" id="panel-expand-all">全部展开</button>
+        <button type="button" class="pt-btn" id="panel-collapse-all">全部收起</button>
+      </div>
+      <section class="panel-section section-scenario" data-section="scenario" id="sec-scenario">
+        <h2 class="panel-head"><button type="button" class="panel-toggle" aria-expanded="true" aria-controls="body-scenario"><span class="ph-title">数据源与机动</span><span class="ph-summary" id="sum-scenario"></span><span class="ph-chev" aria-hidden="true"></span></button></h2>
+        <div class="panel-body" id="body-scenario">
+        <div class="real-mode-note hidden" id="real-mode-note">
+          真实 IMU 模式：剧本 / 模拟噪声 / 手动目标 / 幻影 / 闭环 / 初始偏差已停用——数据完全来自串口帧。
+        </div>
         <div class="row">
           <label for="scenario-select">机动模式</label>
           <select id="scenario-select">
@@ -109,10 +124,21 @@
             </div>
           <p class="hint">拖动滑块设定目标姿态，机体以受限角速度跟踪（下方三轴可试 ±90° 附近）。</p>
         </div>
+      </div>
       </section>
 
-      <section class="panel-section section-imu">
-        <h2>IMU 传感器模拟</h2>
+      <section class="panel-section section-experiments collapsed" data-section="experiments" id="sec-experiments">
+        <h2 class="panel-head"><button type="button" class="panel-toggle" aria-expanded="false" aria-controls="body-experiments"><span class="ph-title">实验库</span><span class="ph-summary" id="sum-experiments">一键复现一条因果链</span><span class="ph-chev" aria-hidden="true"></span></button></h2>
+        <div class="panel-body" id="body-experiments">
+        <div class="experiment-grid" id="experiment-list"></div>
+        <div class="experiment-note hidden" id="experiment-note"></div>
+        <p class="hint">每个实验只改一组参数并给出一句「看什么」。实验之间互不影响，随时可切回自由调参。</p>
+      </div>
+      </section>
+
+      <section class="panel-section section-imu collapsed" data-section="imu" id="sec-imu">
+        <h2 class="panel-head"><button type="button" class="panel-toggle" aria-expanded="false" aria-controls="body-imu"><span class="ph-title">IMU 传感器模拟</span><span class="ph-summary" id="sum-imu"></span><span class="ph-chev" aria-hidden="true"></span></button></h2>
+        <div class="panel-body" id="body-imu">
         <div class="row serial-row">
           <button class="btn" id="btn-serial">连接真实 IMU</button>
           <select id="serial-mounting" title="GY-87 模块丝印轴在机体上的朝向">
@@ -199,19 +225,53 @@
             <input type="number" class="step-input" data-step="imu-mag-disturb" min="0.005" max="0.5" title="滑杆步距" />
           </div>
           <div class="slider-row with-inputs">
+            <label>硬铁偏移</label>
+            <input type="range" id="imu-hard-iron" min="0" max="1" step="0.05" value="0" />
+            <input type="number" class="num-input" data-num="imu-hard-iron" step="any" />
+            <input type="number" class="step-input" data-step="imu-hard-iron" min="0.005" max="0.5" title="滑杆步距" />
+          </div>
+          <div class="slider-row with-inputs">
             <label>磁力计量化</label>
             <input type="range" id="imu-mag-quant" min="0" max="2" step="0.1" value="0" />
             <input type="number" class="num-input" data-num="imu-mag-quant" step="any" />
             <input type="number" class="step-input" data-step="imu-mag-quant" min="0.005" max="1" title="滑杆步距" />
           </div>
-          <p class="hint">磁干扰模拟机身金属与电机通电磁场：MARG 偏航精度会下降（实际飞控需要磁强计校准）。量化步长 0.6μT = AK8963（MPU-9250 内置）的 LSB 规格。</p>
+          <p class="hint">磁干扰模拟机身金属与电机通电磁场：硬铁把磁球整体推离原点（1.0 ≈ 8μT 偏移），交变干扰让航向摆动。两者都能被下方「磁力计校准」拟合掉。量化步长 0.6μT = AK8963（MPU-9250 内置）的 LSB 规格。</p>
         </div>
+      </div>
       </section>
 
-      <section class="panel-section section-algo">
-        <h2>解算算法</h2>
+      <section class="panel-section section-secondary section-magcal collapsed" data-section="magcal" id="sec-magcal">
+        <h2 class="panel-head"><button type="button" class="panel-toggle" aria-expanded="false" aria-controls="body-magcal"><span class="ph-title">磁力计校准</span><span class="ph-summary" id="sum-magcal">球拟合 → 硬铁/软铁</span><span class="ph-chev" aria-hidden="true"></span></button></h2>
+        <div class="panel-body" id="body-magcal">
+        <div class="row btn-row">
+          <button class="btn" id="magcal-synthetic" title="用当前模拟磁模型生成覆盖全姿态的样本">模拟数据自动采集</button>
+          <button class="btn" id="magcal-start">开始实时采集</button>
+        </div>
+        <div class="row btn-row">
+          <button class="btn" id="magcal-fit">拟合并应用</button>
+          <button class="btn" id="magcal-clear">清除校准</button>
+        </div>
+        <div class="row check-row">
+          <label><input type="checkbox" id="magcal-apply" disabled /> 应用校准（MARG 使用修正后的磁读数）</label>
+        </div>
+        <div class="ov-chip mono" id="magcal-status">未校准。模拟模式可一键生成样本；真实模式需缓慢翻滚机体采集。</div>
+        <div class="ov-chip mono dim" id="magcal-result"></div>
+        <p class="hint">
+          真实磁力计读数 = 软铁矩阵 × 真实磁场 + 硬铁偏移。本工具先拟合球心（硬铁），再用各轴半极差把椭球拉回球（对角软铁），
+          残差越小说明点云越干净。完整工程做法还需要 3×3 椭球拟合 + 加速度计六面校准——见文档·工程实践备忘。
+        </p>
+      </div>
+      </section>
+
+      <section class="panel-section section-algo" data-section="algo" id="sec-algo">
+        <h2 class="panel-head"><button type="button" class="panel-toggle" aria-expanded="true" aria-controls="body-algo"><span class="ph-title">解算算法</span><span class="ph-summary" id="sum-algo"></span><span class="ph-chev" aria-hidden="true"></span></button></h2>
+        <div class="panel-body" id="body-algo">
         <div class="row check-row mag-row">
           <label><input type="checkbox" id="mag-enable" checked /> 启用磁力计（MARG，约束偏航）</label>
+        </div>
+        <div class="row check-row">
+          <label><input type="checkbox" id="gate-toggle" checked /> 加速度计观测门控（幅度 35% + 方向 20°）</label>
         </div>
         <div class="slider-row with-inputs">
           <label>Mahony Kp</label>
@@ -258,10 +318,12 @@
         </div>
         <p class="hint">卡尔曼 Q = 过程噪声（陀螺仪有多不可信），R = 观测噪声（加速度计/磁力计有多不可信）；滤波器按两者方差自动加权。详见文档·滤波算法讲解。</p>
         <p class="hint">纯积分只用陀螺仪，其姿态不受任何滑块影响——这正是演示漂移的关键。</p>
+      </div>
       </section>
 
-      <section class="panel-section section-secondary section-view">
-        <h2>3D 显示</h2>
+      <section class="panel-section section-secondary section-view collapsed" data-section="view" id="sec-view">
+        <h2 class="panel-head"><button type="button" class="panel-toggle" aria-expanded="false" aria-controls="body-view"><span class="ph-title">3D 显示</span><span class="ph-summary" id="sum-view"></span><span class="ph-chev" aria-hidden="true"></span></button></h2>
+        <div class="panel-body" id="body-view">
         <div class="row">
           <label for="source-select">模型姿态来源</label>
           <select id="source-select">
@@ -286,10 +348,12 @@
         <div class="row check-row">
           <label><input type="checkbox" id="telemetry-toggle" /> 显示算法内部量（玻璃盒）</label>
         </div>
+      </div>
       </section>
 
-      <section class="panel-section section-secondary section-telemetry" id="telemetry-section">
-        <h2>算法内部（玻璃盒）</h2>
+      <section class="panel-section section-secondary section-telemetry collapsed" data-section="telemetry" id="sec-telemetry">
+        <h2 class="panel-head"><button type="button" class="panel-toggle" aria-expanded="false" aria-controls="body-telemetry"><span class="ph-title">算法内部（玻璃盒）</span><span class="ph-summary" id="sum-telemetry"></span><span class="ph-chev" aria-hidden="true"></span></button></h2>
+        <div class="panel-body" id="body-telemetry">
         <div class="tel-status" id="tel-status"></div>
         <div class="tel-block mono" id="tel-rate">
           <div class="tel-label">角速度（°/s）</div>
@@ -304,10 +368,27 @@
           3D 视图中：白箭头 = 算法预测的「下」，品红箭头 = 加速度计实测的「下」。
           收敛时两箭头重合；选纯陀螺仪积分可见白箭头缓慢转偏而品红不动——这就是漂移。
         </p>
+      </div>
       </section>
 
-      <section class="panel-section section-quat">
-        <h2>四元数可视化</h2>
+      <section class="panel-section section-secondary section-metrics" data-section="metrics" id="sec-metrics">
+        <h2 class="panel-head"><button type="button" class="panel-toggle" aria-expanded="true" aria-controls="body-metrics"><span class="ph-title">本轮评测</span><span class="ph-summary" id="sum-metrics">误差统计</span><span class="ph-chev" aria-hidden="true"></span></button></h2>
+        <div class="panel-body" id="body-metrics">
+        <div class="tscroll">
+          <table class="metrics-table">
+            <thead>
+              <tr><th>算法</th><th>当前</th><th>均值</th><th>RMSE</th><th>峰值</th><th>收敛</th></tr>
+            </thead>
+            <tbody id="metrics-body"></tbody>
+          </table>
+        </div>
+        <p class="hint" id="metrics-meta">本轮 0 个样本（25 Hz）· 收敛 = 连续 1 s 总误差 &lt; 2°</p>
+      </div>
+      </section>
+
+      <section class="panel-section section-quat" data-section="quat" id="sec-quat">
+        <h2 class="panel-head"><button type="button" class="panel-toggle" aria-expanded="true" aria-controls="body-quat"><span class="ph-title">四元数可视化</span><span class="ph-summary" id="sum-quat"></span><span class="ph-chev" aria-hidden="true"></span></button></h2>
+        <div class="panel-body" id="body-quat">
         <div class="row">
           <label for="quat-mode">演示模式</label>
           <select id="quat-mode">
@@ -340,10 +421,11 @@
             <button class="btn" id="btn-proj-k">左乘 k</button>
             <button class="btn" id="btn-proj-reset">重置</button>
           </div>
-          <div class="row check-row">
-            <label>累计旋转 <span class="mono dim" id="proj-turn">已左乘 0 次 · 累计 0° · q = +1（单位姿态）</span></label>
+          <div class="proj-turn-row">
+            <span class="ptr-label">累计旋转</span>
+            <span class="mono" id="proj-turn">已左乘 0 次 · 累计 0° · q = +1（单位姿态）</span>
           </div>
-          <canvas id="proj-section" width="520" height="120" title="S³ 剖面（w–i 平面）：q 与 −q 在 4D 超球截面上的实时位置"></canvas>
+          <canvas id="proj-section" width="520" height="120" role="img" aria-label="S³ 剖面（w–i 平面）：q 与 −q 在 4D 超球截面上的实时位置" title="S³ 剖面（w–i 平面）：q 与 −q 在 4D 超球截面上的实时位置"></canvas>
           <p class="hint">S³ 剖面（w–i 平面）＝「抬升」视角：q 真正走在 4D 超球的这个截面上（青点），−q 是它的对径点（品红）。三段式看懂立体投影：<b>① 抬升</b>——本剖面里 q 沿 1→i 的圆弧走；<b>② 旋转</b>——3D 姿态由 q 的「半角」决定；<b>③ 投影</b>——上方球里的青色影子是 q 压进 w=0 的结果。</p>
           <p class="hint">
             球面 = 4D 超球的赤道（w = 0）；青点 = q（球内，w &gt; 0），品红点 = −q（球外，w &lt; 0，一对倒易点）。
@@ -354,7 +436,8 @@
             详见文档·数学原理「立体投影」。
           </p>
         </div>
-        <div class="row check-row quat-only-extra hidden">
+        <div class="quat-arcinfo quat-interp-only" id="quat-arcinfo"></div>
+        <div class="row check-row quat-only-extra">
           <label>当前四元数分量 <span class="mono dim" id="quat-readout">—</span></label>
         </div>
         <p class="hint quat-interp-only">
@@ -365,10 +448,12 @@
         <p class="hint quat-interp-only">
           勾选「q 与 −q」：两个四轴分别按 q 与 −q 摆放——它们表示同一个旋转，所以永远完全重合。
         </p>
+      </div>
       </section>
 
-      <section class="panel-section section-gimbal">
-        <h2>万向节锁演示</h2>
+      <section class="panel-section section-gimbal" data-section="gimbal" id="sec-gimbal">
+        <h2 class="panel-head"><button type="button" class="panel-toggle" aria-expanded="true" aria-controls="body-gimbal"><span class="ph-title">万向节锁演示</span><span class="ph-summary" id="sum-gimbal"></span><span class="ph-chev" aria-hidden="true"></span></button></h2>
+        <div class="panel-body" id="body-gimbal">
         <div class="slider-row with-inputs">
           <label>偏航 ψ</label>
           <input type="range" id="gim-yaw" min="-180" max="180" step="1" value="0" />
@@ -402,54 +487,81 @@
           上方按钮会完整演一遍：先用【横滚】+60° 记下姿态，复位后再用【偏航】−60° 复现——符号相反正是两轴重合的几何结果。
           演示可随时暂停，停在任意姿态方便讲解。
         </p>
+      </div>
       </section>
 
     </aside>
   </main>
 
-  <section id="charts">
+  <section id="charts" aria-label="实时曲线">
+    <div class="charts-bar">
+      <span class="cb-title">实时曲线</span>
+      <div class="cb-toggles" role="group" aria-label="曲线面板显隐">
+        <button type="button" class="cb-chip active" data-chart="att" aria-pressed="true">姿态角</button>
+        <button type="button" class="cb-chip active" data-chart="err" aria-pressed="true">误差</button>
+        <button type="button" class="cb-chip" data-chart="imu" aria-pressed="false">IMU 波形</button>
+      </div>
+      <span class="cb-meta mono" id="charts-meta">窗口 30 s · 25 Hz</span>
+    </div>
+
     <div class="chart-block att" id="block-att">
       <div class="chart-header">
-        <button class="fold-btn" data-fold="att" title="折叠 / 展开此面板">▾</button>
-        <div class="chart-tabs" id="att-tabs">
-          <button data-ch="0" class="tab active">横滚 φ</button>
-          <button data-ch="1" class="tab">俯仰 θ</button>
-          <button data-ch="2" class="tab">偏航 ψ</button>
+        <button class="fold-btn" data-fold="att" title="折叠 / 展开此面板" aria-label="折叠或展开姿态角曲线面板" aria-expanded="true"><span class="chev" aria-hidden="true"></span></button>
+        <div class="chart-head-main">
+          <span class="chart-title">姿态角</span>
+          <div class="chart-tabs" id="att-tabs" role="tablist" aria-label="姿态角通道">
+            <button data-ch="0" class="tab active" role="tab" aria-selected="true">横滚 φ</button>
+            <button data-ch="1" class="tab" role="tab" aria-selected="false">俯仰 θ</button>
+            <button data-ch="2" class="tab" role="tab" aria-selected="false">偏航 ψ</button>
+          </div>
         </div>
+        <span class="chart-summary mono" id="att-summary"></span>
         <div class="chart-legend" id="att-legend"></div>
       </div>
-      <canvas id="att-canvas"></canvas>
+      <canvas id="att-canvas" role="img" aria-label="欧拉角三通道时序曲线（真实姿态与五种解算算法）"></canvas>
     </div>
+
     <div class="chart-block err" id="block-err">
       <div class="chart-header">
-        <button class="fold-btn" data-fold="err" title="折叠 / 展开此面板">▾</button>
-        <div class="chart-title" id="err-title">姿态总误差（解算 vs 真实）</div>
+        <button class="fold-btn" data-fold="err" title="折叠 / 展开此面板" aria-label="折叠或展开误差曲线面板" aria-expanded="true"><span class="chev" aria-hidden="true"></span></button>
+        <div class="chart-head-main">
+          <span class="chart-title" id="err-title">姿态总误差</span>
+        </div>
+        <span class="chart-summary mono" id="err-summary"></span>
         <div class="chart-legend" id="err-legend"></div>
         <div class="chart-legend" id="err-legend-b"></div>
       </div>
-      <canvas id="err-canvas"></canvas>
+      <canvas id="err-canvas" role="img" aria-label="各算法姿态总误差时序曲线（A/B 对比时含快照组虚线）"></canvas>
     </div>
+
     <div class="chart-block imu collapsed" id="block-imu">
       <div class="chart-header">
-        <button class="fold-btn" data-fold="imu" title="折叠 / 展开此面板">▾</button>
-        <div class="chart-tabs" id="imu-tabs">
-          <button data-tab="0" class="tab active">陀螺仪 °/s</button>
-          <button data-tab="1" class="tab">加速度计 m/s²</button>
-          <button data-tab="2" class="tab">磁力计 μT</button>
+        <button class="fold-btn" data-fold="imu" title="折叠 / 展开此面板" aria-label="折叠或展开 IMU 原始波形面板" aria-expanded="false"><span class="chev" aria-hidden="true"></span></button>
+        <div class="chart-head-main">
+          <span class="chart-title">IMU 原始波形</span>
+          <div class="chart-tabs" id="imu-tabs" role="tablist" aria-label="IMU 原始波形页签">
+            <button data-tab="0" class="tab active" role="tab" aria-selected="true">陀螺仪 °/s</button>
+            <button data-tab="1" class="tab" role="tab" aria-selected="false">加速度计 m/s²</button>
+            <button data-tab="2" class="tab" role="tab" aria-selected="false">磁力计 μT</button>
+          </div>
         </div>
+        <span class="chart-summary mono" id="imu-summary"></span>
         <div class="chart-legend" id="imu-legend"></div>
       </div>
-      <canvas id="imu-canvas"></canvas>
+      <canvas id="imu-canvas" role="img" aria-label="IMU 原始波形：陀螺仪/加速度计/磁力计三轴实测与模拟真值"></canvas>
     </div>
   </section>
 
+  <div id="toast-layer" class="toast-layer" role="status" aria-live="polite"></div>
+
   <footer id="app-footer">
-    <span>NED 世界系 · q：机体系→世界系 · 解算 500 Hz</span>
+    <span>NED 世界系 · q：机体系→世界系 · 解算 500 Hz（真实模式跟随采样率）</span>
+    <span class="dim footer-keys">空格 暂停 · R 重置 · 1/2/3 视图 · D 文档 · ? 快捷键</span>
     <span class="mono dim" id="fps">-- fps</span>
   </footer>
 
   <!-- 使用说明文档页（应用内全屏覆盖层：左侧目录 + 右侧章节，右上角按钮 / Esc 关闭） -->
-  <div id="docs-overlay" hidden>
+  <div id="docs-overlay" hidden role="dialog" aria-modal="true" aria-label="应用内文档">
     <div class="docs-shell">
       <nav class="docs-toc" aria-label="文档模块">
         <button class="btn" id="btn-docs-close">← 返回演示</button>
@@ -480,19 +592,63 @@
           <h2>快速上手</h2>
           <p>视口右上角三个按钮切换视图，每个视图聚焦一个主题：</p>
           <ul>
-            <li><b>四轴姿态</b>——主视图。模拟 IMU 喂数据，四种解算算法各自解算，3D 四轴模型与曲线实时对比。</li>
+            <li><b>四轴姿态</b>——主视图。模拟/真实 IMU 喂数据，五种解算算法各自解算，3D 四轴模型与曲线实时对比。</li>
             <li><b>万向节锁</b>——三轴平衡环架，直观展示欧拉角在俯仰 ±90° 时「只剩 2 个自由度」。</li>
             <li><b>四元数</b>——参考球上的插值轨迹对比，以及 q 与 −q 的双重覆盖演示。</li>
           </ul>
-          <p>顶栏从左到右五个控件：</p>
+          <p>顶栏从左到右的控件：</p>
           <ul>
             <li><b>时钟</b>——仿真时间，暂停时停走。</li>
             <li><b>暂停 / 继续</b>——冻结整个仿真，便于对照读数。</li>
             <li><b>重置</b>——时间归零，所有姿态与算法内部状态清零回水平。</li>
-            <li><b>分享</b>——把当前全部面板参数与机动剧本编码进网址并复制：发给同学，打开就是同一套实验状态。</li>
+            <li><b>分享</b>——把当前全部面板参数、视图与机动剧本编码进网址并复制：发给同学，打开就是同一套实验状态。</li>
+            <li><b>导出 CSV</b>——把本轮全部姿态/误差记录（25 Hz、含算法参数头部注释）下载为 CSV，可直接拖进 Excel/Python/MATLAB。</li>
             <li><b>文档</b>——打开本页（Esc 或「返回演示」关闭）。</li>
           </ul>
           <p>3D 区域：拖拽旋转视角、滚轮缩放。所有改动即时生效，无需保存。</p>
+
+          <div class="ctl">
+            <div class="ctl-name">右侧控制台：手风琴式面板 <span class="ctl-range">10 个分区</span></div>
+            <p><span class="k k1">是什么</span>右侧栏有十个分区（数据源、实验库、IMU、磁校准、解算算法、3D 显示、玻璃盒、评测、四元数、万向节锁）。
+              每个分区标题就是开关：点一下收起，再点展开；顶部「全部展开 / 全部收起」一键切换。</p>
+            <p><span class="k k2">起什么作用</span>解决「信息多但屏幕小」的矛盾：<b>收起的分区不丢信息</b>——
+              标题右侧的灰色摘要实时显示当前状态（机动模式、零偏/噪声、MARG 开关与三个增益、模型来源、本轮最优 RMSE、
+              四元数姿态对、三个环角……）。想调参数就展开，想专注看曲线就全部收起。</p>
+            <p><span class="k k3">改了会怎样</span>收起后页面不再需要长时间滚动；展开的分区保留原有全部控件与提示。
+              玻璃盒分区还会额外受「显示算法内部量」开关控制（关掉时整块不出现）。</p>
+          </div>
+
+          <div class="ctl">
+            <div class="ctl-name">底部曲线区：三块独立折叠 <span class="ctl-range">工具条 chips + 面板箭头</span></div>
+            <p><span class="k k1">是什么</span>曲线区有「姿态角」「误差」「IMU 原始波形」三块。工具条上的三个 chips 与每块标题左侧的箭头是**同一组开关**，点哪个都行。</p>
+            <p><span class="k k2">起什么作用</span>三块面板各自独立开合，布局自动重排：三块全开时上面两块并排、IMU 独占一行；只开两块时并排铺满；只开一块时独占整行并自动加高。
+              收起的面板会缩成底部一行细标题条（带当前读数摘要），不再留下半格空白——这正是旧版「必须同时折叠上面两块才不空」的修复点。</p>
+            <p><span class="k k3">改了会怎样</span>面板越少、每块画布越高（150 → 170 → 196 px），单看一条曲线时更清楚。状态会随深链一起分享。</p>
+          </div>
+          <p><b>键盘快捷键</b>（焦点不在输入框时）：<span class="mono">空格</span> 暂停/继续、
+            <span class="mono">R</span> 重置、<span class="mono">1/2/3</span> 切换三个视图、
+            <span class="mono">D</span> 打开文档、<span class="mono">?</span> 提示。</p>
+
+          <div class="ctl">
+            <div class="ctl-name">实验库 <span class="ctl-range">面板一组按钮</span></div>
+            <p><span class="k k1">是什么</span>十个「一键复现」的实验：零偏漂移、方向门控救场、电机振动、磁干扰、初始对准、闭环控制、卡尔曼 Q/R 调参、万向节锁、Slerp vs 欧拉、4D 投影。</p>
+            <p><span class="k k2">起什么作用</span>每个实验只改一组参数并给出一句「看什么」——把自由调参变成可复现的教学现场，省去在 24 个滑块里摸索。</p>
+            <p><span class="k k3">改了会怎样</span>点击即应用并显示观察要点；实验之间互不影响，随时可切回自由调参。真实 IMU 模式下实验库停用（模拟参数不影响串口数据）。</p>
+          </div>
+
+          <div class="ctl">
+            <div class="ctl-name">本轮评测 <span class="ctl-range">面板表格</span></div>
+            <p><span class="k k1">是什么</span>对每种算法统计本轮运行的误差：当前值、均值、RMSE、峰值、收敛时刻（连续 1 s 总误差 &lt; 2°）。</p>
+            <p><span class="k k2">起什么作用</span>曲线回答「刚才发生了什么」，统计回答「这一轮谁更准、抖多大、多久收敛」。RMSE 对大误差更敏感；收敛时刻把「初始对准多快」变成可比较的数字。A/B 开启时 B 组也单独统计。</p>
+            <p><span class="k k3">改了会怎样</span>绿色高亮是本轮 RMSE 最优（真实模式下 Mahony 是基准，不参与评选）。重置即清零。样本 25 Hz、只统计从上次重置以来的数据。</p>
+          </div>
+
+          <div class="ctl">
+            <div class="ctl-name">磁力计校准 <span class="ctl-range">面板按钮组</span></div>
+            <p><span class="k k1">是什么</span>把「畸变磁球」拟合回球面的实测工具：球心 = 硬铁偏移，各轴半极差 = 对角软铁缩放。模拟模式可一键用当前磁模型生成全姿态样本；真实模式在翻滚机体时采集串口读数。</p>
+            <p><span class="k k2">起什么作用</span>MARG 的偏航精度直接取决于磁场质量。校准后估计算法拿到的是「减硬铁、乘软铁」修正过的磁向量；原始波形面板仍显示未修正读数，便于对照。</p>
+            <p><span class="k k3">改了会怎样</span>点「拟合并应用」后显示硬铁/软铁/场强/残差；勾选「应用校准」可随时旁路。覆盖不足（只绕一个轴转）会拒绝拟合并说明原因——球心在未转动的两个方向上不可观。</p>
+          </div>
 
           <div class="ctl">
             <div class="ctl-name">一键进入沙盒模式 <span class="ctl-range">文档页按钮</span></div>
@@ -512,7 +668,7 @@
           <div class="ctl">
             <div class="ctl-name">机动模式 <span class="ctl-range">下拉选择</span></div>
             <p><span class="k k1">是什么</span>驱动真实姿态随时间运动的脚本，相当于一架看不见的真飞机在飞。</p>
-            <p><span class="k k2">起什么作用</span>生成姿态真值 → 模拟 IMU 据此产出带噪声的传感器数据 → 喂给四种算法。</p>
+            <p><span class="k k2">起什么作用</span>生成姿态真值 → 模拟 IMU 据此产出带噪声的传感器数据 → 喂给五种算法。</p>
             <p><span class="k k3">改了会怎样</span>六种剧本对应不同难度：</p>
             <ul>
               <li><b>悬停微扰</b>——最温和，加速度计几乎没被污染，各算法都能贴住真值。</li>
@@ -598,6 +754,13 @@
           </div>
 
           <div class="ctl">
+            <div class="ctl-name">硬铁偏移 <span class="ctl-range">0 – 1（≈0 – 8 μT）</span></div>
+            <p><span class="k k1">是什么</span>机身金属、扬声器、电流回路在磁力计位置产生的<b>恒定</b>附加磁场。它不让读数抖动，而是把整个「磁球」从原点平移到另一个球心。</p>
+            <p><span class="k k2">起什么作用</span>制造 MARG 最典型的系统性错误：水平分量方向恒偏，偏航被拉到一个稳定错误值——而且无论机体怎么转，这个偏移都跟着走。它与「磁干扰强度」（交变）合起来覆盖硬铁/软铁两类工程干扰。</p>
+            <p><span class="k k3">改了会怎样</span>拉到 0.6：MARG 偏航出现固定偏差、磁航向箭头与真实机头分家；把下方「磁力计校准」走一遍（模拟数据自动采集 → 拟合并应用），偏移被球心拟合掉，偏航回正。真实器件请缓慢翻滚采集 240+ 点，只绕一个轴转会导致另一个方向的球心不可观。</p>
+          </div>
+
+          <div class="ctl">
             <div class="ctl-name">陀螺仪零偏 <span class="ctl-range">0 – 5 °/s</span></div>
             <p><span class="k k1">是什么</span>陀螺仪输出角速度时自带的恒定偏差——即使机体完全静止，它也一直报告一个小角速度。</p>
             <p><span class="k k2">起什么作用</span>姿态完全由陀螺仪积分得到，这个偏差每一步都被积进姿态，是<b>漂移的主要来源</b>（推导见数学原理·陀螺仪积分方程）。</p>
@@ -672,6 +835,13 @@
               经倾斜补偿后专门约束偏航通道。</p>
             <p><span class="k k3">改了会怎样</span>有零偏时（默认 1°/s），关掉它偏航误差持续累积、琥珀色机头箭头慢慢离开罗盘方向；
               勾上后偏航被磁场拉住回正。若同时把「磁干扰强度」拉大，偏航会被拉偏一个稳定误差——磁场被污染了。</p>
+          </div>
+
+          <div class="ctl">
+            <div class="ctl-name">加速度计观测门控 <span class="ctl-range">开关</span></div>
+            <p><span class="k k1">是什么</span>互补 / Mahony / Madgwick 三家共用的「观测可信度判断」：<b>幅度门控</b>（‖a‖ 偏离 g 超 35%）+ <b>方向门控</b>（实测重力方向与预测方向夹角超 20°）双层拒收。启动 ramp 期间自动关闭（否则初始偏差会被拒收卡死）。</p>
+            <p><span class="k k2">起什么作用</span>机动线加速度污染观测时，垂直方向的污染对向量模长只有二阶影响（4 m/s² 侧向 → 范数仅偏 8%），幅度门控看不见它——<b>方向门控才是主手段</b>。被拒的一帧退化为纯陀螺积分，用短期精度换长期稳健。卡尔曼另有自己的 40° 新息门控，不受此开关影响。</p>
+            <p><span class="k k3">改了会怎样</span>用「方向门控救场」实验：门控开时误差曲线贴地，关掉后持续侧向加速度把姿态拽偏 20° 以上。注意高频振动是零均值污染，门控可能误伤——这也是 Fusion 类库设置「恢复窗」的原因；本装置为教学保持固定阈值。</p>
           </div>
 
           <div class="ctl">
@@ -828,9 +998,31 @@
         <section id="d-gimbal">
           <h2>万向节锁视图</h2>
           <p>
-            三轴平衡环架模拟机械陀螺仪的框架结构：<b>蓝环 = 偏航（外）、金环 = 俯仰（中）、绿环 = 横滚（内）</b>。
+            三轴平衡环架模拟机械陀螺仪/惯性平台的框架结构：<b>蓝环 = 偏航（外）、金环 = 俯仰（中）、绿环 = 横滚（内）</b>。
             这是一个独立演示：只由本组滑块与按钮驱动，不受机动剧本和算法影响。
           </p>
+
+          <div class="ctl">
+            <div class="ctl-name">环架结构：为什么长这样 <span class="ctl-range">读模型</span></div>
+            <p><span class="k k1">是什么</span>每个环都是有宽度与壁厚的<b>金属环带</b>（内外带倒角亮边），相邻环之间由一根
+              <b>贯穿净空的连接轴 + 轴承</b>相连：外环上的轴承托住中环的轴、中环上的轴承托住内环的轴。</p>
+            <p><span class="k k2">起什么作用</span>这是真实环架的受力链——每一层只允许绕<b>一个</b>自由度转动，
+              其余方向被外层刚性约束。三根旋转轴用虚线延长到环外并标「偏航轴 ψ / 俯仰轴 θ / 横滚轴 φ」，
+              轴的颜色与对应环一致，所以「哪个环绕哪根轴」不用猜。</p>
+            <p><span class="k k3">改了会怎样</span>转任意一个滑块：环体会以指数阻尼平滑追上目标角度（不是瞬跳），
+              轴虚线只随<b>它的上级</b>转动——俯仰轴跟着偏航转、横滚轴跟着俯仰转，与真实万向架完全一致。
+              内环里载着带机体轴三箭头的四轴（载荷），它的世界姿态恒等于主视图的 toDisplay(qFromEuler(φ,θ,ψ))。</p>
+          </div>
+
+          <div class="ctl">
+            <div class="ctl-name">死锁可视化：变红 + 脉冲环 <span class="ctl-range">自动</span></div>
+            <p><span class="k k1">是什么</span>俯仰接近 ±90° 时，外环（偏航轴）与内环（横滚轴）在几何上重合：
+              两根环变红、两根轴的虚线同时变红、环心出现一圈红色脉冲环。</p>
+            <p><span class="k k2">起什么作用</span>把抽象的「丢了一个自由度」变成可指认的画面：
+              红色脉冲环正好落在两根轴的交点，说明<b>这两根轴变成了同一根</b>——绕它转既像横滚又像偏航。</p>
+            <p><span class="k k3">改了会怎样</span>面板状态行同步显示「内外环轴重合 → 横滚与偏航变成同一个动作」；
+              拖回 0° 后一切恢复三色，三根轴重新正交。</p>
+          </div>
 
           <div class="ctl">
             <div class="ctl-name">偏航 ψ / 俯仰 θ / 横滚 φ 滑块 <span class="ctl-range">θ 限 ±90°</span></div>
@@ -875,6 +1067,18 @@
           </div>
 
           <div class="ctl">
+            <div class="ctl-name">4D 立体投影：左乘 i / j / k / 重置 <span class="ctl-range">按钮组</span></div>
+            <p><span class="k k1">是什么</span>把 S³（四维单位球面）从南极投影到三维空间：q 落在球内（青点，w&gt;0），
+              −q 落在球外（品红点，w&lt;0），两者互为倒易点（|p(q)|·|p(−q)| = 1）。三个按钮各做一次<b>左乘基向量</b>，
+              相当于在 S³ 上绕对应轴走 180°。</p>
+            <p><span class="k k2">起什么作用</span>「累计旋转」读数把双重覆盖变成可数的事实：按 1 次 = 180°，
+              按 2 次（360°）3D 姿态已复原但 q 变号（青品红两点内外互换），按 4 次（720°）才真正回到 +1。
+              下方 S³ 剖面图（w–i 平面）是「抬升」视角：能同时看到 q 与 −q 在超球截面上的对径位置。</p>
+            <p><span class="k k3">改了会怎样</span>面板标题右侧的摘要实时显示累计转角与当前 q（如「累计 180° · q = +i」）；
+              图例也会切换成投影模式的说明（q / −q / i-j-k 基向量）。「重置」回单位姿态并清空两条轨迹。</p>
+          </div>
+
+          <div class="ctl">
             <div class="ctl-name">演示 q 与 −q <span class="ctl-range">开关</span></div>
             <p><span class="k k1">是什么</span>把当前四元数 q 和它的相反数 −q 各自摆出一个四轴，左右并排。</p>
             <p><span class="k k2">起什么作用</span>证明「四个数全变号 = 同一个旋转」：代数上 R(−q)=R(q)（旋转公式只含二阶量），
@@ -885,11 +1089,21 @@
 
           <h3>球面上的标记</h3>
           <ul>
+            <li><b>参考球 + 经纬网格</b>——球面是「机头方向」的取值空间：北极 = 机头朝上（俯仰 +90°），赤道 = 机头水平，
+              南极 = 朝下。经纬线让「走了多少度」可以目测。</li>
             <li><b>白弧</b>——Slerp 轨迹：绕固定轴匀速旋转，机头在球面画出<b>大圆</b>，这是姿态插值的理想路径（旋转群测地线）。</li>
             <li><b>品红弧</b>——欧拉角逐分量插值轨迹：三个角各自线性变化，合成旋转轴本身在漂移，路径扭曲。</li>
-            <li><b>青色箭头</b>——当前姿态的轴角表示：绕哪根轴、转多少度（箭头长度随角度缩放）。它直观展示「瞬时旋转轴」在两条路径下的行为：Slerp 的轴恒定不动。</li>
-            <li><b>蓝/橙小球</b>——起点、终点姿态；<b>白/品红滑球</b>——插值进度 t 在两条弧上的当前位置。</li>
+            <li><b>紫色偏差带</b>——两条弧之间的半透明面：**带的宽度就是两条路径在该处的角距离**。
+              中点最宽，面板读数「中点分叉 xx°」给出精确值（多轴预设可达 50°+）。</li>
+            <li><b>两侧线框四轴</b>——起点姿态（蓝）与终点姿态（橙）。插的是<b>姿态</b>，不是球面上的一个点：
+              两条弧都在描述「同一对姿态之间怎么过渡」，只是路径不同。</li>
+            <li><b>白/品红滑球 + 小锥</b>——插值进度 t 在两条弧上的位置；小锥指出此刻机头朝向。</li>
+            <li><b>青色箭头</b>——当前姿态的轴角表示：绕哪根轴、转多少度（长度随角度缩放）。Slerp 的轴恒定不动，
+              欧拉插值的轴一路漂移——这就是「欧拉插值会扭」的几何根源。</li>
           </ul>
+          <p class="plain"><b>面板读数怎么用</b>：<span class="mono">端点转角</span>是 q₀→q₁ 的真实旋转角（Slerp 走的就是这个角度）；
+            <span class="mono">欧拉路径累计</span>是欧拉插值一路「走」过的总角度——它总是 ≥ 端点转角，
+            多出来的部分就是白走的弯路；<span class="mono">中点分叉</span>是两条路径在 t=0.5 处的姿态差，超过 5° 就标黄提示。</p>
         </section>
 
         <section id="d-coords">
@@ -1133,7 +1347,7 @@ R(φ, 90°, ψ) =
           </p>
 
           <figure class="doc-fig doc-fig-demo">
-            <canvas id="fig-order-demo" width="720" height="240" title="旋转顺序不可交换：同一对偏航角与横滚角，先后顺序不同结果不同"></canvas>
+            <canvas id="fig-order-demo" width="720" height="240" role="img" aria-label="旋转顺序不可交换：同一对偏航角与横滚角，先后顺序不同结果不同" title="旋转顺序不可交换：同一对偏航角与横滚角，先后顺序不同结果不同"></canvas>
             <figcaption class="fig-cap">演示 · 旋转顺序不可交换：两颗骰子从同一初始姿态出发，左边<b>先偏航 ψ、再横滚 φ</b>，
               右边<b>先横滚 φ、再偏航 ψ</b>（都绕世界系轴），ψ = φ 自动在 0°–90° 间往返。角度一离开 0 两个终姿态就分道扬镳，
               底部实时给出两姿态的夹角——这正是 q₁⊗q₂ ≠ q₂⊗q₁ 的几何含义，也是欧拉角必须「按固定顺序」复合的原因。</figcaption>
@@ -1305,7 +1519,7 @@ i² = j² = k² = i·j·k = −1</div>
           </p>
 
           <figure class="doc-fig doc-fig-demo">
-            <canvas id="fig-allan-demo" width="720" height="230" title="Allan 方差：白噪声与速率随机游走在 log-log 图上的形状"></canvas>
+            <canvas id="fig-allan-demo" width="720" height="230" role="img" aria-label="Allan 方差：白噪声与速率随机游走在 log-log 图上的形状" title="Allan 方差：白噪声与速率随机游走在 log-log 图上的形状"></canvas>
             <figcaption class="fig-cap">演示 · Allan 方差 σ(τ)：对合成陀螺序列（655 s @50 Hz，已知噪声密度 N=0.01 °/s/√Hz 与随机游走 K=0.0035 °/s/√s）按不同平均时长 τ 计算相邻段差分。
               log-log 图左段斜率 −½ = 白噪声（读法：σ(1s) ≈ 噪声密度换算值），右段斜率 +½ = 零偏随机游走——
               器件数据手册的噪声指标就是从这种曲线读出来的，也是「零偏随机游走」滑块的系数来源。</figcaption>
@@ -1498,7 +1712,7 @@ i² = j² = k² = i·j·k = −1</div>
         <section id="m-fusion" class="math-section">
           <h2>修正律：从互补滤波到卡尔曼</h2>
           <p>
-            有了误差信号 e，最后一步是「拿 e 怎么办」。四种算法给出了四种回答，
+            有了误差信号 e，最后一步是「拿 e 怎么办」。四种融合律给出了四种回答（纯积分是「不回答」的对照组），
             本节给直觉与核心公式；每种算法的完整讲解（含调参与适用场景）见文档另一模块「滤波算法讲解」。
           </p>
 
@@ -1589,6 +1803,142 @@ m<sub>y</sub>' = m<sub>y</sub>·cos φ − m<sub>z</sub>·sin φ
             电机交变场则让偏航抖动。真实飞控的上电校准（转圈拟合硬铁球）与自适应估计就是在解这个问题。
             另注意磁北 ≠ 真北：磁偏角（declination）需要查表补偿，本装置未模拟。
           </p>
+        </section>
+
+        <section id="m-quat-intuition" class="math-section">
+          <h2>四元数的四种直觉：从「四个数」到「可测量的姿态」</h2>
+          <div class="doc-hook"><b>开胃问题</b>：同一个姿态，四元数、旋转矩阵、轴角、欧拉角各写一遍——
+            为什么工程上偏偏选四个数？如果只是「避免万向节锁」，三个数加个开关不就行了？</div>
+          <p>
+            这一节把前面散落在各章的直觉收拢成四条可以互相验证的通道。每一条都对应装置里的一个可见现象，
+            读完应该能在面板上把它们一一指出来。
+          </p>
+
+          <h3>直觉一：q 是「转轴 + 半角」的紧凑编码</h3>
+          <p>绕单位轴 <i>n</i> 转 θ 的四元数是</p>
+          <div class="formula">q = [ cos(θ/2), <i>n</i>·sin(θ/2) ]
+‖q‖ = 1　（单位四元数 ⇔ 纯旋转；模长不为 1 时先归一化）</div>
+          <div class="fvars"><b>变量</b>　θ：转角（弧度）　<i>n</i>：单位转轴（3 维）　q 的实部 w 只携带角度、虚部 (x,y,z) 携带「轴 × 半角正弦」</div>
+          <p class="plain">白话：<b>半角</b>不是记号游戏——它正是双重覆盖的来源。转 360° 时 θ/2 = 180°，
+            q = [−1, 0, 0, 0]，回到了「负的单位四元数」；要转 720° 才回到 [1,0,0,0]。
+            面板「四元数」视图连按两次「左乘 i」看到的就是这件事。</p>
+
+          <h3>直觉二：乘法 = 旋转的复合，且不可交换</h3>
+          <p>
+            四元数乘法 q₁⊗q₂ 对应「先做 q₂ 再做 q₁」（作用于向量时 q⊗v⊗q*）。它<b>不满足交换律</b>——
+            这不是缺陷，而是三维旋转的真实性质：先偏航后横滚 ≠ 先横滚后偏航。
+            装置里「旋转顺序不可交换」的双骰子演示（数学页 Canvas）把这件事画成了两个终姿态的夹角。
+          </p>
+          <div class="formula">q₁ ⊗ q₂ ≠ q₂ ⊗ q₁　　　　（复合顺序有实质差别）
+R(q₁⊗q₂) = R(q₁)·R(q₂)　（矩阵乘法同样不可交换，两者同构）</div>
+          <p>
+            教学要点：欧拉角把「顺序」藏在约定里（本装置 ZYX），四元数把顺序写在乘法顺序里。
+            前者容易忘、后者不会错——这是四元数在代码里更安全的原因之一。
+          </p>
+
+          <h3>直觉三：q 与 −q 是同一个姿态（双重覆盖）</h3>
+          <p>
+            旋转公式 v′ = q v q* 对 q 是<b>二次型</b>：q 全部取反，q* 也全部取反，两次符号相消，结果不变。
+            所以 S³（四维单位球面）到 SO(3)（三维旋转群）是 <b>2 对 1</b> 的映射。
+            数学上这叫 SU(2) 是 SO(3) 的双重覆盖，拓扑上意味着 SO(3) 不是单连通的（存在「转两圈才缩回一点」的环路）。
+          </p>
+          <div class="formula">R(q) = R(−q)　　　　（姿态相同，四个分量全反号）
+|p(q)| · |p(−q)| = 1　（立体投影下两者互为倒易点，一内一外）</div>
+          <p class="plain">
+            <b>工程后果有三条</b>：① 比较两个四元数是否表示同一姿态，要比较 |q₁·q₂| 而不是逐分量；
+            ② 插值必须先做短路径（q₀·q₁ &lt; 0 时翻号），否则动画会绕远路；
+            ③ 姿态误差不能用「四元数差」直接算，要用 2·acos|q₁·q₂| 或相对四元数的 atan2。
+            本装置的 <span class="mono">qAngleBetween</span> 就是第 ③ 条的实现（用 atan2 避开 acos 在小角处的精度损失）。
+          </p>
+
+          <h3>直觉四：姿态是一个「可测量」的量，不是三个数</h3>
+          <p>
+            这一点最容易被忽略，但它是所有滤波算法的前提：<b>姿态误差可以用两个向量直接测出来</b>。
+            加速度计告诉你「下」在哪，你的估计也说「下」在某处，两个单位向量的夹角就是倾角误差；
+            叉积 e = a × ĝ 不只是误差大小，还给出了「往哪个方向拧」的轴。
+          </p>
+          <div class="formula">e = a × <i class="oh">g</i>　　　　　‖e‖ = sin(误差角)　　e 的方向 = 修正旋转轴
+ω<sub>corr</sub> = Kp·e　　　（Mahony：把误差当角速度直接注入）</div>
+          <div class="fvars"><b>变量</b>　a：实测重力方向（归一化）　<i class="oh">g</i>：估计姿态预测的重力方向　e：误差向量（机体系）</div>
+          <p>
+            这就是为什么本装置的「玻璃盒」画两根箭头：白色 = 估计的「下」，品红 = 实测的「下」。
+            两箭头重合 ⟺ 姿态收敛；夹角就是误差角；叉积方向就是算法下一步要转的方向。
+            所有融合算法（互补除外，它工作在欧拉角域）都在这一个几何对象上做文章。
+          </p>
+
+          <div class="tscroll"><table class="docs-table">
+            <thead><tr><th>直觉</th><th>数学表述</th><th>装置里的对应现象</th><th>常见误解</th></tr></thead>
+            <tbody>
+              <tr><td>轴 + 半角</td><td>q = [cos(θ/2), n·sin(θ/2)]</td><td>轴角青箭头；四元数视图</td><td>以为半角只是符号约定</td></tr>
+              <tr><td>乘法 = 复合</td><td>R(q₁⊗q₂) = R(q₁)R(q₂)</td><td>骰子顺序演示；万向环三级嵌套</td><td>以为四元数乘法可交换</td></tr>
+              <tr><td>双重覆盖</td><td>R(q) = R(−q)，S³→SO(3) 是 2:1</td><td>q/−q 并排；4D 投影内外互换</td><td>以为 −q 是「反向旋转」</td></tr>
+              <tr><td>姿态可测</td><td>e = a × ĝ，‖e‖ = sin Δθ</td><td>玻璃盒双箭头；误差曲线</td><td>以为误差要先转成欧拉角才能算</td></tr>
+            </tbody>
+          </table></div>
+        </section>
+
+        <section id="m-kalman-intuition" class="math-section">
+          <h2>卡尔曼滤波的三层直觉：从「两台秤」到「协方差椭圆」</h2>
+          <div class="doc-hook"><b>开胃问题</b>：为什么卡尔曼滤波被称作「最优」？它到底在优化什么？
+            为什么同一个滤波器在静止时表现得像低通、在机动时又像纯积分？</div>
+
+          <h3>第一层：一维最优加权（两台秤）</h3>
+          <p>
+            你有两台秤称同一个物体：A 秤读数 10.0，历史误差 σ<sub>A</sub> = 0.1；B 秤读数 10.4，σ<sub>B</sub> = 0.2。
+            怎么合并？直觉是「谁更准就多信谁」。最小方差意义下的最优解是<b>按方差的倒数加权</b>：
+          </p>
+          <div class="formula">x̂ = <span class="frac"><span class="n">σ<sub>B</sub>²·x<sub>A</sub> + σ<sub>A</sub>²·x<sub>B</sub></span><span class="d">σ<sub>A</sub>² + σ<sub>B</sub>²</span></span>
+= x<sub>A</sub> + K·(x<sub>B</sub> − x<sub>A</sub>)　　K = <span class="frac"><span class="n">σ<sub>A</sub>²</span><span class="d">σ<sub>A</sub>² + σ<sub>B</sub>²</span></span> ∈ [0, 1]</div>
+          <div class="fvars"><b>变量</b>　K：卡尔曼增益（新观测占多少权重）　x<sub>B</sub> − x<sub>A</sub>：新息（innovation，观测与预测的差）</div>
+          <p class="plain">
+            白话：<b>卡尔曼滤波的全部内容就是这个式子</b>，只不过把「标量 x」换成「姿态 + 零偏」的状态向量，
+            把「σ²」换成协方差矩阵 P，把「谁的方差小」交给矩阵运算自动完成。
+            所以理解卡尔曼不需要先学矩阵——先把这个标量版本吃透。
+          </p>
+
+          <h3>第二层：协方差椭圆（不确定度的形状）</h3>
+          <p>
+            标量方差只能表达「一个大致的范围」，但姿态误差是有<b>方向</b>的：绕重力轴的误差（偏航）
+            和垂直重力轴的误差（倾角）不确定度完全不同。协方差矩阵 P 的特征向量给出「不确定度椭圆」的主轴，
+            特征值给出各方向的方差。
+          </p>
+          <div class="formula">P = E[(x − x̂)(x − x̂)<sup>T</sup>]　　　（对称半正定 6×6：姿态 3 + 零偏 3）
+P 的特征值大 → 该方向很不确定 → 该方向的观测权重自动升高</div>
+          <p>
+            这就是「卡尔曼比固定增益聪明」的地方：Mahony 的 Kp 对所有方向一视同仁，卡尔曼却知道
+            「现在横滚很不确定、偏航还挺准」，于是只大幅修正横滚。
+            装置里把 R 拉大（更不信加速度计），等价于告诉滤波器「观测的椭圆很大」，
+            增益自动变小，行为退化为纯积分——这是可以现场验证的预测。
+          </p>
+
+          <h3>第三层：为什么必须用误差状态（ESKF）</h3>
+          <p>
+            直接对四元数用线性卡尔曼是错的：四元数有<b>单位模长约束</b>（4 个数只有 3 个自由度），
+            线性更新会破坏约束，归一化又会让协方差不一致。误差状态卡尔曼（ESKF/MEKF）绕开这个陷阱：
+          </p>
+          <div class="formula">q<sub>true</sub> = q<sub>nominal</sub> ⊗ δq(δθ)　　δθ ∈ R³（无约束的小角误差）
+预测：q<sub>nominal</sub> 用陀螺仪高频积分（不含噪声估计）；δθ、δb 由滤波器以线性方式估计
+注入：q ← q ⊗ δq(δθ̂) 后 δθ 重置为零，协方差同步收缩</div>
+          <div class="fvars"><b>变量</b>　δθ：机体系小角误差（3 维，永远很小）　δb：零偏误差　⊗：四元数乘法（乘性更新，不是加法）</div>
+          <p>
+            <b>三个关键点</b>：① 误差永远是小量，线性化误差可控；② 更新在切空间做加法，不破坏单位模长；
+            ③ 注入后必须重置协方差（否则误差被重复计入）。本装置的 6 维 [δθ, δb] 就是完整 15 维 ESKF
+            （姿态 + 速度 + 位置 + 零偏）的姿态-零偏子集，结构完全同源。
+          </p>
+          <p class="plain">
+            <b>为什么这很重要</b>：组合导航（KF-GINS、PX4 EKF2、VINS）全部是 ESKF 家族。
+            看懂本装置这 6 维，再看 15 维、24 维只是「多加几组状态和观测」，
+            数学结构（预测 → 观测 → 增益 → 注入 → 重置）一个字都不用改。
+          </p>
+
+          <div class="tscroll"><table class="docs-table">
+            <thead><tr><th>层次</th><th>核心式</th><th>装置里的可验证现象</th></tr></thead>
+            <tbody>
+              <tr><td>一维最优加权</td><td>K = σ²<sub>pred</sub> / (σ²<sub>pred</sub> + σ²<sub>obs</sub>)</td><td>R 拉大 → 退化为纯积分；Q 拉大 → 追着噪声抖</td></tr>
+              <tr><td>协方差椭圆</td><td>P 的特征值 = 各方向不确定度</td><td>机动时倾角不确定度暴涨 → 自动偏信陀螺仪</td></tr>
+              <tr><td>误差状态</td><td>q = q̂ ⊗ δq(δθ)，δθ 线性可估</td><td>零偏 |b| 收敛读数；协方差 trace 下降</td></tr>
+            </tbody>
+          </table></div>
         </section>
 
         <section id="m-slerp" class="math-section optional">
@@ -1726,6 +2076,9 @@ Squad(q₁, q₂, s₁, s₂, t) = Slerp( Slerp(q₁, q₂, t), Slerp(s₁, s₂
 ⑤ 维护　q ← <span class="frac"><span class="n">q</span><span class="d">‖q‖</span></span>　　　　　　　　　　　　　（归一化，全部维护成本）
 
 输出　每 40 ms 记录曲线点；qToEuler 换算欧拉角供显示</div>
+          <p class="plain"><b>真实串口模式</b>：公式不变，只是 dt 不再固定 2 ms——每帧的 dt 取固件 tick 差
+            （典型 5–10 ms，即 100–200 Hz），队列按帧到达节奏回放；tick 回绕/空洞会自动退回名义帧间隔并夹在 1–50 ms。
+            这正是「采样率变化、积分步长跟着变」的工程口径（本装置旧版曾把 200 Hz 数据当 500 Hz 重复积分，已修）。</p>
           <p>每一行都能在装置里找到对应的可见现象：</p>
           <ul>
             <li>① 预测 → 切「纯陀螺仪积分」看它独自工作的漂移；</li>
@@ -1752,7 +2105,7 @@ Squad(q₁, q₂, s₁, s₂, t) = Slerp( Slerp(q₁, q₂, t), Slerp(s₁, s₂
           </ul>
 
           <figure class="doc-fig doc-fig-demo">
-            <canvas id="fig-calib-demo" width="720" height="250" title="磁力计校准舞蹈：畸变椭球点云 → 标定后收圆"></canvas>
+            <canvas id="fig-calib-demo" width="720" height="250" role="img" aria-label="磁力计校准舞蹈：畸变椭球点云到标定后收圆" title="磁力计校准舞蹈：畸变椭球点云 → 标定后收圆"></canvas>
             <figcaption class="fig-cap">演示 · 磁力计「校准舞蹈」：左面板是带硬铁偏移（椭球中心偏离原点）与软铁刻度（三轴伸缩）的原始读数点云，
               右面板是标定补偿后的同批数据——球心回到原点、三轴等宽。虚拟机体按三轴不同频率翻滚「舞蹈」采点，
               底部进度条即方向覆盖度：铺满球面才能把三个参数拟合准，覆盖不足时拟合误差会被抄进补偿参数（ArduPilot 罗盘校准的绿色进度条就是同一件事）。</figcaption>
@@ -1824,7 +2177,7 @@ Squad(q₁, q₂, s₁, s₂, t) = Slerp( Slerp(q₁, q₂, t), Slerp(s₁, s₂
           </div>
         
           <figure class="doc-fig doc-fig-demo">
-            <canvas id="fig-comp-demo" width="720" height="230" title="互补滤波三路信号实时演示"></canvas>
+            <canvas id="fig-comp-demo" width="720" height="230" role="img" aria-label="互补滤波三路信号实时演示：真实角、陀螺仪积分、加速度计与融合结果" title="互补滤波三路信号实时演示"></canvas>
             <figcaption class="fig-cap">演示 · 互补滤波三路信号：每轮从左端「起点」开始向右描绘（圆点为当前时刻），画满一轮稍作停顿后自动重播。黑=真实角度；红=陀螺仪积分（零偏 0.8°/s 驱动持续漂移）；灰=加速度计（噪声大但围绕真值、永不漂移）；橙=融合输出（跟得快、又不漂）。α=1.4。</figcaption>
           </figure>
         
@@ -1886,6 +2239,66 @@ Squad(q₁, q₂, s₁, s₂, t) = Slerp( Slerp(q₁, q₂, t), Slerp(s₁, s₂
         </section>
 
         
+
+        <section id="f-reading" class="doc-page-extra">
+          <h2>怎么读这张图：五条曲线的诊断手册</h2>
+          <p>
+            本装置最有价值的用法不是「看哪个误差小」，而是<b>从曲线形状反推算法在干什么</b>。
+            下面是一张「症状 → 病因 → 实验」对照表，配合实验库使用。
+          </p>
+          <div class="tscroll"><table class="docs-table">
+            <thead><tr><th>曲线症状</th><th>算法层面在发生什么</th><th>怎么复现 / 怎么验证</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>红线（纯积分）匀速直线爬升</td>
+                <td>零偏被恒定积分：误差 ≈ b·t。斜率就是零偏大小</td>
+                <td>实验「零偏漂移」；把零偏从 1 调到 3，斜率变三倍</td>
+              </tr>
+              <tr>
+                <td>红线不是直线，越走越陡（抛物线）</td>
+                <td>零偏本身在随机游走（Allan 方差 +½ 段），误差按 √t 累积后经积分变成超线性</td>
+                <td>把「零偏随机游走」调到 0.3；对照文档里的 Allan 曲线</td>
+              </tr>
+              <tr>
+                <td>所有融合曲线同步抖动，幅度随振动滑块变化</td>
+                <td>高频零均值污染直接进入观测；增益越高抖得越厉害</td>
+                <td>实验「电机振动」；对比 β/α/Kp 调小后的平滑度</td>
+              </tr>
+              <tr>
+                <td>机动瞬间所有曲线一起抬头，然后回落</td>
+                <td>线加速度污染加计 → 门控拒收 → 该帧退化为纯积分 → 姿态被陀螺仪带走一点</td>
+                <td>实验「方向门控救场」；关掉门控看抬头幅度是否更大</td>
+              </tr>
+              <tr>
+                <td>Mahony 先冲高再缓慢回落（长时间尾巴）</td>
+                <td>Ki 积分项在「记账」：零偏要经过一段时间才被完全补偿</td>
+                <td>把 Ki 调 0 → 尾巴变成永久残差；调大 → 尾巴变短但可能振荡</td>
+              </tr>
+              <tr>
+                <td>Madgwick 收敛后停在一个不为零的小台阶</td>
+                <td>没有积分项，恒定零偏留下稳态误差 ≈ b/β</td>
+                <td>零偏 2°/s + β 0.1 → 稳态差约 20°；把 β 调大台阶变小但更抖</td>
+              </tr>
+              <tr>
+                <td>卡尔曼曲线在剧烈机动时反而最稳</td>
+                <td>新息门控 + 协方差自适应：观测不可信时自动少用</td>
+                <td>实验「卡尔曼 Q/R 调参」；把 R 拉满看它退化成纯积分</td>
+              </tr>
+              <tr>
+                <td>偏航曲线慢慢分家（横滚俯仰贴合）</td>
+                <td>加计对偏航不可观：IMU 模式下偏航只能靠陀螺仪</td>
+                <td>勾掉 MARG → 偏航漂；勾上 → 被磁场拉回（有磁干扰时会拉偏）</td>
+              </tr>
+              <tr>
+                <td>切换机动模式后所有曲线出现台阶</td>
+                <td>剧本切换会重置仿真时间与真值相位，但估计器状态不重置 → 出现一次瞬态</td>
+                <td>这是预期行为；想看干净的对比请点「重置」后再观察</td>
+              </tr>
+            </tbody>
+          </table></div>
+          <p class="plain"><b>使用建议</b>：把「本轮评测」表的 RMSE 当作横向比较的客观指标，
+            把曲线形状当作理解算法的窗口。两者结合——RMSE 说「谁更准」，形状说「为什么」。</p>
+        </section>
 
         <section id="f-compare">
           <h2>对比与选型</h2>

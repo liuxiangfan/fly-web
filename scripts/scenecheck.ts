@@ -109,42 +109,41 @@ const rig = buildGimbal();
   check("圆环朝向：环面包含自身旋转轴", bad.length === 0, bad.length === 0 ? detail.join("；") : bad.join("；"));
 }
 
-// ============ 2b. 枢轴销连通性：每个销必须真正跨越相邻两环的环管 ============
+// ============ 2b. 枢轴轴承连通性：每个轴承必须真正跨越相邻两环的环带 ============
 {
-  const { R_OUTER, R_MID, R_INNER } = GIMBAL_GEOM;
   rig.setAngles(0, 0, 0);
   rig.group.updateWorldMatrix(true, true);
 
-  // 销的轴向为其局部 +Y（CylinderGeometry 的轴），取世界方向与两端点
-  const spans = rig.parts.pivots.map((pin) => {
+  // 轴承是环带状的短圆柱（局部孔轴 +Z），其两端应分别落在两个环的半径上
+  const spans = rig.parts.pivots.map(({ mesh, rInner, rOuter }) => {
     const q = new THREE.Quaternion();
-    pin.getWorldQuaternion(q);
-    const dir = new THREE.Vector3(0, 1, 0).applyQuaternion(q).normalize();
+    mesh.getWorldQuaternion(q);
+    const dir = new THREE.Vector3(0, 0, 1).applyQuaternion(q).normalize();
     const center = new THREE.Vector3();
-    pin.getWorldPosition(center);
-    const half = (pin.geometry as THREE.CylinderGeometry).parameters.height / 2;
+    mesh.getWorldPosition(center);
+    const half = (mesh.geometry as THREE.CylinderGeometry).parameters.height / 2;
     const a = center.clone().addScaledVector(dir, -half);
     const b = center.clone().addScaledVector(dir, half);
-    return { rMin: Math.min(a.length(), b.length()), rMax: Math.max(a.length(), b.length()) };
+    return {
+      rMin: Math.min(a.length(), b.length()),
+      rMax: Math.max(a.length(), b.length()),
+      rInner,
+      rOuter,
+    };
   });
 
-  // 前两个销连接 中环↔外环，后两个销连接 内环↔中环
-  const gaps: Array<[string, { rMin: number; rMax: number }, number, number]> = [
-    ["中环↔外环", spans[0], R_MID, R_OUTER],
-    ["中环↔外环", spans[1], R_MID, R_OUTER],
-    ["内环↔中环", spans[2], R_INNER, R_MID],
-    ["内环↔中环", spans[3], R_INNER, R_MID],
-  ];
-  const broken = gaps.filter(([, s, rA, rB]) => !(s.rMin <= Math.min(rA, rB) && s.rMax >= Math.max(rA, rB)));
-  const surfaceGap = Math.min(R_MID - R_INNER, R_OUTER - R_MID) - 2 * GIMBAL_GEOM.TUBE;
+  const broken = spans.filter((s) => !(s.rMin <= s.rInner && s.rMax >= s.rOuter));
+  // 环带净空：相邻环的半径差必须大于两环半厚之和（否则环带会互相穿模）
+  const gapOuterMid = GIMBAL_GEOM.R_OUTER - GIMBAL_GEOM.R_MID - 2 * GIMBAL_GEOM.BAND_T;
+  const gapMidInner = GIMBAL_GEOM.R_MID - GIMBAL_GEOM.R_INNER - 2 * GIMBAL_GEOM.BAND_T;
   check(
-    "枢轴销真正连接相邻环",
-    rig.parts.pivots.length === 4 && broken.length === 0 && surfaceGap > 0,
-    `4 个销；` +
-      gaps
-        .map(([name, s, rA, rB]) => `${name} 跨越 ${s.rMin.toFixed(3)}→${s.rMax.toFixed(3)}（需含 ${rA}/${rB}）`)
+    "枢轴轴承真正连接相邻环",
+    rig.parts.pivots.length === 4 && broken.length === 0 && gapOuterMid > 0 && gapMidInner > 0,
+    `${rig.parts.pivots.length} 个轴承；` +
+      spans
+        .map((s) => `跨越 ${s.rMin.toFixed(3)}→${s.rMax.toFixed(3)}（需含 ${s.rInner}/${s.rOuter}）`)
         .join("；") +
-      `；相邻环表面间隙 ${surfaceGap.toFixed(3)}（须 >0 即不穿模）`,
+      `；环带净空 外↔中 ${gapOuterMid.toFixed(3)}、中↔内 ${gapMidInner.toFixed(3)}（须 >0）`,
   );
 }
 
@@ -169,14 +168,17 @@ const rig = buildGimbal();
   rig.setAngles(0, 0, 0);
 }
 
-// ============ 4. 内嵌小四轴：直接挂在横滚环下且无额外旋转 ============
+// ============ 4. 载荷：挂在横滚环下、自身无额外旋转（姿态完全由三级环链条决定） ============
 {
   const q = rig.quad.group.quaternion;
   const isIdentity = Math.abs(q.w - 1) < 1e-12 && Math.abs(q.x) < 1e-12 && Math.abs(q.y) < 1e-12 && Math.abs(q.z) < 1e-12;
+  // 四轴现在是「载荷组」的子节点（载荷组再加机体轴箭头），载荷组必须直接挂在横滚环下
+  const payloadUnderRoll = rig.parts.payload.parent === rig.parts.rollGroup;
+  const quadUnderPayload = rig.quad.group.parent === rig.parts.payload;
   check(
-    "内嵌四轴挂在横滚环下且自身无额外旋转",
-    rig.quad.group.parent === rig.parts.rollGroup && isIdentity,
-    `父节点=${rig.quad.group.parent === rig.parts.rollGroup ? "横滚环" : "异常"}，自身四元数=(${q.x}, ${q.y}, ${q.z}, ${q.w})`,
+    "载荷挂在横滚环下且四轴无额外旋转",
+    payloadUnderRoll && quadUnderPayload && isIdentity,
+    `载荷父节点=${payloadUnderRoll ? "横滚环" : "异常"}；四轴父节点=载荷组 ${quadUnderPayload}；自身四元数=(${q.x}, ${q.y}, ${q.z}, ${q.w})`,
   );
 }
 
@@ -206,7 +208,7 @@ const rig = buildGimbal();
       maxR = Math.max(maxR, Math.hypot(v.x, v.z));
     }
   });
-  const innerSurface = GIMBAL_GEOM.R_INNER - GIMBAL_GEOM.TUBE;
+  const innerSurface = GIMBAL_GEOM.R_INNER - GIMBAL_GEOM.BAND_T;
   check(
     "内嵌四轴不穿出内环",
     maxR < innerSurface,
@@ -239,74 +241,64 @@ const rig = buildGimbal();
   );
 }
 
-// ============ 4c. 环标签必须挂在各自的环下并随环转动 ============
+// ============ 4c. 轴标签的层级语义：标签落在自己的旋转轴上 ============
+// 数学上「轴上一点绕该轴旋转不动」，所以正确的断言不是「转自己的轴会移动」，
+// 而是：① 标签分别挂在 基座 / 外环 / 中环 下（层级正确）；
+//        ② 绕**上级**轴转动时标签跟着走（说明它在父坐标系里）；
+//        ③ 标签落在自己轴的方向上（不会漂到环外误导读者）。
 {
-  const labelUnder = (parent: THREE.Object3D): THREE.Sprite | null => {
-    const found = parent.children.find(
-      (c) => (c as THREE.Sprite).isSprite === true,
-    ) as THREE.Sprite | undefined;
-    return found ?? null;
-  };
-  const yawLabel = labelUnder(rig.parts.yawGroup);
-  const pitchLabel = labelUnder(rig.parts.pitchGroup);
-  const rollLabel = labelUnder(rig.parts.rollGroup);
-  const allPresent = !!(yawLabel && pitchLabel && rollLabel);
-
   const posOf = (obj: THREE.Object3D) => {
     const p = new THREE.Vector3();
     obj.getWorldPosition(p);
     return p;
   };
+  const { yaw: yawLab, pitch: pitchLab, roll: rollLab } = rig.parts.axisLabels;
+  const allPresent = !!(yawLab && pitchLab && rollLab);
+  const parentsOk =
+    yawLab.parent === rig.group &&
+    pitchLab.parent === rig.parts.yawGroup &&
+    rollLab.parent === rig.parts.pitchGroup;
 
-  // 1) 只转外环（偏航）：三个标签都应跟着转（外环是最外层父节点）
+  // 绕外环（偏航）转 60°：俯仰轴标签（在 Z 轴上）应移动，偏航轴标签（在 Y 轴上）不动
   rig.setAngles(0, 0, 0);
   rig.group.updateWorldMatrix(true, true);
-  const yawBefore = allPresent ? posOf(yawLabel!) : null;
-  const pitchBeforeYaw = allPresent ? posOf(pitchLabel!) : null;
+  const pitchBefore = posOf(pitchLab);
+  const yawBefore = posOf(yawLab);
   rig.setAngles(0, 0, 60 * (Math.PI / 180));
   rig.group.updateWorldMatrix(true, true);
-  const yawMoved = yawBefore && allPresent ? yawBefore.distanceTo(posOf(yawLabel!)) : 0;
-  const pitchMovedByYaw = pitchBeforeYaw && allPresent ? pitchBeforeYaw.distanceTo(posOf(pitchLabel!)) : 0;
+  const pitchMovedByYaw = pitchBefore.distanceTo(posOf(pitchLab));
+  const yawStillByYaw = yawBefore.distanceTo(posOf(yawLab));
 
-  // 2) 只转中环（俯仰）：中环标签移动，而外环标签（父层级，未动）不动
+  // 绕中环（俯仰，轴 Z）转 40°：横滚轴标签（在 X 轴上）应移动
   rig.setAngles(0, 0, 0);
   rig.group.updateWorldMatrix(true, true);
-  const yawBeforePitch = allPresent ? posOf(yawLabel!) : null;
-  const pitchBeforePitch = allPresent ? posOf(pitchLabel!) : null;
+  const rollBefore = posOf(rollLab);
   rig.setAngles(0, 40 * (Math.PI / 180), 0);
   rig.group.updateWorldMatrix(true, true);
-  const pitchMoved = pitchBeforePitch && allPresent ? pitchBeforePitch.distanceTo(posOf(pitchLabel!)) : 0;
-  const yawStill = yawBeforePitch && allPresent ? yawBeforePitch.distanceTo(posOf(yawLabel!)) : 0;
+  const rollMovedByPitch = rollBefore.distanceTo(posOf(rollLab));
 
-  // 3) 只转内环（横滚）：内环标签移动，外环标签不动
+  // 标签方向：必须落在自己那根轴的方向上（允许 ±），且半径大于所属环
   rig.setAngles(0, 0, 0);
   rig.group.updateWorldMatrix(true, true);
-  const rollBefore = allPresent ? posOf(rollLabel!) : null;
-  const yawBeforeRoll = allPresent ? posOf(yawLabel!) : null;
-  rig.setAngles(50 * (Math.PI / 180), 0, 0);
-  rig.group.updateWorldMatrix(true, true);
-  const rollMoved = rollBefore && allPresent ? rollBefore.distanceTo(posOf(rollLabel!)) : 0;
-  const yawStillRoll = yawBeforeRoll && allPresent ? yawBeforeRoll.distanceTo(posOf(yawLabel!)) : 0;
-
-  // 4) 标签位置须落在所属环之外（半径 > 环半径），确保不埋进环体
-  rig.setAngles(0, 0, 0);
-  rig.group.updateWorldMatrix(true, true);
+  const dirOf = (s: THREE.Sprite) => posOf(s).normalize();
+  const axisOk =
+    dirOf(yawLab).y > 0.999 &&
+    Math.abs(dirOf(pitchLab).z) > 0.999 &&
+    Math.abs(dirOf(rollLab).x) > 0.999;
   const radiusOf = (s: THREE.Sprite) => Math.hypot(...posOf(s).toArray());
+  const radiiOk =
+    radiusOf(yawLab) > GIMBAL_GEOM.R_OUTER &&
+    radiusOf(pitchLab) > GIMBAL_GEOM.R_MID &&
+    radiusOf(rollLab) > GIMBAL_GEOM.R_INNER;
 
   check(
-    "环标签挂在各自环下并随环转动",
-    allPresent &&
-      yawMoved > 0.1 && pitchMovedByYaw > 0.1 &&
-      pitchMoved > 0.1 && yawStill < 1e-9 &&
-      rollMoved > 0.1 && yawStillRoll < 1e-9 &&
-      radiusOf(yawLabel!) > GIMBAL_GEOM.R_OUTER &&
-      radiusOf(pitchLabel!) > GIMBAL_GEOM.R_MID &&
-      radiusOf(rollLabel!) > GIMBAL_GEOM.R_INNER,
-    `三个标签均在位=${allPresent}；` +
-      `转外环 60°：偏航标签移动 ${yawMoved.toFixed(2)}、俯仰标签随动 ${pitchMovedByYaw.toFixed(2)}（均须 >0.1）；` +
-      `转中环 40°：俯仰标签移动 ${pitchMoved.toFixed(2)}（须 >0.1）、偏航标签静止 ${yawStill.toExponential(1)}（须 ≈0）；` +
-      `转内环 50°：横滚标签移动 ${rollMoved.toFixed(2)}（须 >0.1）、偏航标签静止 ${yawStillRoll.toExponential(1)}（须 ≈0）；` +
-      `标签半径 偏航 ${radiusOf(yawLabel!).toFixed(2)}>${GIMBAL_GEOM.R_OUTER}、俯仰 ${radiusOf(pitchLabel!).toFixed(2)}>${GIMBAL_GEOM.R_MID}、横滚 ${radiusOf(rollLabel!).toFixed(2)}>${GIMBAL_GEOM.R_INNER}`,
+    "轴标签层级与方向正确",
+    allPresent && parentsOk && pitchMovedByYaw > 0.1 && yawStillByYaw < 1e-9 &&
+      rollMovedByPitch > 0.1 && axisOk && radiiOk,
+    `层级 基座/外环/中环=${parentsOk}；` +
+      `转偏航 60°：俯仰轴标签随动 ${pitchMovedByYaw.toFixed(2)}（须 >0.1）、偏航轴标签不动 ${yawStillByYaw.toExponential(1)}；` +
+      `转俯仰 40°：横滚轴标签随动 ${rollMovedByPitch.toFixed(2)}（须 >0.1）；` +
+      `标签方向沿各自轴=${axisOk}；半径 ${radiusOf(yawLab).toFixed(2)}/${radiusOf(pitchLab).toFixed(2)}/${radiusOf(rollLab).toFixed(2)}`,
   );
   rig.setAngles(0, 0, 0);
 }

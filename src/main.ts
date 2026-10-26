@@ -1,5 +1,6 @@
 // KaTeX 数学字体（本地打包，无 CDN 依赖）：文档公式块用它的衬线字形
 import "katex/dist/katex.min.css";
+import "./fonts.css"; // 自托管 Fira 子集：国内网络/PWA 离线均不依赖 Google Fonts
 import "./style.css";
 import { createScene } from "./scene/setup";
 import { QUAT_POSE_PAIRS } from "./scene/quatview";
@@ -7,7 +8,7 @@ import { RollingChart } from "./ui/chart";
 import { World } from "./core/world";
 import { scenarios } from "./core/scenarios";
 import type { ImuParams, ImuSample } from "./core/imu";
-import { G_ACC, MAG_WORLD_NED } from "./core/imu";
+import { G_ACC, MAG_WORLD_NED, simulateMag } from "./core/imu";
 import {
   ComplementaryEstimator,
   KalmanEstimator,
@@ -22,7 +23,16 @@ import * as THREE from "three";
 import { applyViewDom, narrateGimbal, type UiView } from "./ui/mode";
 import { coarseAlign } from "./estimators";
 import { Gauss, mulberry32 } from "./core/rng";
-import { parseFrame, type Mounting, type SerialImuFrame } from "./core/serial";
+import {
+  frameDtSec,
+  parseFrame,
+  type Mounting,
+  type SerialImuFrame,
+} from "./core/serial";
+import { applyMagCalibration, calibrateMag, type MagCalibration } from "./core/magcal";
+import { ErrorTracker } from "./core/stats";
+import { EXPERIMENTS, type ExperimentSpec } from "./ui/experiments";
+import { b64urlDecode, b64urlEncode } from "./ui/b64";
 
 const H = 1 / 500; // 仿真/解算步长
 const LOG_DT = 0.04; // 曲线记录间隔
@@ -40,7 +50,7 @@ function showSimError(err: unknown): void {
   chip.className = "ov-chip";
   chip.style.color = "#f85149";
   chip.textContent = `仿真已暂停：${err instanceof Error ? err.message : String(err)}（切换机动模式后点「继续」可恢复）`;
-  $("readout-overlay").appendChild(chip);
+  (document.getElementById("toast-layer") ?? $("readout-overlay")).appendChild(chip);
 }
 
 // ---------- 仿真状态 ----------
@@ -72,11 +82,38 @@ const imuParams: ImuParams = {
   disturbMag: 0,
 };
 
+// ---------- 磁力计标定（硬铁球心 + 对角软铁缩放） ----------
+// 采集 → 拟合 → 应用。模拟模式可用「用当前磁模型自动采集」一步生成覆盖全姿态的
+// 样本（含当前硬铁/干扰/噪声参数）；真实模式则在用户翻滚机体时收集串口磁读数。
+const MAG_CAL_TARGET = 240;
+const magCalState = {
+  cal: null as MagCalibration | null,
+  applied: false,
+  collecting: false,
+  samples: [] as V3[],
+  /** 最近一次拟合失败的原因（UI 提示用） */
+  message: "",
+};
+function magForEstimation(raw: V3): V3 {
+  return applyMagCalibration(raw, magCalState.applied ? magCalState.cal : null);
+}
+function collectMagSample(raw: V3): void {
+  if (!magCalState.collecting) return;
+  if (magCalState.samples.length >= 2000) return;
+  magCalState.samples.push([raw[0], raw[1], raw[2]]);
+}
+
 const state = {
   playing: true,
   source: "mahony" as "truth" | Estimator["id"],
   /** real=true 时数据来自串口真实 IMU：无真值基准，误差曲线改以 Mahony 为参照 */
   real: false,
+  /**
+   * 统一的仿真/数据时钟（秒）。模拟模式跟随 world.t；真实模式按固件 tick
+   * 推进——曲线横轴、时钟读数、静止检测冷却、统计窗口全部只认它。
+   * （修复：旧版真实模式从不推进 world.t，导致曲线所有点挤在 t=0。）
+   */
+  simTime: 0,
   channel: 0,
   attVisible: [true, true, true, true, true, true],
   errVisible: [true, true, true, true, true, true],
@@ -86,10 +123,36 @@ const state = {
   view: "attitude" as UiView,
 };
 
+/**
+ * 真实模式下停用「只对模拟世界有意义」的控件：
+ * 剧本、手动目标、IMU 污染滑块、幻影、闭环、初始偏差——它们不会影响串口数据，
+ * 但旧版只是静默忽略，用户会以为滑块坏了。现在明确置灰 + 状态行说明。
+ */
+function setSimControlsDisabled(disabled: boolean): void {
+  const scope = document.querySelectorAll<HTMLInputElement | HTMLSelectElement>(
+    ".section-scenario input, .section-scenario select, .section-imu input, .section-imu select",
+  );
+  for (const el of scope) {
+    if (el.id === "serial-mounting") continue; // 安装方向对真实数据仍然有效
+    el.disabled = disabled;
+  }
+  for (const id of ["ghost-toggle", "loop-toggle", "init-offset-toggle", "btn-sandbox"]) {
+    const el = document.getElementById(id) as HTMLInputElement | HTMLButtonElement | null;
+    if (el) el.disabled = disabled;
+  }
+  document.querySelectorAll<HTMLButtonElement>("#experiment-list button").forEach((b) => {
+    b.disabled = disabled;
+  });
+  const note = document.getElementById("real-mode-note");
+  if (note) note.classList.toggle("hidden", !disabled);
+}
+
 /** 真实/模拟模式切换的连带语义（幻影、误差参照、UI 显隐） */
 function applyDataSourceSemantics(): void {
   state.real = serialState.running;
   document.body.dataset.imuMode = state.real ? "real" : "sim";
+  setSimControlsDisabled(state.real);
+  updateMagCalUi();
   $("err-title").textContent = state.real ? "姿态偏差（各算法 vs Mahony 基准）" : "姿态总误差（解算 vs 真实）";
   // 真实模式无真值：幻影与「真实姿态」来源失去意义，强制切到 Mahony 并隐藏幻影选项区
   if (state.real) {
@@ -103,6 +166,13 @@ function applyDataSourceSemantics(): void {
     for (const c of abState.clones) c.reset();
     resetSim();
   }
+  // 真实模式没有真值：禁用「真实姿态」选项，防止选回后 3D 显示陈旧的模拟姿态
+  const truthOpt = sourceSelect.querySelector<HTMLOptionElement>('option[value="truth"]');
+  if (truthOpt) truthOpt.disabled = state.real;
+  // 姿态曲线图例第一项随数据源改名：真实模式下它画的是 Mahony 基准，不是真值
+  const truthChip = attLegend?.chips[0];
+  const truthName = truthChip?.children[1] as HTMLElement | undefined;
+  if (truthName) truthName.textContent = state.real ? "基准(Mahony)" : "真实";
 }
 $("btn-serial").addEventListener("dblclick", (e) => e.preventDefault());
 
@@ -119,6 +189,10 @@ function cloneOf(e: Estimator): Estimator {
     : new KalmanEstimator();
   c.setParams(e.getParams());
   c.magEnabled = e.magEnabled;
+  if (e.id === "comp" || e.id === "mahony" || e.id === "madg") {
+    (c as ComplementaryEstimator | MahonyEstimator | MadgwickEstimator).accelGate =
+      (e as ComplementaryEstimator | MahonyEstimator | MadgwickEstimator).accelGate;
+  }
   return c;
 }
 function snapshotAB(): void {
@@ -127,6 +201,9 @@ function snapshotAB(): void {
     c.reset({ ...e.q }); // 从 A 组当前姿态出发（参数冻结；卡尔曼零偏从头重学，见文档）
     return c;
   });
+  metricsB = abState.clones.map(() => new ErrorTracker({ thresholdDeg: 2, holdSec: 1 }));
+  state.errVisibleB.fill(true); // 快照后默认显示 B 组虚线（否则用户只看到 A，以为 A/B 没生效）
+  applyVisibility();
 }
 function abAlpha(color: string): string {
   return color + "99"; // B 曲线约 60% 不透明：与 A 同色系但层次可分，重合也不完全遮挡
@@ -141,7 +218,6 @@ $("ab-toggle").addEventListener("change", () => {
 $("btn-ab-snapshot").addEventListener("click", () => {
   if (abState.on) snapshotAB();
 });
-$("btn-sandbox").addEventListener("click", () => enterSandbox());
 
 // ---------- 场景 ----------
 const sceneHandles = createScene($("viewport"));
@@ -156,13 +232,14 @@ const errChart = new RollingChart($("err-canvas"), [...estSeries, ...abSeries], 
 // 真实模式真值 NaN 不画）。页签只切 visible 掩码（RollingChart 的 y 自适应只看可见通道）。
 const AXES = ["x", "y", "z"] as const;
 const AXIS_COLORS = ["#e5484d", "#7ee787", "#58a6ff"];
+const IMU_TAB_NAMES = ["陀螺仪", "加速度计", "磁力计"];
 const imuSeriesDef = [
   ...AXES.map((a, i) => ({ label: `陀螺 ${a}`, color: AXIS_COLORS[i] })),
   ...AXES.map((a, i) => ({ label: `加计 ${a}`, color: AXIS_COLORS[i] })),
   ...AXES.map((a, i) => ({ label: `磁 ${a}`, color: AXIS_COLORS[i] })),
-  ...AXES.map(() => ({ label: "真值", color: "#e6edf3", dash: [4, 3] })),
-  ...AXES.map(() => ({ label: "真值", color: "#e6edf3", dash: [4, 3] })),
-  ...AXES.map(() => ({ label: "真值", color: "#e6edf3", dash: [4, 3] })),
+  ...AXES.map((a) => ({ label: `真值 ${a}`, color: "#e6edf3", dash: [4, 3] })),
+  ...AXES.map((a) => ({ label: `真值 ${a}`, color: "#e6edf3", dash: [4, 3] })),
+  ...AXES.map((a) => ({ label: `真值 ${a}`, color: "#e6edf3", dash: [4, 3] })),
 ];
 const imuChart = new RollingChart($("imu-canvas"), imuSeriesDef, { windowSec: CHART_WINDOW });
 const imuState = { tab: 0 as 0 | 1 | 2 };
@@ -171,8 +248,37 @@ const imuTabMask = [
   [0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0],
   [0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1],
 ];
+/** 用户在图例上的显隐选择（18 通道全局；页签掩码再与它相与） */
+const imuVisible = new Array<boolean>(18).fill(true);
+/** 当前页签显示的 6 个系列下标：3 条实测 + 3 条真值对照 */
+const IMU_TAB_INDICES = [
+  [0, 1, 2, 9, 10, 11],
+  [3, 4, 5, 12, 13, 14],
+  [6, 7, 8, 15, 16, 17],
+];
 function applyImuTab(): void {
-  imuChart.setVisible(imuTabMask[imuState.tab].map((v) => v === 1));
+  imuChart.setVisible(imuTabMask[imuState.tab].map((v, i) => v === 1 && imuVisible[i]));
+  $("imu-canvas").setAttribute(
+    "aria-label",
+    `${IMU_TAB_NAMES[imuState.tab]}三轴原始波形（实线=实测，虚线=模拟真值）`,
+  );
+}
+/**
+ * IMU 图例：每个页签 3 条实测 + 3 条真值虚线。
+ * 旧版 #imu-legend 容器从未被填充——图上有 6 条线，图例却空白，读者无法指认颜色。
+ */
+let imuLegend: LegendHandles;
+function rebuildImuLegend(): void {
+  const indices = IMU_TAB_INDICES[imuState.tab];
+  const defs: LegendDef[] = [
+    ...AXES.map((a, i) => ({ label: `${a} 轴`, color: AXIS_COLORS[i] })),
+    ...AXES.map((a) => ({ label: `真值 ${a}`, color: "#e6edf3" })),
+  ];
+  imuLegend = buildLegend($("imu-legend"), defs, imuVisible, () => {
+    applyImuTab();
+    imuLegend.chips.forEach((c, i) => c.classList.toggle("off", !imuVisible[imuLegend.indices[i]]));
+  }, indices);
+  imuLegend.chips.forEach((c, i) => c.classList.toggle("off", !imuVisible[imuLegend.indices[i]]));
 }
 
 // 原始记录（切换通道时不丢历史）
@@ -184,6 +290,10 @@ interface LogRow {
 const logRows: LogRow[] = [];
 // 解卷绕历史：按 数据源×通道 分开记录
 const attPrev = new Array<number | undefined>(18).fill(undefined);
+
+// 评测统计：与误差曲线同源（每 40ms 一个样本），A 组常驻，B 组随快照重建
+const metricsA = ests.map(() => new ErrorTracker({ thresholdDeg: 2, holdSec: 1 }));
+let metricsB: ErrorTracker[] = [];
 
 function unwrap(slot: number, v: number): number {
   const p = attPrev[slot];
@@ -231,30 +341,31 @@ function channelValues(row: LogRow, ch: number): number[] {
 }
 
 function logRow(): void {
+  const refQ = state.real ? (ests[2] as MahonyEstimator).q : world.q;
+  const errA = ests.map((e) => qAngleBetween(e.q, refQ) * DEG);
   const row: LogRow = {
-    t: world.t,
+    t: state.simTime,
     euler: eulerTriples(),
-    err: ests.map((e) => {
-      const ref = state.real ? (ests[2] as MahonyEstimator).q : world.q;
-      return qAngleBetween(e.q, ref) * DEG;
-    }),
+    err: errA,
   };
   logRows.push(row);
   if (logRows.length > 850) logRows.splice(0, 100);
-  attChart.push(world.t, channelValues(row, state.channel));
-  // 误差图 10 通道：前 5 = A 组（活参数），后 5 = B 组（快照参数，A/B 关闭时为 NaN 不画）
-  const errB = abState.on ? abState.clones.map((c) => {
-    const ref = state.real ? (ests[2] as MahonyEstimator).q : world.q;
-    return qAngleBetween(c.q, ref) * DEG;
-  }) : ests.map(() => NaN);
-  errChart.push(world.t, [...row.err, ...errB]);
+  attChart.push(state.simTime, channelValues(row, state.channel));
+  // 误差图 9 通道：前 5 = A 组（活参数），后 4 = B 组（快照参数，A/B 关闭时为 NaN 不画）
+  const errB = abState.on
+    ? abState.clones.map((c) => qAngleBetween(c.q, refQ) * DEG)
+    : AB_TARGETS().map(() => NaN);
+  errChart.push(state.simTime, [...errA, ...errB]);
+  // 与曲线同源喂统计（A 组常驻；B 组随快照重建）
+  errA.forEach((v, i) => metricsA[i].add(v, state.simTime));
+  if (abState.on) errB.forEach((v, i) => metricsB[i]?.add(v, state.simTime));
   // IMU 原始波形 18 通道：三组实测 + 模拟模式三组真值对照（真实模式真值 = NaN 不画）
   const imu = state.lastImu;
   if (imu) {
     const truthGyro = state.real ? [NaN, NaN, NaN] : world.omega.map((v) => v * DEG);
     const truthAccel = state.real ? [NaN, NaN, NaN] : qRotInv(world.q, [0, 0, G_ACC]);
     const truthMag = state.real ? [NaN, NaN, NaN] : qRotInv(world.q, MAG_WORLD_NED);
-    imuChart.push(world.t, [
+    imuChart.push(state.simTime, [
       imu.gyro[0] * DEG, imu.gyro[1] * DEG, imu.gyro[2] * DEG,
       imu.accel[0], imu.accel[1], imu.accel[2],
       imu.mag[0], imu.mag[1], imu.mag[2],
@@ -281,7 +392,9 @@ interface LegendDef {
 
 interface LegendHandles {
   vals: Array<HTMLElement | null>;
-  chips: HTMLElement[];
+  chips: HTMLButtonElement[];
+  /** chip → 对应数据系列下标（IMU 面板一个页签只显示 18 通道中的 6 条） */
+  indices: number[];
 }
 
 function buildLegend(
@@ -289,13 +402,19 @@ function buildLegend(
   defs: LegendDef[],
   visible: boolean[],
   onToggle: () => void,
+  indices?: number[],
 ): LegendHandles {
   const vals: Array<HTMLElement | null> = [];
-  const chips: HTMLElement[] = [];
+  const chips: HTMLButtonElement[] = [];
+  const idxMap: number[] = [];
   container.innerHTML = "";
   defs.forEach((d, i) => {
-    const chip = document.createElement("span");
+    const idx = indices ? indices[i] : i;
+    // 用真正的 <button>（而不是可点击 span）：键盘 Tab/Enter 可达、读屏可识别
+    const chip = document.createElement("button");
+    chip.type = "button";
     chip.className = "legend-chip";
+    chip.setAttribute("aria-pressed", "true");
     if (d.id) chip.dataset.est = d.id;
     const dot = document.createElement("span");
     dot.className = "dot";
@@ -307,14 +426,16 @@ function buildLegend(
     val.textContent = "--";
     chip.append(dot, name, val);
     chip.addEventListener("click", () => {
-      visible[i] = !visible[i];
+      visible[idx] = !visible[idx];
+      chip.setAttribute("aria-pressed", String(visible[idx]));
       onToggle();
     });
     container.appendChild(chip);
     vals.push(val);
     chips.push(chip);
+    idxMap.push(idx);
   });
-  return { vals, chips };
+  return { vals, chips, indices: idxMap };
 }
 
 const attLegend = buildLegend(
@@ -336,14 +457,23 @@ const errLegendB = buildLegend(
   () => applyVisibility(),
 );
 
+/** 图例芯片的视觉/读屏状态同步 */
+function syncChip(chip: HTMLButtonElement, on: boolean): void {
+  chip.classList.toggle("off", !on);
+  chip.setAttribute("aria-pressed", String(on));
+}
+
 /** 用户勾选 → 图表可见性；同时同步图例芯片的置灰状态 */
 function applyVisibility(): void {
   attChart.setVisible(state.attVisible);
   errChart.setVisible([...state.errVisible, ...state.errVisibleB]);
-  attLegend.chips.forEach((c, i) => c.classList.toggle("off", !state.attVisible[i]));
-  errLegend.chips.forEach((c, i) => c.classList.toggle("off", !state.errVisible[i]));
-  errLegendB.chips.forEach((c, i) => c.classList.toggle("off", !state.errVisibleB[i]));
+  attLegend.chips.forEach((c, i) => syncChip(c, state.attVisible[i]));
+  errLegend.chips.forEach((c, i) => syncChip(c, state.errVisible[i]));
+  errLegendB.chips.forEach((c, i) => syncChip(c, state.errVisibleB[i]));
 }
+rebuildImuLegend();
+applyImuTab();
+applyVisibility(); // 初始图例状态（B 组默认关闭）与图表掩码同步
 
 // ---------- 控件 ----------
 /**
@@ -371,6 +501,13 @@ function bindSlider(
   // 数值输入框同时充当读数显示；若某个滑块没有数值框，退回旧的 <output>
   const out = document.querySelector<HTMLOutputElement>(`[data-out="${id}"]`) ?? document.getElementById(`${id}-out`);
 
+  // 可访问性：滑杆与数值框的可见标签只是相邻文本，读屏不会自动关联——
+  // 统一从 .slider-row 的 <label> 取文案写入 aria-label / aria-valuetext
+  const labelText = input.closest(".slider-row")?.querySelector("label")?.textContent?.trim() || input.id;
+  input.setAttribute("aria-label", labelText);
+  if (num) num.setAttribute("aria-label", `${labelText}（数值）`);
+  if (stepBox) stepBox.setAttribute("aria-label", `${labelText}（步距）`);
+
   const min = parseFloat(input.min);
   const max = parseFloat(input.max);
   const baseStep = parseFloat(input.step) || 0.01;
@@ -389,6 +526,7 @@ function bindSlider(
   /** 把值同步到滑块、数值框与（可选的）output */
   const render = (v: number): void => {
     input.value = String(v);
+    input.setAttribute("aria-valuetext", fmt(v));
     if (num) num.value = String(v);
     if (out) out.textContent = fmt(v);
     // 轨道填充比例（CSS 用 var(--fill) 画「已填充」段）
@@ -537,6 +675,15 @@ bindSlider("imu-lin-accel", (v) => (imuParams.linAccel = v), (v) => `${v.toFixed
 bindSlider("imu-vibration", (v) => (imuParams.vibration = v), (v) => v.toFixed(2));
 bindSlider("imu-mag-noise", (v) => (imuParams.magNoise = v), (v) => `${v.toFixed(1)}μT`);
 bindSlider("imu-mag-disturb", (v) => (imuParams.disturbMag = v), (v) => v.toFixed(2));
+// 硬铁偏移：机身金属/扬声器磁铁造成的恒定偏移（旧版只存在于 ImuParams，没有 UI 入口）
+bindSlider(
+  "imu-hard-iron",
+  (v) => {
+    imuParams.hardIron = v;
+    onImuManual();
+  },
+  (v) => (v < 0.005 ? "关" : `${(v * 8).toFixed(1)}μT`),
+);
 bindSlider("mahony-kp", (v) => (mahony.kp = v), (v) => v.toFixed(2));
 bindSlider("mahony-ki", (v) => (mahony.ki = v), (v) => v.toFixed(2));
 bindSlider("madg-beta", (v) => (madg.beta = v), (v) => v.toFixed(2));
@@ -555,11 +702,32 @@ function applyMagEnable(): void {
 }
 $("mag-enable").addEventListener("change", applyMagEnable);
 
+/**
+ * 加速度计方向/幅度门控总开关（三家固定增益融合算法）。
+ * 暴露成 UI 不只是为了调参：它让「门控救场」实验可以当场 A/B——
+ * 关掉后持续机动线加速度会把姿态拽偏，打开则钉在真值附近。
+ */
+function applyAccelGate(): void {
+  const on = ($("gate-toggle") as HTMLInputElement).checked;
+  for (const e of ests) {
+    if (e.id === "comp" || e.id === "mahony" || e.id === "madg") {
+      (e as ComplementaryEstimator | MahonyEstimator | MadgwickEstimator).accelGate = on;
+    }
+  }
+  for (const c of abState.clones) {
+    if (c.id === "comp" || c.id === "mahony" || c.id === "madg") {
+      (c as ComplementaryEstimator | MahonyEstimator | MadgwickEstimator).accelGate = on;
+    }
+  }
+}
+$("gate-toggle").addEventListener("change", applyAccelGate);
+
 // ---------- 万向节锁演示（独立于主仿真） ----------
 const gimState = { yawDeg: 0, pitchDeg: 0, rollDeg: 0 };
 
 function applyGimbalAngles(): void {
-  sceneHandles.gimbal.setAngles(gimState.rollDeg * RAD, gimState.pitchDeg * RAD, gimState.yawDeg * RAD);
+  // 目标角度交给阻尼跟随（主循环里 step），拖动滑块/演示播放都是「追上去」而不是瞬跳
+  sceneHandles.gimbal.setTargetAngles(gimState.rollDeg * RAD, gimState.pitchDeg * RAD, gimState.yawDeg * RAD);
 }
 
 /** 角度文本（消除 "-0°"） */
@@ -701,18 +869,27 @@ function applyQuatInterpolation(
   pair: { from: [number, number, number]; to: [number, number, number]; path?: Array<[number, number, number]> },
   t: number,
 ): void {
-  sceneHandles.quatView.setInterpolation(pair.from, pair.to, t, pair.path);
-  // q−q 组同步显示当前 t 处的姿态
+  // setPair 内部按姿态对做缓存：同一对只重建一次几何，播放时每帧只移动 marker
+  sceneHandles.quatView.setPair(pair.from, pair.to, pair.path);
+  sceneHandles.quatView.setProgress(t);
   const k = Math.PI / 180;
   const cur = quatStateCurrentEulerDeg(pair, t);
   sceneHandles.quatView.setNegation(cur[0] / k, cur[1] / k, cur[2] / k);
-  // 分量读数（w,x,y,z）
   const q = qSlerp(
     qFromEuler(pair.from[0] * k, pair.from[1] * k, pair.from[2] * k),
     qFromEuler(pair.to[0] * k, pair.to[1] * k, pair.to[2] * k),
     t,
   );
   $("quat-readout").textContent = `[${[q.w, q.x, q.y, q.z].map((a) => a.toFixed(3)).join(", ")}]`;
+  // 面板读数：两条路径的总转角与中点分叉
+  const info = sceneHandles.quatView.arcInfo();
+  const el = document.getElementById("quat-arcinfo");
+  if (el) {
+    el.innerHTML =
+      `<span>端点转角 <b>${info.slerpDeg.toFixed(1)}°</b></span>` +
+      `<span>欧拉路径累计 <b>${info.eulerDeg.toFixed(1)}°</b></span>` +
+      `<span>中点分叉 <b class="${info.deviationDeg > 5 ? "warn" : ""}">${info.deviationDeg.toFixed(1)}°</b></span>`;
+  }
 }
 
 /** t 处的当前欧拉角（度）——Slerp 的欧拉表示，供 q−q 组使用 */
@@ -743,7 +920,7 @@ $("btn-quat-play").addEventListener("click", () => {
 $("quat-neg-toggle").addEventListener("change", () => {
   const on = ($("quat-neg-toggle") as HTMLInputElement).checked;
   if (($("quat-mode") as HTMLSelectElement).value === "proj") return; // 投影模式下该开关不可见
-  enterQuatScene(on ? "neg" : "interp");
+  if (state.view === "quat") enterQuatScene(on ? "neg" : "interp");
 });
 
 /** 插值播放推进（独立于仿真暂停状态） */
@@ -830,7 +1007,8 @@ const quatCamTween = {
   fromTgt: new THREE.Vector3(), toTgt: new THREE.Vector3(),
 };
 const QUAT_FRAMING = {
-  interp: { pos: [0, 1.6, 3.2], tgt: [0, 1.0, 0] },
+  // 四元数视图：球半径 0.85 + 两侧姿态展示位 ±1.12，相机要能同时装下
+  interp: { pos: [0, 1.75, 3.75], tgt: [0, 0.95, 0] },
   // 投影模式：球缩小+姿态舞台在下方，−q 最远 3×0.62≈1.86 —— 相机稍远、目标略低
   proj: { pos: [0, 1.55, 3.75], tgt: [0, 0.78, 0] },
 } as const;
@@ -960,38 +1138,190 @@ function drawProjSection(q: Quat): void {
 }
 
 /** 沙盒快捷模式：一键配置「综合机动 + 中等污染 + 玻璃盒 + 初始偏差」的自由实验场 */
+/** 通用控件写值：与用户操作走同一条 input/change 事件路径 */
+function setSliderValue(id: string, value: number): void {
+  const el = document.getElementById(id) as HTMLInputElement | null;
+  if (!el) return;
+  el.value = String(value);
+  el.dispatchEvent(new Event("input"));
+}
+function setSelectValue(id: string, value: string): void {
+  const el = document.getElementById(id) as HTMLSelectElement | null;
+  if (!el) return;
+  el.value = value;
+  el.dispatchEvent(new Event("change"));
+}
+function setCheckValue(id: string, on: boolean): void {
+  const el = document.getElementById(id) as HTMLInputElement | null;
+  if (!el) return;
+  el.checked = on;
+  el.dispatchEvent(new Event("change"));
+}
+
 function enterSandbox(): void {
-  const set = (id: string, value: string): void => {
-    const el = $<HTMLInputElement>(id);
-    el.value = value;
-    el.dispatchEvent(new Event("input"));
-  };
-  const setSel = (id: string, value: string): void => {
-    const el = $<HTMLSelectElement>(id);
-    el.value = value;
-    el.dispatchEvent(new Event("change"));
-  };
-  const setChk = (id: string, on: boolean): void => {
-    const el = $<HTMLInputElement>(id);
-    el.checked = on;
-    el.dispatchEvent(new Event("change"));
-  };
-  setSel("scenario-select", "composite");
-  setSel("imu-preset", "custom");
-  set("imu-gyro-bias", "1");
-  set("imu-gyro-noise", "0.3");
-  set("imu-lin-accel", "2");
-  set("imu-vibration", "0.5");
-  set("imu-mag-disturb", "0.3");
-  setChk("mag-enable", true);
-  setChk("telemetry-toggle", true);
-  setChk("init-offset-toggle", true);
-  setChk("ab-toggle", true); // 沙盒里 A/B 快照 = 进入前的参数，随改随比
+  if (state.real) {
+    toast("真实 IMU 模式下沙盒停用——先断开串口", "#f85149");
+    return;
+  }
+  setSelectValue("scenario-select", "composite");
+  setSelectValue("imu-preset", "custom");
+  setSliderValue("imu-gyro-bias", 1);
+  setSliderValue("imu-gyro-noise", 0.3);
+  setSliderValue("imu-lin-accel", 2);
+  setSliderValue("imu-vibration", 0.5);
+  setSliderValue("imu-mag-disturb", 0.3);
+  setCheckValue("mag-enable", true);
+  setCheckValue("telemetry-toggle", true);
+  setCheckValue("init-offset-toggle", true);
+  setCheckValue("ab-toggle", true); // 沙盒里 A/B 快照 = 进入前的参数，随改随比
   setDocsOpen(false);
   applyView("attitude");
   resetSim();
   toast("沙盒模式已就绪：所有参数随便动，B 组虚线是进入时的参数快照");
 }
+
+// ---------- 实验库：一键复现一条因果链 ----------
+function applyExperiment(spec: ExperimentSpec): void {
+  if (state.real) {
+    toast("真实 IMU 模式下模拟参数已停用——先断开串口再运行实验", "#f85149");
+    return;
+  }
+  // 顺序：剧本 → 滑块 → 开关（A/B 快照需在参数就位后）→ 视图 → 重置
+  for (const [id, v] of Object.entries(spec.selects ?? {})) setSelectValue(id, v);
+  for (const [id, v] of Object.entries(spec.sliders ?? {})) setSliderValue(id, v);
+  for (const [id, v] of Object.entries(spec.checks ?? {})) setCheckValue(id, v);
+  if (spec.view) applyView(spec.view);
+  if (spec.reset !== false) resetSim();
+  const note = document.getElementById("experiment-note");
+  if (note) {
+    note.innerHTML = `<b>${spec.name}</b> · ${spec.tag}<br />${spec.observe}`;
+    note.classList.remove("hidden");
+  }
+  document.querySelectorAll<HTMLButtonElement>("#experiment-list button").forEach((b) => {
+    b.classList.toggle("active", b.dataset.exp === spec.id);
+  });
+  toast(`实验已就位：${spec.name}`);
+}
+
+function buildExperimentList(): void {
+  const list = document.getElementById("experiment-list");
+  if (!list) return;
+  list.innerHTML = "";
+  for (const spec of EXPERIMENTS) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "exp-chip";
+    btn.dataset.exp = spec.id;
+    btn.innerHTML = `<span class="exp-name">${spec.name}</span><span class="exp-tag">${spec.tag}</span>`;
+    btn.addEventListener("click", () => applyExperiment(spec));
+    list.appendChild(btn);
+  }
+}
+buildExperimentList();
+$("btn-sandbox").addEventListener("click", () => enterSandbox());
+
+// ---------- 磁力计校准面板 ----------
+/** 用当前模拟磁模型生成覆盖全姿态的样本（含硬铁/干扰/噪声/量化） */
+function syntheticCalibrationSamples(n = 280): V3[] {
+  const g = new Gauss(mulberry32(0xc0ffee));
+  const out: V3[] = [];
+  for (let i = 0; i < n; i++) {
+    // 四维高斯归一化 = 均匀分布于 SO(3)（单位四元数按 Haar 测度）
+    const q = qNorm({ w: g.next(), x: g.next(), y: g.next(), z: g.next() });
+    const t = (i / n) * 23.7; // 覆盖若干交变干扰周期
+    out.push(simulateMag(q, t, imuParams, g));
+  }
+  return out;
+}
+
+function updateMagCalUi(): void {
+  const status = document.getElementById("magcal-status");
+  const result = document.getElementById("magcal-result");
+  const apply = document.getElementById("magcal-apply") as HTMLInputElement | null;
+  const start = document.getElementById("magcal-start") as HTMLButtonElement | null;
+  const synth = document.getElementById("magcal-synthetic") as HTMLButtonElement | null;
+  if (!status) return;
+  const n = magCalState.samples.length;
+  if (magCalState.collecting) {
+    status.textContent = `采集中：${n} 点——缓慢翻滚机体，让磁点云铺满球面（至少 ${MAG_CAL_TARGET} 点）`;
+  } else if (n > 0 && !magCalState.cal) {
+    status.textContent = `已采 ${n} 点——点「拟合并应用」解出硬铁/软铁`;
+  } else if (magCalState.cal) {
+    status.textContent = magCalState.applied
+      ? `已应用：${n} 点拟合 · 残差 ${(magCalState.cal.residual * 100).toFixed(1)}%`
+      : `已拟合（未应用）：${n} 点 · 残差 ${(magCalState.cal.residual * 100).toFixed(1)}%`;
+  } else {
+    status.textContent = "未校准。模拟模式可一键生成样本；真实模式需缓慢翻滚机体采集。";
+  }
+  if (result) {
+    result.innerHTML = magCalState.cal
+      ? `<div>硬铁 offset [${magCalState.cal.offset.map((v) => v.toFixed(1)).join(", ")}] μT</div>` +
+        `<div>软铁 scale [${magCalState.cal.scale.map((v) => v.toFixed(3)).join(", ")}]</div>` +
+        `<div>场强 ${magCalState.cal.field.toFixed(1)} μT · 样本 ${magCalState.cal.count}</div>`
+      : "";
+  }
+  if (apply) {
+    apply.disabled = magCalState.cal === null;
+    apply.checked = magCalState.applied && magCalState.cal !== null;
+  }
+  if (start) start.textContent = magCalState.collecting ? "停止采集" : "开始实时采集";
+  if (synth) synth.disabled = state.real;
+  if (magCalState.message) {
+    status.textContent = magCalState.message;
+    magCalState.message = "";
+  }
+}
+
+function magCalFit(): void {
+  const cal = calibrateMag(magCalState.samples);
+  if (!cal) {
+    magCalState.message =
+      `拟合失败：样本 ${magCalState.samples.length} 点，覆盖度不足或数值退化——` +
+      "请让三轴都转动起来（只绕一个轴转，球心在那两个方向不可观）";
+    updateMagCalUi();
+    return;
+  }
+  magCalState.cal = cal;
+  magCalState.applied = true;
+  magCalState.collecting = false; // 拟合完成即停止采集，状态行切到「已应用」
+  updateMagCalUi();
+  toast(`磁校准完成：硬铁 |b| = ${Math.hypot(...cal.offset).toFixed(1)} μT，残差 ${(cal.residual * 100).toFixed(1)}%`);
+}
+
+document.getElementById("magcal-start")?.addEventListener("click", () => {
+  magCalState.collecting = !magCalState.collecting;
+  if (magCalState.collecting) {
+    magCalState.samples.length = 0;
+    magCalState.cal = null;
+    magCalState.applied = false;
+  }
+  updateMagCalUi();
+});
+document.getElementById("magcal-synthetic")?.addEventListener("click", () => {
+  magCalState.samples = syntheticCalibrationSamples();
+  magCalState.collecting = false;
+  magCalState.cal = null;
+  magCalState.applied = false;
+  magCalFit();
+});
+document.getElementById("magcal-fit")?.addEventListener("click", () => magCalFit());
+document.getElementById("magcal-apply")?.addEventListener("change", (e) => {
+  const on = (e.target as HTMLInputElement).checked;
+  if (on && !magCalState.cal) {
+    (e.target as HTMLInputElement).checked = false;
+    return;
+  }
+  magCalState.applied = on;
+  updateMagCalUi();
+});
+document.getElementById("magcal-clear")?.addEventListener("click", () => {
+  magCalState.samples.length = 0;
+  magCalState.cal = null;
+  magCalState.applied = false;
+  magCalState.collecting = false;
+  updateMagCalUi();
+});
+updateMagCalUi();
 
 function projApply(q: Quat): void {
   projState.current = { ...q };
@@ -1021,13 +1351,17 @@ $("btn-proj-reset").addEventListener("click", () => { projState.presses = 0; pro
 
 $("quat-mode").addEventListener("change", () => {
   const proj = ($("quat-mode") as HTMLSelectElement).value === "proj";
+  document.body.dataset.quatMode = proj ? "proj" : "interp";
   document.querySelectorAll(".quat-interp-only").forEach((el) => el.classList.toggle("hidden", proj));
   $("quat-proj-group").classList.toggle("hidden", !proj);
-  if (proj) {
-    enterQuatScene("proj");
-    projApply(projState.q);
-  } else {
-    enterQuatScene(($("quat-neg-toggle") as HTMLInputElement).checked ? "neg" : "interp");
+  // 只有四元数视图当前可见时才动相机/淡入淡出（深链在后台切模式时不应打断姿态视图取景）
+  if (state.view === "quat") {
+    if (proj) {
+      enterQuatScene("proj");
+      projApply(projState.q);
+    } else {
+      enterQuatScene(($("quat-neg-toggle") as HTMLInputElement).checked ? "neg" : "interp");
+    }
   }
 });
 
@@ -1133,16 +1467,36 @@ function updateSourceChip(): void {
 function syncSeg(containerId: string, dataKey: string, active: string): void {
   $(containerId)
     .querySelectorAll<HTMLButtonElement>(".seg-btn")
-    .forEach((b) => b.classList.toggle("active", b.dataset[dataKey] === active));
+    .forEach((b) => {
+      const on = b.dataset[dataKey] === active;
+      b.classList.toggle("active", on);
+      b.setAttribute("aria-pressed", String(on));
+    });
 }
 
 /** 应用视图：显隐模型与面板、重置相机取景 */
 function applyView(view: UiView): void {
+  // 离开四元数视图时停掉插值播放：它在后台继续跑只会白烧 CPU，
+  // 而且回来时进度已经偷偷走远（用户会以为「刚才是停着的」）
+  if (state.view === "quat" && view !== "quat" && quatState.playing) {
+    quatState.playing = false;
+    $("btn-quat-play").textContent = "播放插值";
+  }
   state.view = view;
   applyViewDom(view);
   sceneHandles.setView(view, ($("ghost-toggle") as HTMLInputElement).checked);
   syncSeg("view-seg", "view", view);
   if (view === "gimbal") updateGimbalUi();
+  if (view === "quat") {
+    // 进入四元数视图时按当前下拉状态选内部演示组（插值 / q−q / 4D 投影）
+    const proj = ($("quat-mode") as HTMLSelectElement).value === "proj";
+    if (proj) {
+      enterQuatScene("proj");
+      projApply(projState.q);
+    } else {
+      enterQuatScene(($("quat-neg-toggle") as HTMLInputElement).checked ? "neg" : "interp");
+    }
+  }
 }
 
 $("view-seg")
@@ -1172,18 +1526,190 @@ $("att-tabs")
   .querySelectorAll<HTMLButtonElement>(".tab")
   .forEach((btn) => {
     btn.addEventListener("click", () => {
-      $("att-tabs").querySelectorAll(".tab").forEach((b) => b.classList.remove("active"));
+      $("att-tabs").querySelectorAll(".tab").forEach((b) => {
+        b.classList.remove("active");
+        b.setAttribute("aria-selected", "false");
+      });
       btn.classList.add("active");
+      btn.setAttribute("aria-selected", "true");
       state.channel = parseInt(btn.dataset.ch!, 10);
       rebuildAttChart();
     });
   });
 
-// 折叠面板：att/err 默认展开、imu 默认收起（index.html 初始 class）
+// ---------- 曲线面板折叠：三块各自独立，且网格自动重排不留空洞 ----------
+type ChartKey = "att" | "err" | "imu";
+const CHART_KEYS: ChartKey[] = ["att", "err", "imu"];
+const chartState: Record<ChartKey, boolean> = { att: true, err: true, imu: false };
+
+/**
+ * 依据「哪些面板展开」重排网格：
+ *  - 三块都开 → att/err 并排 + imu 整行
+ *  - 只开两块 → 并排整行
+ *  - 只开一块 → 独占整行（高度也加大）
+ * 旧版用固定 `"att err" / "imu imu"` 区域，收起任意一块都会留下半格空白——
+ * 这就是「上面两块必须同时折叠才看不出空档」的根源。
+ */
+function layoutCharts(): void {
+  const charts = document.getElementById("charts")!;
+  const open = CHART_KEYS.filter((k) => chartState[k]);
+  charts.dataset.openCount = String(open.length);
+  // 布局完全交给 flex（展开块自适应两列、折叠块沉底成整行细条），
+  // 这里只维护状态与画布高度档位——不再手工拼 grid-template-areas。
+  for (const k of CHART_KEYS) {
+    const block = document.getElementById(`block-${k}`)!;
+    block.classList.toggle("collapsed", !chartState[k]);
+    const fold = block.querySelector<HTMLButtonElement>(".fold-btn");
+    fold?.setAttribute("aria-expanded", String(chartState[k]));
+    const chip = document.querySelector<HTMLButtonElement>(`.cb-chip[data-chart="${k}"]`);
+    if (chip) {
+      chip.classList.toggle("active", chartState[k]);
+      chip.setAttribute("aria-pressed", String(chartState[k]));
+    }
+  }
+  // 展开后画布尺寸变化：让 ResizeObserver 之外再显式重绘一次，避免首帧空白
+  requestAnimationFrame(() => {
+    attChart.render();
+    errChart.render();
+    imuChart.render();
+  });
+}
+
+function setChartOpen(k: ChartKey, open: boolean): void {
+  chartState[k] = open;
+  layoutCharts();
+  updateChartSummaries();
+}
+
+/** 折叠态标题行的摘要：显示该面板最关键的一两个读数，收起也不丢信息 */
+function updateChartSummaries(): void {
+  const put = (id: string, text: string): void => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = text;
+  };
+  const att = attChart.latest();
+  const names = ["真实", ...ests.map((e) => e.label)];
+  const idx = state.channel;
+  const wrap = (v: number): string => {
+    if (!Number.isFinite(v)) return "--";
+    let x = v;
+    while (x > 180) x -= 360;
+    while (x < -180) x += 360;
+    return `${x.toFixed(1)}°`;
+  };
+  put(
+    "att-summary",
+    `${["横滚 φ", "俯仰 θ", "偏航 ψ"][idx]}：${names.map((n, i) => `${n} ${wrap(att[i])}`).join(" · ")}`,
+  );
+  const err = errChart.latest();
+  const worst = err
+    .slice(0, ests.length)
+    .map((v, i) => ({ v, n: ests[i].label }))
+    .filter((x) => Number.isFinite(x.v))
+    .sort((a, b) => b.v - a.v)[0];
+  put(
+    "err-summary",
+    worst ? `最大 ${worst.n} ${worst.v.toFixed(2)}° · 最优 ${ests[err.indexOf(Math.min(...err.slice(0, ests.length)))].label}` : "",
+  );
+  const imu = imuChart.latest();
+  const tab = imuState.tab;
+  const unit = ["°/s", "m/s²", "μT"][tab];
+  put(
+    "imu-summary",
+    IMU_TAB_NAMES[tab] +
+      "：" +
+      ["x", "y", "z"]
+        .map((a, i) => `${a} ${Number.isFinite(imu[tab * 3 + i]) ? imu[tab * 3 + i].toFixed(2) : "--"}`)
+        .join(" · ") +
+      ` ${unit}`,
+  );
+}
+
 document.querySelectorAll<HTMLButtonElement>(".fold-btn").forEach((btn) => {
   btn.addEventListener("click", () => {
-    document.getElementById(`block-${btn.dataset.fold}`)!.classList.toggle("collapsed");
+    const k = btn.dataset.fold as ChartKey;
+    setChartOpen(k, !chartState[k]);
   });
+});
+document.querySelectorAll<HTMLButtonElement>(".cb-chip").forEach((chip) => {
+  chip.addEventListener("click", () => {
+    const k = chip.dataset.chart as ChartKey;
+    setChartOpen(k, !chartState[k]);
+  });
+});
+layoutCharts();
+
+// ---------- 右侧面板手风琴 ----------
+const panelSections = [...document.querySelectorAll<HTMLElement>("#panel .panel-section")];
+function setSectionOpen(sec: HTMLElement, open: boolean): void {
+  sec.classList.toggle("collapsed", !open);
+  const btn = sec.querySelector<HTMLButtonElement>(".panel-toggle");
+  btn?.setAttribute("aria-expanded", String(open));
+}
+for (const sec of panelSections) {
+  const btn = sec.querySelector<HTMLButtonElement>(".panel-toggle");
+  if (!btn) continue;
+  btn.addEventListener("click", () => setSectionOpen(sec, sec.classList.contains("collapsed")));
+}
+/**
+ * 面板摘要：每个折叠区标题右侧显示「当前值」，收起也不丢信息——
+ * 这是解决「右侧栏太密集但又不想舍弃」的核心手法：把**参数状态**留在标题行，
+ * 把**解释与控件**收进展开区。
+ */
+function updatePanelSummaries(): void {
+  const set = (id: string, text: string): void => {
+    const el = document.getElementById(`sum-${id}`);
+    if (el) el.textContent = text;
+  };
+  const scenarioName = scenarioSelect.selectedOptions[0]?.textContent ?? "—";
+  set("scenario", `${scenarioName}${state.real ? " · 真实 IMU" : ""}`);
+  const presets = $<HTMLSelectElement>("imu-preset").selectedOptions[0]?.textContent ?? "";
+  set(
+    "imu",
+    `${presets.split("（")[0]} · 零偏 ${imuParams.gyroBiasDps.toFixed(1)}°/s · 噪声 ${imuParams.gyroNoiseDps.toFixed(2)}`,
+  );
+  set(
+    "magcal",
+    magCalState.cal
+      ? `${magCalState.applied ? "已应用" : "已拟合"} · 残差 ${(magCalState.cal.residual * 100).toFixed(1)}%`
+      : "未校准",
+  );
+  const magOn = ($("mag-enable") as HTMLInputElement).checked;
+  set(
+    "algo",
+    `${magOn ? "MARG" : "IMU"} · Kp ${mahony.kp.toFixed(2)} / Ki ${mahony.ki.toFixed(2)} / β ${madg.beta.toFixed(2)}`,
+  );
+  set("view", `来源 ${sourceLabel()}${($("telemetry-toggle") as HTMLInputElement).checked ? " · 玻璃盒" : ""}`);
+  const best = metricsA
+    .map((m) => m.summary())
+    .map((s, i) => ({ s, i }))
+    .filter((x) => x.s.n > 0 && !(state.real && x.i === 2))
+    .sort((a, b) => a.s.rmse - b.s.rmse)[0];
+  set("metrics", best ? `最优 ${ests[best.i].label} · RMSE ${best.s.rmse.toFixed(2)}°` : "尚无样本");
+  set("telemetry", activeEstimator()?.label ?? "真实姿态无内部量");
+  const pairName = QUAT_POSE_PAIRS.find((p) => p.id === quatState.pairId)?.name ?? "";
+  const proj = ($("quat-mode") as HTMLSelectElement).value === "proj";
+  set(
+    "quat",
+    proj
+      ? `4D 投影 · ${(document.getElementById("proj-turn")?.textContent ?? "").match(/累计\s*\d+°[^（]*/)?.[0]?.trim() ?? "q = +1"}`
+      : pairName,
+  );
+  set("gimbal", `φ ${gimState.rollDeg.toFixed(0)}° / θ ${gimState.pitchDeg.toFixed(0)}° / ψ ${gimState.yawDeg.toFixed(0)}°`);
+}
+
+/** 快捷入口：展开 IMU 面板并直接发起串口连接（真实硬件是主功能，不该藏在折叠区里） */
+document.getElementById("btn-serial-quick")?.addEventListener("click", () => {
+  const sec = document.getElementById("sec-imu");
+  if (sec) setSectionOpen(sec, true);
+  serialToggle();
+});
+
+document.getElementById("panel-expand-all")?.addEventListener("click", () => {
+  for (const sec of panelSections) setSectionOpen(sec, true);
+});
+document.getElementById("panel-collapse-all")?.addEventListener("click", () => {
+  for (const sec of panelSections) setSectionOpen(sec, false);
 });
 
 // IMU 原始波形页签：陀螺仪 / 加速度计 / 磁力计
@@ -1191,9 +1717,14 @@ $("imu-tabs")
   .querySelectorAll<HTMLButtonElement>(".tab")
   .forEach((btn) => {
     btn.addEventListener("click", () => {
-      $("imu-tabs").querySelectorAll(".tab").forEach((b) => b.classList.remove("active"));
+      $("imu-tabs").querySelectorAll(".tab").forEach((b) => {
+        b.classList.remove("active");
+        b.setAttribute("aria-selected", "false");
+      });
       btn.classList.add("active");
+      btn.setAttribute("aria-selected", "true");
       imuState.tab = parseInt(btn.dataset.tab!, 10) as 0 | 1 | 2;
+      rebuildImuLegend();
       applyImuTab();
       imuChart.render();
     });
@@ -1211,17 +1742,26 @@ function resetSim(): void {
   // 「初始姿态偏差」演示：勾选后重置时给所有算法同一个随机初始姿态（20–35°，真值仍从水平出发）——
   // 观察幻影（真值）不动、各算法从错误初值收敛：互补/Mahony/Madgwick 靠启动增益 ramp 加速，
   // 卡尔曼靠大初始协方差；偏航 40° 门控的边界效应见文档·控制项手册。
-  const q0 = ($("init-offset-toggle") as HTMLInputElement).checked ? randomInitOffset() : undefined;
+  // 真实模式没有「演示用初始偏差」的意义：始终从水平出发
+  const q0 = !state.real && ($("init-offset-toggle") as HTMLInputElement).checked ? randomInitOffset() : undefined;
   for (const e of ests) e.reset(q0);
   for (const c of abState.clones) c.reset(q0); // B 组保持冻结参数，只同步初值
-  still.frames = 0;
+  still.seconds = 0;
+  still.lastAlignT = -1e9;
+  state.simTime = 0;
+  simAcc = 0;
+  logAcc = 0;
+  metricsA.forEach((m) => m.reset(0));
+  metricsB.forEach((m) => m.reset(0));
   attChart.clear();
   errChart.clear();
   imuChart.clear();
   attPrev.fill(undefined);
   logRows.length = 0;
   state.lastImu = null;
+  if (state.real) serialState.queue.length = 0; // 重置后不要把重置前的帧再回放一遍
   simErrorShown = false;
+  updateMetricsTable();
 }
 
 /** 随机初始姿态偏差：均匀球面随机轴 + 20–35° 转角（上限留在卡尔曼 40° 新息门控之内） */
@@ -1246,8 +1786,14 @@ const fmtSigned = (v: number, d = 1): string => {
 const fmtVec = (v: [number, number, number]): string =>
   `[${v.map((a) => fmtSigned(a, 1)).join(", ")}]`;
 
+/** 当前「模型姿态来源」对应的四元数；真实模式下真值不存在，回退到 Mahony 基准 */
+function selectedQ(): Quat {
+  if (state.source === "truth") return state.real ? (ests[2] as MahonyEstimator).q : world.q;
+  return ests.find((e) => e.id === state.source)!.q;
+}
+
 function updateReadouts(): void {
-  const q = state.source === "truth" ? world.q : ests.find((e) => e.id === state.source)!.q;
+  const q = selectedQ();
   const eu = qToEuler(q);
   // 真实模式无真值：这一行显示 Mahony 参照基准（图例里的「真实」即基准）
   const refQ = state.real ? (ests[2] as MahonyEstimator).q : world.q;
@@ -1263,7 +1809,7 @@ function updateReadouts(): void {
     $("readout-imu").innerHTML =
       `陀螺仪 ${fmtVec(gyroDps)} °/s<br />加速度计 ${fmtVec(imu.accel)} m/s²`;
   }
-  $("clock").textContent = `t = ${world.t.toFixed(1)} s`;
+  $("clock").textContent = `t = ${state.simTime.toFixed(1)} s`;
 }
 
 function updateLegendValues(): void {
@@ -1288,9 +1834,61 @@ function updateLegendValues(): void {
     const v = err[ests.length + i];
     if (el) el.textContent = Number.isFinite(v) ? `${v.toFixed(2)}°` : "--";
   });
+  const imu = imuChart.latest();
+  imuLegend.vals.forEach((el, i) => {
+    const v = imu[imuLegend.indices[i]];
+    if (el) el.textContent = Number.isFinite(v) ? v.toFixed(2) : "--";
+  });
   // 粗对准完成提示（黏 3s，见 stepStillness）
   const chip = $("align-chip");
   chip.classList.toggle("hidden", performance.now() / 1000 > still.chipUntil);
+}
+
+// ---------- 评测表：本轮运行的误差统计 ----------
+const fmtMetric = (v: number, d = 2): string => (Number.isFinite(v) ? v.toFixed(d) : "—");
+
+function metricRow(name: string, color: string, s: ReturnType<ErrorTracker["summary"]>, cls = ""): string {
+  return (
+    `<tr${cls ? ` class="${cls}"` : ""}><td><span class="m-dot" style="background:${color}"></span>${name}</td>` +
+    `<td>${fmtMetric(s.last)}</td><td>${fmtMetric(s.mean)}</td><td>${fmtMetric(s.rmse)}</td>` +
+    `<td>${fmtMetric(s.max, 1)}</td><td>${s.convergedAt === null ? "—" : `${s.convergedAt.toFixed(1)} s`}</td></tr>`
+  );
+}
+
+function updateMetricsTable(): void {
+  const body = document.getElementById("metrics-body");
+  if (!body) return;
+  const sums = metricsA.map((m) => m.summary());
+  // 最优 RMSE 高亮：真实模式下 Mahony 是基准（误差恒 0），不参与评选
+  let best = -1;
+  let bestV = Infinity;
+  sums.forEach((s, i) => {
+    if (state.real && i === 2) return;
+    if (s.n > 0 && s.rmse < bestV) {
+      bestV = s.rmse;
+      best = i;
+    }
+  });
+  const rows = ests.map((e, i) =>
+    metricRow(
+      e.label + (state.real && i === 2 ? "（基准）" : ""),
+      e.color,
+      sums[i],
+      i === best ? "best" : state.real && i === 2 ? "ref" : "",
+    ),
+  );
+  if (abState.on) {
+    AB_TARGETS().forEach((e, i) => {
+      const s = metricsB[i]?.summary();
+      if (s) rows.push(metricRow(`${e.label} ·B`, abAlpha(e.color), s));
+    });
+  }
+  body.innerHTML = rows.join("");
+  const meta = document.getElementById("metrics-meta");
+  if (meta) {
+    const n = sums.find((s) => s.n > 0)?.n ?? 0;
+    meta.textContent = `本轮 ${n} 个样本（25 Hz）· 收敛 = 连续 1 s 总误差 < 2°`;
+  }
 }
 
 // ---------- 玻璃盒：算法内部量 ----------
@@ -1314,6 +1912,15 @@ function activeEstimator(): (typeof ests)[number] | null {
 function setTelemetryVisible(on: boolean): void {
   telState.visible = on;
   document.body.dataset.telemetry = on ? "on" : "off";
+  // 打开玻璃盒 = 想看内部量：面板若还停在收起状态就自动展开（否则开关看起来没反应）
+  if (on) {
+    const sec = document.getElementById("sec-telemetry");
+    if (sec) {
+      if (sec.classList.contains("collapsed")) setSectionOpen(sec, true);
+      // 面板在右栏下方，开关打开后把它滚进视野（否则用户以为没生效）
+      requestAnimationFrame(() => sec.scrollIntoView({ block: "nearest", behavior: "smooth" }));
+    }
+  }
   // 真实姿态没有内部量：即使开关打开也不显示 3D 箭头
   const est = activeEstimator();
   sceneHandles.gravityArrows.group.visible = on && est !== null && state.view === "attitude";
@@ -1452,6 +2059,7 @@ let simAcc = 0;
 let logAcc = 0;
 let lastNow = performance.now();
 let uiAcc = 0;
+let metricsAt = 0;
 let frames = 0;
 let fpsAcc = 0;
 
@@ -1459,11 +2067,15 @@ let fpsAcc = 0;
 // Fusion 同款静止阈值（|ω| < 3°/s 持续 3s）；静止且估计明显偏离观测（>8°）时，
 // 粗对准直接把四家融合估计摆回「加计+磁力计观测姿态」——陀螺仪对静止偏航不可观，
 // 偏航只能来自磁场。纯积分不参与对准（它没有观测通道，保留作漂移对照）。
-const still = { frames: 0, lastAlignT: -1e9, chipUntil: -1 };
-function stepStillness(sample: ImuSample): void {
+const still = { seconds: 0, lastAlignT: -1e9, chipUntil: -1 };
+/**
+ * 静止检测按**真实经过时间**累计（而不是按 2 ms tick 数）：
+ * 模拟模式每步 H、真实模式每帧 dt——两种数据源共用同一套 3 秒阈值。
+ */
+function stepStillness(sample: ImuSample, dt: number): void {
   const wDps = Math.hypot(sample.gyro[0], sample.gyro[1], sample.gyro[2]) * DEG;
-  still.frames = wDps < 3 ? still.frames + 1 : 0;
-  if (still.frames < Math.round(3 / H) || world.t - still.lastAlignT <= 5) return;
+  still.seconds = wDps < 3 ? still.seconds + dt : 0;
+  if (still.seconds < 3 || state.simTime - still.lastAlignT <= 5) return;
   let maxAlign = 0;
   for (const e of ests) {
     if (e.id === "pure") continue;
@@ -1471,19 +2083,57 @@ function stepStillness(sample: ImuSample): void {
   }
   if (maxAlign <= 8) return; // 收敛良好：无需对准（零偏已由 Ki / 卡尔曼学走，不重置以免抹掉）
   const magOn = ($("mag-enable") as HTMLInputElement).checked;
-  const q0 = coarseAlign(sample.accel, sample.mag, magOn);
+  const q0 = coarseAlign(sample.accel, magForEstimation(sample.mag), magOn);
   for (const e of ests) if (e.id !== "pure") e.reset(q0);
-  still.lastAlignT = world.t;
+  still.lastAlignT = state.simTime;
   still.chipUntil = performance.now() / 1000 + 3;
 }
 
+/** 一次估计器更新（A 组 + 可选 B 组），统一走磁校准后的数据 */
+function updateEstimators(sample: ImuSample, dt: number): void {
+  const mag = magForEstimation(sample.mag);
+  for (const e of ests) e.update(sample.gyro, sample.accel, mag, dt);
+  if (abState.on) for (const c of abState.clones) c.update(sample.gyro, sample.accel, mag, dt);
+}
+
+/** 模拟世界推进（固定步长 H） */
 function stepSim(): void {
-  if (state.real) {
-    // 真实模式：数据来自串口帧。帧到达频率由固件决定（100–200Hz），
-    // 每个仿真 tick 用最近一帧驱动一次（帧率低于 500Hz 时等效降采样，算法仍以 dt=2ms 步进——
-    // 对教学精度足够；真要精确可用帧内 tick 差，见 firmware README 的说明）。
-    const f = serialState.lastFrame;
-    if (!f) return;
+  // 闭环演示：控制器改用所选解算结果（而非真实姿态）计算跟踪误差——
+  // 「估计漂多少，机体就飞偏多少」；选真实姿态或关闭开关时为理想飞控。
+  const loopOn = ($("loop-toggle") as HTMLInputElement).checked;
+  const fb = loopOn && state.source !== "truth" ? ests.find((e) => e.id === state.source)!.q : undefined;
+  const sample = world.step(H, imuParams, fb);
+  state.simTime = world.t;
+  state.lastImu = sample;
+  updateEstimators(sample, H);
+  stepStillness(sample, H);
+  collectMagSample(sample.mag);
+  logAcc += H;
+  if (logAcc >= LOG_DT) {
+    logAcc -= LOG_DT;
+    logRow();
+  }
+}
+
+/**
+ * 真实串口回放：每帧**只更新一次**，dt 取固件 tick 差——
+ * 这修复了两个旧版问题：① 500 Hz 主循环反复用同一帧积分（把 200 Hz 数据
+ * 当 500 Hz 用），② 断流后仍拿最后一帧空转。帧率由固件决定，算法步长随之变化，
+ * 与「解算频率应跟随采样率」的工程口径一致。
+ */
+function stepSerialPlayback(): void {
+  const queue = serialState.queue;
+  if (queue.length === 0) return;
+  // 一次 rAF 最多消化 64 帧（约 320 ms @200 Hz）；积压更多说明页面被挂起过，
+  // 多余的旧帧没有实时价值——丢弃并在状态里计数。
+  let processed = 0;
+  while (queue.length > 0 && processed < 64) {
+    const f = queue.shift()!;
+    const dt = serialState.lastTickMs >= 0
+      ? frameDtSec(serialState.lastTickMs, f.tickMs)
+      : 0.005;
+    serialState.lastTickMs = f.tickMs;
+    serialState.lastDt = dt;
     const RAD2 = Math.PI / 180;
     const sample: ImuSample = {
       gyro: [f.gyroDps[0] * RAD2, f.gyroDps[1] * RAD2, f.gyroDps[2] * RAD2],
@@ -1491,29 +2141,16 @@ function stepSim(): void {
       mag: [...f.magUt],
     };
     state.lastImu = sample;
-    for (const e of ests) e.update(sample.gyro, sample.accel, sample.mag, H);
-    if (abState.on) for (const c of abState.clones) c.update(sample.gyro, sample.accel, sample.mag, H);
-    stepStillness(sample); // 真实模式静止检测同样有效（3s → 粗对准）
-    logAcc += H;
+    updateEstimators(sample, dt);
+    state.simTime += dt;
+    stepStillness(sample, dt);
+    collectMagSample(sample.mag);
+    logAcc += dt;
     if (logAcc >= LOG_DT) {
       logAcc -= LOG_DT;
       logRow();
     }
-    return;
-  }
-  // 闭环演示：控制器改用所选解算结果（而非真实姿态）计算跟踪误差——
-  // 「估计漂多少，机体就飞偏多少」；选真实姿态或关闭开关时为理想飞控。
-  const loopOn = ($("loop-toggle") as HTMLInputElement).checked;
-  const fb = loopOn && state.source !== "truth" ? ests.find((e) => e.id === state.source)!.q : undefined;
-  const sample = world.step(H, imuParams, fb);
-  state.lastImu = sample;
-  for (const e of ests) e.update(sample.gyro, sample.accel, sample.mag, H);
-  if (abState.on) for (const c of abState.clones) c.update(sample.gyro, sample.accel, sample.mag, H);
-  stepStillness(sample);
-  logAcc += H;
-  if (logAcc >= LOG_DT) {
-    logAcc -= LOG_DT;
-    logRow();
+    processed++;
   }
 }
 
@@ -1531,7 +2168,13 @@ renderer.setAnimationLoop(() => {
 
 function frame(): void {
   const now = performance.now();
-  const dt = Math.min((now - lastNow) / 1000, 0.05);
+  const rawDt = (now - lastNow) / 1000;
+  // 两条时间轴：
+  //  · dt    —— 物理/仿真步长上限 50 ms（防止卡顿后一步跳太远）
+  //  · dtAnim—— 纯动画时间轴（万向节演示、四元数播放、相机过渡），上限 250 ms。
+  //    用 dt 驱动动画会让低帧率机器上的 14 秒演示播成 28 秒（实测踩到过）。
+  const dt = Math.min(rawDt, 0.05);
+  const dtAnim = Math.min(rawDt, 0.25);
   lastNow = now;
   if (compDemoRunning) stepCompDemo(dt);
   if (orderDemoRunning) stepOrderDemo(dt);
@@ -1546,25 +2189,31 @@ function frame(): void {
   }
 
   // 万向节锁演示独立于仿真，暂停时也能演示
-  stepDemo(dt);
-  stepQuatPlay(dt);
-  stepQuatProj(dt);
-  stepQuatFades(dt);
-  stepQuatCamTween(dt);
+  stepDemo(dtAnim);
+  stepQuatPlay(dtAnim);
+  stepQuatProj(dtAnim);
+  stepQuatFades(dtAnim);
+  stepQuatCamTween(dtAnim);
+  sceneHandles.gimbal.step(dtAnim);
 
   if (state.playing) {
-    simAcc += dt;
-    if (simAcc > 0.25) simAcc = 0.25; // 标签页隐藏后恢复时，最多补 0.25s，避免疯狂快进
-    while (simAcc >= H) {
-      stepSim();
-      simAcc -= H;
+    if (state.real) {
+      // 真实数据有自己的时钟：按帧到达节奏推进，不再走 500 Hz 固定步长
+      stepSerialPlayback();
+    } else {
+      simAcc += dt;
+      if (simAcc > 0.25) simAcc = 0.25; // 标签页隐藏后恢复时，最多补 0.25s，避免疯狂快进
+      while (simAcc >= H) {
+        stepSim();
+        simAcc -= H;
+      }
     }
     for (const model of [quad, sceneHandles.gimbal.quad]) {
       model.props.forEach((p, i) => (p.rotation.y += (i % 2 ? 1 : -1) * 30 * dt));
     }
   }
 
-  const q = state.source === "truth" ? world.q : ests.find((e) => e.id === state.source)!.q;
+  const q = selectedQ();
   quad.group.quaternion.copy(toDisplay(q));
   // 真实模式无真值基准：幻影隐藏（它显示的是模拟剧本的姿态，与真实机体无关）
   ghost.group.visible = !state.real && state.view === "attitude" && ($("ghost-toggle") as HTMLInputElement).checked;
@@ -1610,7 +2259,17 @@ function frame(): void {
     attChart.render();
     errChart.render();
     imuChart.render();
+    updateSerialStatus();
     updateHash();
+  }
+  // 评测表/校准面板按**墙钟** 2 Hz 刷新（旧写法把 dt 累加在 10 Hz UI 块里，
+  // 每 0.1 s 只加一帧的 16 ms，实际刷新慢了 6 倍）
+  if (now - metricsAt >= 500) {
+    metricsAt = now;
+    updateMetricsTable();
+    updateMagCalUi();
+    updatePanelSummaries();
+    updateChartSummaries();
   }
 }
 
@@ -1665,21 +2324,99 @@ function showDocPage(id: string, restore = false): void {
   updateFigDemoRun();
 }
 
+let docsPrevFocus: HTMLElement | null = null;
 function setDocsOpen(open: boolean): void {
+  if (open === !docsOverlay.hidden) return;
   docsOverlay.hidden = !open;
   if (open) {
+    docsPrevFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     document.body.style.overflow = "hidden";
     showDocPage(activeDocPage, true);
+    // 对话框焦点入口：读屏用户不会在打开后仍停在背景按钮上
+    $("btn-docs-close").focus();
   } else {
     docScrollMemory.set(activeDocPage, docPagesEl.scrollTop);
     document.body.style.overflow = "";
+    // 焦点回到打开文档前的控件；若是程序化打开（activeElement=body）则回到「文档」按钮
+    const back = docsPrevFocus && docsPrevFocus !== document.body ? docsPrevFocus : $<HTMLButtonElement>("btn-docs");
+    back.focus();
+    docsPrevFocus = null;
   }
   updateFigDemoRun();
+}
+
+/** 文档对话框内的 Tab 循环（aria-modal 的配套实现） */
+function trapDocsFocus(e: KeyboardEvent): void {
+  if (docsOverlay.hidden || e.key !== "Tab") return;
+  const focusables = [
+    ...docsOverlay.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    ),
+  ].filter((el) => el.getClientRects().length > 0);
+  if (focusables.length === 0) return;
+  const first = focusables[0];
+  const last = focusables[focusables.length - 1];
+  if (e.shiftKey && document.activeElement === first) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && document.activeElement === last) {
+    e.preventDefault();
+    first.focus();
+  }
 }
 $("btn-docs").addEventListener("click", () => setDocsOpen(true));
 $("btn-docs-close").addEventListener("click", () => setDocsOpen(false));
 window.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && !docsOverlay.hidden) setDocsOpen(false);
+  trapDocsFocus(e);
+  if (e.defaultPrevented) return;
+  if (e.key === "Escape") {
+    if (!docsOverlay.hidden) {
+      e.preventDefault();
+      setDocsOpen(false);
+    }
+    return;
+  }
+  if (!docsOverlay.hidden) return; // 文档打开时只响应 Esc（避免误触后台快捷键）
+  const target = e.target;
+  // 按键守卫分两级：
+  //  · 文本/下拉/滑块类控件聚焦时，所有单键快捷键都让位（否则打字/调值会被劫持）；
+  //  · 按钮/链接聚焦时只让位「空格」（空格本来就是激活按钮），其余快捷键照常——
+  //    否则从文档返回后焦点停在「文档」按钮上，1/2/3 会全部失灵（实测踩到过）。
+  // target 可能不是 Element（window/document 上派发的合成事件），不能直接 .matches()
+  if (target instanceof Element) {
+    if (target.matches("input, select, textarea, [contenteditable='true']")) return;
+    if (e.key === " " && target.matches("button, a")) return;
+  }
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  switch (e.key) {
+    case " ":
+      e.preventDefault();
+      setPlaying(!state.playing);
+      break;
+    case "r":
+    case "R":
+      resetSim();
+      toast("已重置：估计器、曲线与统计归零");
+      break;
+    case "1":
+      applyView("attitude");
+      break;
+    case "2":
+      applyView("gimbal");
+      break;
+    case "3":
+      applyView("quat");
+      break;
+    case "d":
+    case "D":
+      setDocsOpen(true);
+      break;
+    case "?":
+      toast("快捷键：空格 暂停/继续 · R 重置 · 1/2/3 切视图 · D 文档");
+      break;
+    default:
+      break;
+  }
 });
 
 /** 统一的文档内锚点跳转：目标在当前页 → 平滑滚动；在别的页 → 先切页再滚 */
@@ -2138,30 +2875,44 @@ function stepCalibDemo(dt: number): void {
 const DEEP_KEYS = [
   "imu-gyro-bias", "imu-gyro-noise", "imu-gyro-walk", "imu-accel-noise", "imu-cross-axis",
   "imu-accel-nonlin", "imu-lin-accel", "imu-vibration", "imu-mag-noise", "imu-mag-quant",
-  "imu-mag-disturb", "mahony-kp", "mahony-ki", "madg-beta", "comp-alpha", "kalman-proc",
-  "kalman-obs", "man-roll", "man-pitch", "man-yaw", "quat-t",
+  "imu-mag-disturb", "imu-hard-iron", "mahony-kp", "mahony-ki", "madg-beta", "comp-alpha",
+  "kalman-proc", "kalman-obs", "man-roll", "man-pitch", "man-yaw", "quat-t",
 ];
 const DEEP_CHECKS = [
-  "mag-enable", "ghost-toggle", "telemetry-toggle", "axis-toggle", "init-offset-toggle",
-  "ab-toggle", "loop-toggle",
+  "mag-enable", "gate-toggle", "ghost-toggle", "telemetry-toggle", "axis-toggle",
+  "init-offset-toggle", "ab-toggle", "loop-toggle",
 ];
 const DEEP_SELS = ["scenario-select", "source-select", "quat-mode", "quat-pair-select", "imu-preset"];
 let lastHash = "";
 
 function deepHash(): string {
-  const o: Record<string, unknown> = { v: 1 };
+  const o: Record<string, unknown> = { v: 2, view: state.view };
   for (const k of DEEP_KEYS) o[k] = ($<HTMLInputElement>(k))?.value;
   for (const k of DEEP_CHECKS) o[k] = ($<HTMLInputElement>(k))?.checked;
   for (const k of DEEP_SELS) o[k] = ($<HTMLSelectElement>(k))?.value;
-  return `#s=${btoa(unescape(encodeURIComponent(JSON.stringify(o))))}`;
+  // 布局状态也进深链：曲线面板开合（3 位）+ 收起的分区列表（短字符串）
+  o.charts = CHART_KEYS.map((k) => (chartState[k] ? 1 : 0)).join("");
+  o.panels = panelSections
+    .filter((sec) => sec.classList.contains("collapsed"))
+    .map((sec) => sec.dataset.section)
+    .join(",");
+  return `#s=${b64urlEncode(JSON.stringify(o))}`;
 }
 
 function applyDeepLink(): void {
   const m = location.hash.match(/^#s=(.+)$/);
   if (!m) return;
   try {
-    // decodeURIComponent 兼容两种来源：updateHash 写入的原始 base64 与外链的 URL 编码形态
-    const o = JSON.parse(decodeURIComponent(escape(atob(decodeURIComponent(m[1]))))) as Record<string, unknown>;
+    // 兼容三代编码：v2 base64url、旧版未编码 base64、外链 URL 编码 base64
+    const raw = m[1];
+    const json = (() => {
+      try {
+        return b64urlDecode(raw);
+      } catch {
+        return decodeURIComponent(escape(atob(decodeURIComponent(raw))));
+      }
+    })();
+    const o = JSON.parse(json) as Record<string, unknown>;
     for (const k of DEEP_KEYS) {
       const el = $<HTMLInputElement>(k);
       if (o[k] !== undefined && el) {
@@ -2183,12 +2934,35 @@ function applyDeepLink(): void {
         el.dispatchEvent(new Event("change"));
       }
     }
+    // 姿态对切换会把插值进度重置为 0；深链里的 t 要重新写一次才算真正还原
+    if (o["quat-t"] !== undefined) {
+      const el = $<HTMLInputElement>("quat-t");
+      el.value = String(o["quat-t"]);
+      el.dispatchEvent(new Event("input"));
+    }
+    // 曲线面板开合（"101" = 姿态角+IMU 展开、误差收起）
+    const chartsSpec = o.charts;
+    if (typeof chartsSpec === "string" && /^[01]{3}$/.test(chartsSpec)) {
+      CHART_KEYS.forEach((k, i) => (chartState[k] = chartsSpec[i] === "1"));
+      layoutCharts();
+    }
+    // 收起的分区列表
+    if (typeof o.panels === "string") {
+      const collapsed = new Set(o.panels.split(",").filter(Boolean));
+      for (const sec of panelSections) setSectionOpen(sec, !collapsed.has(sec.dataset.section ?? ""));
+    }
+    if (o.view === "attitude" || o.view === "gimbal" || o.view === "quat") {
+      applyView(o.view);
+    }
   } catch {
     /* 无效 hash：静默忽略，按默认状态运行 */
   }
 }
 
 function updateHash(): void {
+  // 四元数插值播放时 quat-t 每帧都在变：停止期间才写 hash，避免 10 Hz 的
+  // history.replaceState（部分浏览器会对其限流/记录诊断信息）
+  if (quatState.playing) return;
   const h = deepHash();
   if (h === lastHash) return;
   lastHash = h;
@@ -2200,9 +2974,58 @@ function toast(text: string, color = "#7ee787"): void {
   chip.className = "ov-chip";
   chip.style.color = color;
   chip.textContent = text;
-  $("readout-overlay").appendChild(chip);
+  (document.getElementById("toast-layer") ?? $("readout-overlay")).appendChild(chip);
   setTimeout(() => chip.remove(), 2400);
 }
+
+// ---------- 数据导出：把当前记录导出为 CSV（Excel/Matlab/Python 可直接读） ----------
+function exportCsv(): void {
+  if (logRows.length === 0) {
+    toast("还没有记录到数据——等一两秒再导出", "#fbbf24");
+    return;
+  }
+  const refLabel = state.real ? "mahony_ref" : "truth";
+  const header = [
+    "t_s",
+    ...[0, 1, 2].map((k) => `${refLabel}_${["roll", "pitch", "yaw"][k]}_deg`),
+    ...ests.flatMap((e) => [0, 1, 2].map((k) => `${e.id}_${["roll", "pitch", "yaw"][k]}_deg`)),
+    ...ests.map((e) => `err_${e.id}_deg`),
+  ];
+  const lines = [header.join(",")];
+  for (const row of logRows) {
+    const vals: number[] = [row.t];
+    for (let s = 0; s < row.euler.length; s++) vals.push(row.euler[s][0], row.euler[s][1], row.euler[s][2]);
+    vals.push(...row.err);
+    lines.push(vals.map((v) => (Number.isFinite(v) ? v.toFixed(6) : "")).join(","));
+  }
+  const meta = [
+    `# quaternion-attitude-demo export`,
+    `# mode=${state.real ? "real-serial" : "simulation"} scenario=${state.real ? "serial" : scenarioSelect.value}`,
+    `# algorithm_params=${JSON.stringify({
+      compAlpha: comp.alpha,
+      mahonyKp: mahony.kp,
+      mahonyKi: mahony.ki,
+      madgwickBeta: madg.beta,
+      kalmanQ: kalman.gyroNoiseDps,
+      kalmanR: kalman.obsNoise,
+      magEnabled: ($("mag-enable") as HTMLInputElement).checked,
+      accelGate: ($("gate-toggle") as HTMLInputElement).checked,
+    })}`,
+    `# imu_params=${JSON.stringify(imuParams)}`,
+    `# note: reference = ${state.real ? "Mahony (real mode has no ground truth)" : "ground truth (simulation)"}`,
+  ].join("\n");
+  const csv = `${meta}\n${lines.join("\n")}\n`;
+  const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `attitude-log-${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}.csv`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  toast(`已导出 ${logRows.length} 行 CSV（含每个算法的参数头部）`);
+}
+
+document.getElementById("btn-export")?.addEventListener("click", exportCsv);
 
 $("btn-share").addEventListener("click", async () => {
   const h = deepHash();
@@ -2356,15 +3179,29 @@ declare global {
 // ① 剧本与模拟 IMU 滑块停用（真值/污染都来自真实世界）；
 // ② 没有姿态真值 → 幻影隐藏、误差曲线改以 Mahony 为参照基准；
 // ③ 帧间隔上限 dt 兜底：收不到数据时估计器不推进（避免用陈旧帧空转）。
+const SERIAL_QUEUE_MAX = 128;
 const serialState = {
   port: null as SerialPortLike | null,
   reader: null as ReadableStreamDefaultReader<Uint8Array> | null,
   running: false,
   buffer: new Uint8Array(0),
-  lastFrame: null as SerialImuFrame | null,
+  /** 已解析、等待算法消费的帧队列（主循环按 rAF 节奏回放） */
+  queue: [] as SerialImuFrame[],
+  /** 上一帧的固件 tick（ms）；−1 = 等待首帧 */
+  lastTickMs: -1,
+  /** 最近一次实际使用的积分步长（秒），状态栏显示用 */
+  lastDt: 0.005,
   frames: 0,
+  /** seq 缺口累计（固件层丢帧） */
   dropped: 0,
+  /** 主机侧队列溢出丢弃累计（页面挂起/卡顿） */
+  backlogDropped: 0,
   lastSeq: -1,
+  lastArrival: 0,
+  /** 状态栏用：上次采样时的帧计数与时刻 */
+  uiFrames: 0,
+  uiAt: 0,
+  rate: 0,
   chipUntil: -1,
 };
 
@@ -2379,6 +3216,40 @@ function setSerialStatus(text: string, warn = false): void {
   chip.classList.remove("hidden");
 }
 
+/** 状态行（2 Hz）：帧率、真实 dt、丢帧、断流看门狗 */
+function updateSerialStatus(): void {
+  if (!serialState.running) return;
+  const now = performance.now();
+  if (serialState.uiAt > 0) {
+    const elapsed = (now - serialState.uiAt) / 1000;
+    if (elapsed >= 0.5) {
+      serialState.rate = (serialState.frames - serialState.uiFrames) / elapsed;
+      serialState.uiAt = now;
+      serialState.uiFrames = serialState.frames;
+    }
+  } else {
+    serialState.uiAt = now;
+    serialState.uiFrames = serialState.frames;
+  }
+  if (serialState.lastArrival === 0) {
+    setSerialStatus("真实 IMU 已连接——等待数据帧…");
+    return;
+  }
+  const age = (now - serialState.lastArrival) / 1000;
+  if (age > 1.5) {
+    setSerialStatus(
+      `数据流中断 ${age.toFixed(1)} s（已收 ${serialState.frames} 帧）——检查固件是否仍在发帧 / 线缆是否松动`,
+      true,
+    );
+    return;
+  }
+  const backlog = serialState.backlogDropped > 0 ? ` · 积压丢弃 ${serialState.backlogDropped}` : "";
+  setSerialStatus(
+    `真实 IMU · ${serialState.rate.toFixed(0)} 帧/s · dt ${(serialState.lastDt * 1000).toFixed(1)} ms · ` +
+      `seq 丢帧 ${serialState.dropped}${backlog}`,
+  );
+}
+
 async function serialConnect(): Promise<void> {
   if (!("serial" in navigator)) {
     setSerialStatus("此浏览器不支持 Web Serial（需要 Chrome/Edge 且 HTTPS 或 localhost）", true);
@@ -2388,6 +3259,10 @@ async function serialConnect(): Promise<void> {
     serialState.port = await navigator.serial.requestPort();
     await serialState.port.open({ baudRate: 921600 });
     serialState.running = true;
+    serialState.lastArrival = 0;
+    serialState.uiAt = 0;
+    serialState.uiFrames = 0;
+    serialState.rate = 0;
     setSerialStatus("真实 IMU 已连接（921600 8N1）——等待数据帧…");
     serialReadLoop();
   } catch (err) {
@@ -2408,7 +3283,11 @@ async function serialDisconnect(): Promise<void> {
   serialState.port = null;
   serialState.reader = null;
   serialState.buffer = new Uint8Array(0);
-  serialState.lastFrame = null;
+  serialState.queue.length = 0;
+  serialState.lastTickMs = -1;
+  serialState.lastSeq = -1;
+  serialState.rate = 0;
+  magCalState.collecting = false;
   setSerialStatus("真实 IMU 已断开——回到模拟模式");
 }
 
@@ -2435,13 +3314,15 @@ async function serialReadLoop(): Promise<void> {
       // 异常断开（拔线）：回到 idle 并提示
       serialState.running = false;
       serialState.port = null;
+      serialState.queue.length = 0;
+      serialState.lastTickMs = -1;
       setSerialStatus("真实 IMU 连接中断（设备拔出或重置？）——点击「连接真实 IMU」重连", true);
       applyDataSourceSemantics();
     }
   }
 }
 
-/** 把缓冲里所有完整帧弹出，更新 lastFrame 与统计 */
+/** 把缓冲里所有完整帧弹出到回放队列，并更新统计 */
 function serialDrainBuffer(): void {
   const mounting = ($("serial-mounting") as HTMLSelectElement).value as Mounting;
   for (;;) {
@@ -2456,8 +3337,14 @@ function serialDrainBuffer(): void {
       if (frame.seq !== expect) serialState.dropped += (frame.seq - expect) & 0xffff;
     }
     serialState.lastSeq = frame.seq;
-    serialState.lastFrame = frame;
     serialState.frames++;
+    serialState.lastArrival = performance.now();
+    serialState.queue.push(frame);
+    // 主机侧积压保护：只保留最新的帧（旧帧对实时显示没有价值）
+    if (serialState.queue.length > SERIAL_QUEUE_MAX) {
+      serialState.queue.shift();
+      serialState.backlogDropped++;
+    }
   }
 }
 
@@ -2468,27 +3355,49 @@ function serialToggle(): void {
     void serialConnect().then(() => {
       if (serialState.running) {
         applyDataSourceSemantics();
-        for (const e of ests) e.reset(); // 进真实模式：估计器从水平出发
-        attChart.clear();
-        errChart.clear();
-        imuChart.clear();
-        attPrev.fill(undefined);
-        logRows.length = 0;
+        // 数据源切换 = 新的一轮实验：估计器、曲线、统计、时钟全部归零
+        serialState.queue.length = 0;
+        serialState.lastTickMs = -1;
+        serialState.lastSeq = -1;
+        serialState.frames = 0;
+        serialState.dropped = 0;
+        serialState.backlogDropped = 0;
+        resetSim();
       }
     });
   }
 }
 $("btn-serial").addEventListener("click", () => serialToggle());
 $("serial-mounting").addEventListener("change", () => {
-  serialState.buffer = new Uint8Array(0); // 换安装方向：丢弃半解析缓冲防错位
+  // 换安装方向：半解析缓冲与已排队帧都可能带着旧方向，一起丢弃并重置 tick 基准
+  serialState.buffer = new Uint8Array(0);
+  serialState.queue.length = 0;
+  serialState.lastTickMs = -1;
 });
 
 // ---------- 初始化 ----------
 updateSourceChip();
 applyMagEnable(); // 复选框默认勾选但不触发 change：必须显式同步一次 MARG 状态
-applyDeepLink(); // 深链：把 URL hash 里的面板状态还原（在绑定与默认初始化之后执行）
+applyAccelGate(); // 门控开关同理：默认勾选也要显式写入估计器
 setGimbalAngles(0, 0, 0);
-applyView("attitude"); // 视图不持久化，始终从四轴姿态视图开始
+applyView("attitude"); // 默认视图；深链可在下一步覆盖
 setTelemetryVisible(false); // 玻璃盒默认关闭，写 body[data-telemetry] 供 CSS 使用
 updateGravityLegend();
 updateMagLegend();
+applyDeepLink(); // 深链最后执行：覆盖默认视图/开关/滑块（且能正确进入四元数子模式）
+updateMetricsTable();
+updateMagCalUi();
+resetSim(); // 统一时钟/统计/曲线起点（不改变已还原的深链参数）
+
+// 控制台调试入口（教学/自动化验收用）：不参与 UI，不影响性能
+(window as unknown as { attitudeDemo: unknown }).attitudeDemo = {
+  scene: sceneHandles.scene,
+  camera: sceneHandles.camera,
+  renderer,
+  controls,
+  state,
+  ests,
+  get sceneHandles() {
+    return sceneHandles;
+  },
+};

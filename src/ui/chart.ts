@@ -135,6 +135,9 @@ export class RollingChart {
     }
     for (let s = 5; s <= this.windowSec; s += 5) {
       const x = Math.round(xOf(t1 - s)) + 0.5;
+      // 刚开始记录时 −25s/−30s 落在绘图区左侧之外：不画屏外刻度，
+      // 否则文字会压到 y 轴标签或画布边缘
+      if (x < padL + 2) continue;
       ctx.beginPath();
       ctx.moveTo(x, padT);
       ctx.lineTo(x, padT + plotH);

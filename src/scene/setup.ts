@@ -40,8 +40,9 @@ export interface SceneHandles {
 /** 两个视图各自的取景 */
 const VIEW_FRAMING: Record<UiView, { target: [number, number, number]; pos: [number, number, number] }> = {
   attitude: { target: [0, 0.9, 0], pos: [1.9, 1.35, 2.4] },
-  gimbal: { target: [0, 1.15, 0], pos: [2.3, 1.75, 2.5] },
-  quat: { target: [0, 1.0, 0], pos: [0, 1.6, 3.2] },
+  // 环架半径 1.0、中心高 1.18：相机要退到 4 单位外，顶部环带才不会被裁
+  gimbal: { target: [0, 1.2, 0], pos: [2.85, 2.1, 3.05] },
+  quat: { target: [0, 0.95, 0], pos: [0, 1.75, 3.75] },
 };
 
 export function createScene(container: HTMLElement): SceneHandles {
@@ -105,16 +106,19 @@ export function createScene(container: HTMLElement): SceneHandles {
 
   // 罗盘：北 +X、东 +Z（NED 的 N/E 经基变换后的方向）
   // 罗盘长度与标签位置收在画布安全区内（默认取景下不被右侧面板裁切）
+  // 只在「四轴姿态」视图显示——万向节锁 / 四元数视图有自己的坐标系，罗盘会抢镜
+  const compass = new THREE.Group();
   const north = new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 0.01, 0), 1.42, 0xf0c674, 0.13, 0.065);
-  scene.add(north);
+  compass.add(north);
   const nLabel = makeTextSprite("北", "#f0c674");
   nLabel.position.set(1.62, 0.3, 0);
-  scene.add(nLabel);
+  compass.add(nLabel);
   const east = new THREE.ArrowHelper(new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 0.01, 0), 1.42, 0x6fb3d2, 0.13, 0.065);
-  scene.add(east);
+  compass.add(east);
   const eLabel = makeTextSprite("东", "#6fb3d2");
   eLabel.position.set(0, 0.3, 1.62);
-  scene.add(eLabel);
+  compass.add(eLabel);
+  scene.add(compass);
 
   // 四轴模型：实体（解算姿态）+ 幻影（真实姿态）
   const quad = buildQuad(false);
@@ -196,6 +200,7 @@ export function createScene(container: HTMLElement): SceneHandles {
     ghost.group.visible = view === "attitude" && ghostEnabled;
     gimbal.group.visible = view === "gimbal";
     quatView.group.visible = view === "quat";
+    compass.visible = view === "attitude";
   };
 
   const setView = (view: UiView, ghostEnabled: boolean): void => {
