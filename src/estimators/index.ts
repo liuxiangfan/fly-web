@@ -1,5 +1,5 @@
 import type { Quat, V3 } from "../core/quat";
-import { qFromEuler, qId, qIntegrate, qNorm, qRotInv, qSlerp, qToEuler } from "../core/quat";
+import { qFromEuler, qId, qIntegrate, qNorm, qRot, qRotInv, qSlerp, qToEuler } from "../core/quat";
 import { MAG_WORLD_NED } from "../core/imu";
 
 /**
@@ -43,9 +43,13 @@ export function emptyTelemetry(): EstimatorTelemetry {
   };
 }
 
+/** 磁修正形态（Mahony / Madgwick 共有）：
+ *  - `yaw`：只用磁场约束偏航（本装置最初的简化，见文档「磁力计与 MARG」）
+ *  - `full`：完整磁场向量 + 磁倾角补偿参考场（Madgwick 2011 / Mahony 2008 的标准做法） */
+export type MagMode = "yaw" | "full";
+
 export interface Estimator {
-  id: "truth" | "pure" | "comp" | "mahony" | "madg" | "kalman";
-  label: string;
+  id: "truth" | "pure" | "comp" | "mahony" | "madg" | "kalman";  label: string;
   color: string;
   q: Quat;
   /** 最近一帧 update() 填充的内部量（玻璃盒可视化只读） */
@@ -76,15 +80,139 @@ function rampK(age: number, enabled: boolean): number {
 
 /**
  * 加速度计观测门控（互补/Mahony/Madgwick，卡尔曼用自己的 40° 新息门控）：
- * ① 幅度门控——‖a‖ 偏离 g 超 35%（线加速度沿重力分量/自由落体）；
- * ② 方向门控——实测方向与预测重力夹角超过 20°（垂直于重力的污染对范数只有
- *    二阶影响，幅度门控看不见它，Fusion 库同样以方向拒绝为主手段）。
+ * ① 幅度门控——‖a‖ 偏离 g 超 `gateMagPct`（默认 35%，线加速度沿重力分量/自由落体）；
+ * ② 方向门控——实测方向与预测重力夹角超过 `gateDeg`（默认 20°）——垂直于重力的污染
+ *    对范数只有二阶影响（4 m/s² 侧向 → 范数仅偏 8%），幅度门控看不见它，
+ *    Fusion 库同样以方向拒绝为主手段。
  * 启动 ramp 期间（Fusion 同款语义）两类拒绝都关闭——初始偏差演示里的收敛
  * 正需要「硬拉」，此时拒绝会把估计卡死在错误姿态上。
+ *
+ * 两个阈值都是**实例字段**（`gateDeg` / `gateMagPct`），面板滑块可实时改：
+ * 阈值太松污染穿堂而过，太紧正常机动被误拒——这条 U 形权衡本身就是教学点。
  */
 const ACCEL_GATE_DEG = 20;
+const ACCEL_GATE_MAG_PCT = 0.35;
 function accelGateActive(gateOn: boolean, rampEnabled: boolean, age: number): boolean {
   return gateOn && !(rampEnabled && age < RAMP_SEC);
+}
+
+/* --------------------------------------------------------------------------
+   观测拒绝的**滞回恢复**（Fusion 库同款思想）
+   -------------------------------------------------------------------------- */
+
+/** 统计窗口（秒）与窗口内分桶数 */
+const GATE_WIN_SEC = 5;
+const GATE_BUCKETS = 20;
+const GATE_BUCKET_SEC = GATE_WIN_SEC / GATE_BUCKETS;
+/** 窗口内拒绝时间占比超此值 → 判定「估计已经跑偏」，开启恢复窗 */
+const GATE_RECOVER_RATIO = 0.9;
+/** 恢复窗时长（秒）：期间无条件放行观测，把姿态拉回观测后再交还门控 */
+const GATE_RECOVER_SEC = 1.5;
+/** 窗口内至少积累这么多秒才有统计意义 */
+const GATE_MIN_SAMPLES_SEC = GATE_WIN_SEC * 0.8;
+
+/**
+ * 门控的状态机（每估计器一份）：
+ *
+ *   正常（0）──窗口拒绝占比 > 90%，且恢复开关已开──▶ 恢复（2，1.5 s 无条件放行）──▶ 正常
+ *        └──本帧被拒──▶ 拒绝（1）
+ *
+ * 为什么需要它：纯阈值门控在阈值边界会**抖振**——同一段机动里观测一帧收一帧拒，
+ * 估计在「信观测」与「信陀螺」之间来回横跳。而真正的危险场景（传感器装反、器件故障）
+ * 会让观测被长时间连续拒绝，此时陀螺零偏照常累积、估计越跑越偏，门控却因为
+ * 「反正观测不可信」永远不松口。工业库（Fusion）的做法是：拒绝太久就承认
+ * 「可能是我自己偏了」，主动放行一段时间重新收敛。这就是滞回。
+ *
+ * **默认关闭**（`gateRecovery = false`），因为它是双刃剑：持续单向线加速度（协调转弯）
+ * 同样会触发恢复窗，于是被污染的观测被放进来、姿态反而被拉偏——本装置的
+ * 「方向门控救场」实验要的正是「拒绝到底」。因此做成显式开关，两种行为都能在面板上
+ * 当场对照（这本身就是一个值得讲的工程取舍）。
+ */
+class GateRecovery {
+  private rej = new Float64Array(GATE_BUCKETS);
+  private tot = new Float64Array(GATE_BUCKETS);
+  private acc = 0;
+  private idx = 0;
+  /** > 0 表示恢复窗剩余秒数 */
+  recovering = 0;
+  /** 上一次判定的窗口拒绝占比（遥测/教学读数） */
+  ratio = 0;
+
+  /** 每帧调用：传入「按纯阈值本帧是否该拒」，返回「是否应当强制放行」 */
+  step(dt: number, wouldReject: boolean, gateOn: boolean, recoveryEnabled: boolean): boolean {
+    if (this.recovering > 0) {
+      this.recovering = Math.max(0, this.recovering - dt);
+      this.ratio = 1;
+      return true;
+    }
+    this.acc += dt;
+    this.tot[this.idx] += dt;
+    if (wouldReject) this.rej[this.idx] += dt;
+    while (this.acc >= GATE_BUCKET_SEC) {
+      this.acc -= GATE_BUCKET_SEC;
+      this.idx = (this.idx + 1) % GATE_BUCKETS;
+      this.rej[this.idx] = 0;
+      this.tot[this.idx] = 0;
+    }
+    let r = 0;
+    let t = 0;
+    for (let i = 0; i < GATE_BUCKETS; i++) {
+      r += this.rej[i];
+      t += this.tot[i];
+    }
+    this.ratio = t > 1e-9 ? r / t : 0;
+    if (recoveryEnabled && gateOn && t >= GATE_MIN_SAMPLES_SEC && this.ratio > GATE_RECOVER_RATIO) {
+      this.recovering = GATE_RECOVER_SEC;
+      this.rej.fill(0);
+      this.tot.fill(0);
+      this.acc = 0;
+      return true;
+    }
+    return false;
+  }
+
+  /** 状态码：0 正常 / 1 本帧拒绝 / 2 恢复窗（供玻璃盒读数与曲线标注） */
+  mode(wouldReject: boolean): number {
+    if (this.recovering > 0) return 2;
+    return wouldReject ? 1 : 0;
+  }
+
+  reset(): void {
+    this.rej.fill(0);
+    this.tot.fill(0);
+    this.acc = 0;
+    this.idx = 0;
+    this.recovering = 0;
+    this.ratio = 0;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   完整 MARG 的磁参考场构造（磁倾角补偿）
+   -------------------------------------------------------------------------- */
+
+/**
+ * 由**当前姿态 + 磁测量本身**构造世界系参考磁场 b = [0, bx, 0, bz]。
+ *
+ * 这是 Madgwick 2011 报告与 Mahony MARG 的标准做法，也是本装置曾经的简化版
+ * （「磁只约束偏航」）与文献实现的**唯一实质性差别**：
+ *
+ *   1. 把机体系磁测量旋到世界系：h = q ⊗ m ⊗ q⁻¹
+ *   2. 丢掉水平面内的 y 分量（世界 y = 东）：bx = √(hx² + hy²)，bz = hz
+ *   3. 归一化成单位参考场 b
+ *
+ * 第 2 步就是「磁倾角补偿」：参考场与**实测场具有相同的倾角**，于是磁场误差里
+ * 「倾角不一致」的成分被结构性地消掉了（硬铁/软铁造成的倾角畸变不再被误读成
+ * 姿态误差），磁场只在偏航上说话——而且不再需要外部的磁场参考常量。
+ * 只用「倾斜补偿磁航向取一个 yaw 角」的简化版做不到这一点，还额外依赖欧拉角。
+ */
+function magReferenceFromMeasurement(q: Quat, m: V3): { bx: number; bz: number } {
+  const h = qRot(q, m);
+  const bx = Math.hypot(h[0], h[1]);
+  const bz = h[2];
+  const n = Math.hypot(bx, bz);
+  if (!(n > 1e-9)) return { bx: 1, bz: 0 };
+  return { bx: bx / n, bz: bz / n };
 }
 
 /** 世界磁场参考模长（μT），用于磁力计可信度判定 */
@@ -189,8 +317,15 @@ export class ComplementaryEstimator implements Estimator {
   alpha = 1; // 加计融合速率（1/s）
   /** 启动增益 ramp 开关（自检 A/B 对照用）：reset 后 RAMP_SEC 秒内增益放大后线性衰减 */
   rampEnabled = true;
-  /** 加速度计观测门控：幅度（‖a‖ 偏 g 超 35%）+ 方向（与预测重力夹角超 20°）双重拒绝 */
+  /** 加速度计观测门控：幅度（‖a‖ 偏 g 超 gateMagPct）+ 方向（与预测重力夹角超 gateDeg）双重拒绝 */
   accelGate = true;
+  /** 方向门控阈值（度）——面板可调 */
+  gateDeg = ACCEL_GATE_DEG;
+  /** 幅度门控阈值（相对 g 的比例）——面板可调 */
+  gateMagPct = ACCEL_GATE_MAG_PCT;
+  /** 滞回恢复窗开关（默认关，见 GateRecovery 注释）：拒绝太久是否自动放行 */
+  gateRecovery = false;
+  private gate = new GateRecovery();
   private age = 0;
   telemetry = emptyTelemetry();
   magEnabled = false;
@@ -198,13 +333,15 @@ export class ComplementaryEstimator implements Estimator {
     this.age += dt;
     const qGyro = qIntegrate(this.q, gyro, dt);
     const norm = Math.hypot(accel[0], accel[1], accel[2]);
-    const accelValid = Math.abs(norm - G) < 0.35 * G;
+    const accelValid = Math.abs(norm - G) < this.gateMagPct * G;
     const axN = norm > 1e-6 ? [accel[0] / norm, accel[1] / norm, accel[2] / norm] : [0, 0, 0];
     const { w: pw, x: px, y: py, z: pz } = qGyro;
     const predicted: V3 = [2 * (px * pz - pw * py), 2 * (pw * px + py * pz), 1 - 2 * px * px - 2 * py * py];
     const alignDeg = angleBetweenDeg(predicted, axN as V3);
     const gateActive = accelGateActive(this.accelGate, this.rampEnabled, this.age);
-    const usable = norm > 1e-6 && (!gateActive || (accelValid && alignDeg < ACCEL_GATE_DEG));
+    const wouldReject = gateActive && !(accelValid && alignDeg < this.gateDeg);
+    const forceAccept = this.gate.step(dt, wouldReject, gateActive, this.gateRecovery);
+    const usable = norm > 1e-6 && (!wouldReject || forceAccept);
     if (!usable) {
       // 受扰（幅度/方向门控拦截）或近似自由落体：跳过加计修正——磁航向的倾斜补偿
       // 依赖可信姿态，一并跳过，本帧退化为纯陀螺仪积分
@@ -218,7 +355,7 @@ export class ComplementaryEstimator implements Estimator {
         accelNorm: norm,
         accelValid,
         magValid: false,
-        detail: { accelWeight: 0, alignErrorDeg: alignDeg },
+        detail: { accelWeight: 0, alignErrorDeg: alignDeg, gateMode: this.gate.mode(wouldReject), rejectRatio: this.gate.ratio },
       };
       return;
     }
@@ -262,6 +399,8 @@ export class ComplementaryEstimator implements Estimator {
         pitchAccDeg: pitchAcc * (180 / Math.PI),
         // 用本帧预测方向（qGyro），不能读 this.telemetry——那是上一帧的旧值（曾有一帧滞后）
         alignErrorDeg: angleBetweenDeg(predicted, [ax, ay, az]),
+        gateMode: this.gate.mode(wouldReject),
+        rejectRatio: this.gate.ratio,
         ...(yawMag !== undefined
           ? { yawMagDeg: yawMag * (180 / Math.PI), magEnabled: 1 }
           : { magEnabled: 0 }),
@@ -271,12 +410,12 @@ export class ComplementaryEstimator implements Estimator {
   reset(initial?: Quat): void {
     this.q = initial ? { ...initial } : qId();
     this.age = 0;
+    this.gate.reset();
     this.telemetry = emptyTelemetry();
   }
   getParams(): Record<string, number> {
     return { alpha: this.alpha };
-  }
-  setParams(p: Record<string, number>): void {
+  }  setParams(p: Record<string, number>): void {
     if (Number.isFinite(p.alpha)) this.alpha = p.alpha;
   }
 }
@@ -297,6 +436,15 @@ export class MahonyEstimator implements Estimator {
   private age = 0;
   telemetry = emptyTelemetry();
   magEnabled = false;
+  /** 磁修正形态：`yaw` = 只用 (m×m̂)_z 约束偏航（本装置最初的简化）；
+   *  `full` = 完整磁场向量叉积 + 磁倾角补偿参考场（Mahony MARG 的标准做法） */
+  magMode: MagMode = "yaw";
+  /** 方向门控阈值（度）/ 幅度门控阈值（相对 g）——面板可调 */
+  gateDeg = ACCEL_GATE_DEG;
+  gateMagPct = ACCEL_GATE_MAG_PCT;
+  /** 滞回恢复窗开关（默认关，见 GateRecovery 注释） */
+  gateRecovery = false;
+  private gate = new GateRecovery();
   update(gyro: V3, accel: V3, mag: V3, dt: number): void {
     this.age += dt;
     const kP = this.kp * rampK(this.age, this.rampEnabled);
@@ -310,29 +458,48 @@ export class MahonyEstimator implements Estimator {
     let iUsage = 0;
     let magOk = false;
     let yawMagDeg = NaN;
-    const accelValid = Math.abs(norm - G) < 0.35 * G;
+    const accelValid = Math.abs(norm - G) < this.gateMagPct * G;
     const alignDeg = angleBetweenDeg(predicted, measured);
     const gateActive = accelGateActive(this.accelGate, this.rampEnabled, this.age);
-    if (norm > 1e-6 && (!gateActive || (accelValid && alignDeg < ACCEL_GATE_DEG))) {
+    const wouldReject = gateActive && !(accelValid && alignDeg < this.gateDeg);
+    const forceAccept = this.gate.step(dt, wouldReject, gateActive, this.gateRecovery);
+    let magErrMag = 0;
+    if (norm > 1e-6 && (!wouldReject || forceAccept)) {
       const ax = measured[0], ay = measured[1], az = measured[2];
       const vx = predicted[0], vy = predicted[1], vz = predicted[2];
       // 误差 = 实测 × 预测（叉积）
-      const ex = ay * vz - az * vy;
-      const ey = az * vx - ax * vz;
+      let ex = ay * vz - az * vy;
+      let ey = az * vx - ax * vz;
       let ez = ax * vy - ay * vx;
 
-      // MARG：磁场误差只约束偏航——误差 = (m × m_pred) 的 z 分量并入 ez。
-      // m_pred = Rᵀ(q)·M_WORLD：当前姿态认为世界磁场在机体系的投影。
-      // 磁场水平分量只携带航向信息，故不往 ex/ey 添加任何项。
       magOk = this.magEnabled && magIsPlausible(mag);
       if (magOk) {
-        const mPred = qRotInv(this.q, MAG_WORLD_NED);
         const mn = Math.hypot(mag[0], mag[1], mag[2]);
-        // e_mag_z = (m × m_pred)_z / ‖m‖（归一化后量级与重力误差可比）
-        ez += ((mag[0] * mPred[1] - mag[1] * mPred[0]) / mn) * 0.5;
-        // 教学读数：倾斜补偿磁航向
-        const eu = qToEuler(this.q);
-        yawMagDeg = tiltCompensatedYaw(eu.roll, eu.pitch, mag[0], mag[1], mag[2]) * (180 / Math.PI);
+        if (this.magMode === "full") {
+          // 标准 MARG（Mahony 2008 的推广形式）：参考场由**测量本身**构造
+          //（磁倾角补偿），误差取实测磁场与预测磁场的**完整向量叉积**——
+          // 三个分量都参与修正，因此磁场也会修正倾角，而不是只拽偏航。
+          const { bx, bz } = magReferenceFromMeasurement(this.q, mag);
+          // 世界系参考场向量 = (bx, 0, bz)：北向水平分量 + 向下垂直分量（东向恒为 0）。
+          // 不能写成 (0, bx, bz)——那是「东-下」平面，修正会被推错轴（实测：静态就偏 22°）。
+          const mPred = qRotInv(this.q, [bx, 0, bz]);
+          const mHat: V3 = [mag[0] / mn, mag[1] / mn, mag[2] / mn];
+          const mex = mHat[1] * mPred[2] - mHat[2] * mPred[1];
+          const mey = mHat[2] * mPred[0] - mHat[0] * mPred[2];
+          const mez = mHat[0] * mPred[1] - mHat[1] * mPred[0];
+          // 权重 k₂/k₁ = 0.5：磁观测比重力观测更不可信（软铁/硬铁/电机干扰）
+          ex += 0.5 * mex;
+          ey += 0.5 * mey;
+          ez += 0.5 * mez;
+          magErrMag = Math.hypot(mex, mey, mez);
+        } else {
+          // 简化版：只取 (m × m_pred) 的 z 分量并入 ez——磁场只约束偏航。
+          const mPred = qRotInv(this.q, MAG_WORLD_NED);
+          ez += ((mag[0] * mPred[1] - mag[1] * mPred[0]) / mn) * 0.5;
+          // 教学读数：倾斜补偿磁航向
+          const eu = qToEuler(this.q);
+          yawMagDeg = tiltCompensatedYaw(eu.roll, eu.pitch, mag[0], mag[1], mag[2]) * (180 / Math.PI);
+        }
       }
 
       this.eInt = [this.eInt[0] + ex * dt, this.eInt[1] + ey * dt, this.eInt[2] + ez * dt];
@@ -360,7 +527,14 @@ export class MahonyEstimator implements Estimator {
         iUsage,
         eIntMag: Math.hypot(this.eInt[0], this.eInt[1], this.eInt[2]),
         alignErrorDeg: alignDeg,
-        ...(magOk ? { yawMagDeg, magEnabled: 1 } : { magEnabled: 0 }),
+        gateMode: this.gate.mode(wouldReject),
+        rejectRatio: this.gate.ratio,
+        magErrDeg: magErrMag,
+        ...(magOk && this.magMode === "full"
+          ? { magModeFull: 1, magEnabled: 1 }
+          : magOk
+            ? { yawMagDeg, magEnabled: 1 }
+            : { magEnabled: 0 }),
       },
     };
   }
@@ -368,6 +542,7 @@ export class MahonyEstimator implements Estimator {
     this.q = initial ? { ...initial } : qId();
     this.eInt = [0, 0, 0];
     this.age = 0;
+    this.gate.reset();
     this.telemetry = emptyTelemetry();
   }
   getParams(): Record<string, number> {
@@ -390,6 +565,14 @@ export class MadgwickEstimator implements Estimator {
   rampEnabled = true;
   /** 加速度计幅度门控：受扰时跳过梯度步 */
   accelGate = true;
+  /** 磁修正形态：`yaw` = 独立偏航方向分量（本装置最初的简化）；`full` = 标准 6 维梯度 */
+  magMode: MagMode = "yaw";
+  /** 方向门控阈值（度）/ 幅度门控阈值（相对 g）——面板可调 */
+  gateDeg = ACCEL_GATE_DEG;
+  gateMagPct = ACCEL_GATE_MAG_PCT;
+  /** 滞回恢复窗开关（默认关，见 GateRecovery 注释） */
+  gateRecovery = false;
+  private gate = new GateRecovery();
   private age = 0;
   telemetry = emptyTelemetry();
   magEnabled = false;
@@ -410,49 +593,84 @@ export class MadgwickEstimator implements Estimator {
     let residual = 0;
     let magOk = false;
     let yawMagDeg = NaN;
-    const accelValid = Math.abs(norm - G) < 0.35 * G;
+    let magResidual = 0;
+    const accelValid = Math.abs(norm - G) < this.gateMagPct * G;
     const alignDeg = angleBetweenDeg(predicted, measured);
     const gateActive = accelGateActive(this.accelGate, this.rampEnabled, this.age);
-    if (norm > 1e-6 && (!gateActive || (accelValid && alignDeg < ACCEL_GATE_DEG))) {
+    const wouldReject = gateActive && !(accelValid && alignDeg < this.gateDeg);
+    const forceAccept = this.gate.step(dt, wouldReject, gateActive, this.gateRecovery);
+    if (norm > 1e-6 && (!wouldReject || forceAccept)) {
       const ax = measured[0], ay = measured[1], az = measured[2];
-      // 目标函数 f = 预测重力方向 − 实测方向
-      const f1 = 2 * (x * z - w * y) - ax;
-      const f2 = 2 * (w * x + y * z) - ay;
-      const f3 = 2 * (0.5 - x * x - y * y) - az;
-      residual = Math.hypot(f1, f2, f3);
-      // 梯度 Jᵀf
-      let s0 = -2 * y * f1 + 2 * x * f2;
-      let s1 = 2 * z * f1 + 2 * w * f2 - 4 * x * f3;
-      let s2 = -2 * w * f1 + 2 * z * f2 - 4 * y * f3;
-      let s3 = 2 * x * f1 + 2 * y * f2;
-
-      // MARG：磁场修正。磁场只约束偏航——构造「绕机体系 z 轴」的梯度方向分量，
-      // 与重力梯度**并列**参与同一次归一化（而不是独立的 dt 缩放步）：
-      // 绕 z 转 δ 的下降方向是 ½·q⊗(0,0,δ)，对 (dw,dx,dy,dz) 的贡献与陀螺微分项同构。
-      // δ 取偏航最短角差 yawErr（已是角度而非角速度），与重力残差无量纲化后等权竞争。
       magOk = this.magEnabled && magIsPlausible(mag);
-      if (magOk) {
-        const eu = qToEuler({ w, x, y, z });
-        const yawMag = tiltCompensatedYaw(eu.roll, eu.pitch, mag[0], mag[1], mag[2]);
-        yawMagDeg = yawMag * (180 / Math.PI);
-        let yawErr = yawMag - eu.yaw;
-        while (yawErr > Math.PI) yawErr -= 2 * Math.PI;
-        while (yawErr < -Math.PI) yawErr += 2 * Math.PI;
-        const dir = yawErr > 0 ? 1 : -1;
-        const magS = 0.5 * Math.min(1, Math.abs(yawErr)); // 修正强度随误差饱和（避免过冲）
-        dw += dir * magS * (-z);
-        dx += dir * magS * (y);
-        dy += dir * magS * (-x);
-        dz += dir * magS * (w);
-      }
 
-      const sNorm = Math.hypot(s0, s1, s2, s3);
-      if (sNorm > 1e-9) {
-        s0 /= sNorm; s1 /= sNorm; s2 /= sNorm; s3 /= sNorm;
-        dw -= betaEff * s0;
-        dx -= betaEff * s1;
-        dy -= betaEff * s2;
-        dz -= betaEff * s3;
+      if (magOk && this.magMode === "full") {
+        // ---- 标准 Madgwick MARG（2011 报告 的 6 维目标函数）----
+        // 目标函数前三维同 IMU 版（重力残差）；后三维用**磁倾角补偿参考场** b：
+        //   h = q ⊗ m ⊗ q⁻¹（磁测量旋到世界系）→ bx = √(hx²+hy²), bz = hz
+        // 于是参考场与实测场倾角一致，硬铁/软铁造成的倾角畸变不会被误读成姿态误差。
+        const mn = Math.hypot(mag[0], mag[1], mag[2]);
+        const mx = mag[0] / mn, my = mag[1] / mn, mz = mag[2] / mn;
+        const { bx, bz } = magReferenceFromMeasurement(this.q, mag);
+        const f1 = 2 * (x * z - w * y) - ax;
+        const f2 = 2 * (w * x + y * z) - ay;
+        const f3 = 2 * (0.5 - x * x - y * y) - az;
+        const f4 = 2 * bx * (0.5 - y * y - z * z) + 2 * bz * (x * z - w * y) - mx;
+        const f5 = 2 * bx * (x * y - w * z) + 2 * bz * (w * x + y * z) - my;
+        const f6 = 2 * bx * (w * y + x * z) + 2 * bz * (0.5 - x * x - y * y) - mz;
+        residual = Math.hypot(f1, f2, f3);
+        magResidual = Math.hypot(f4, f5, f6);
+        // 梯度 Jᵀf （J 为 6×4，公式与 Madgwick 参考实现 AHRS.c 的 MARG 分支一致）
+        const s0 = -2 * y * f1 + 2 * x * f2
+          - 2 * bz * y * f4 + (-2 * bx * z + 2 * bz * x) * f5 + 2 * bx * y * f6;
+        const s1 = 2 * z * f1 + 2 * w * f2 - 4 * x * f3
+          + 2 * bz * z * f4 + (2 * bx * y + 2 * bz * w) * f5 + (2 * bx * z - 4 * bz * x) * f6;
+        const s2 = -2 * w * f1 + 2 * z * f2 - 4 * y * f3
+          + (-4 * bx * y - 2 * bz * w) * f4 + (2 * bx * x + 2 * bz * z) * f5 + (2 * bx * w - 4 * bz * y) * f6;
+        const s3 = 2 * x * f1 + 2 * y * f2
+          + (-4 * bx * z + 2 * bz * x) * f4 + (-2 * bx * w + 2 * bz * y) * f5 + 2 * bx * x * f6;
+        const sNorm = Math.hypot(s0, s1, s2, s3);
+        if (sNorm > 1e-9) {
+          dw -= (betaEff * s0) / sNorm;
+          dx -= (betaEff * s1) / sNorm;
+          dy -= (betaEff * s2) / sNorm;
+          dz -= (betaEff * s3) / sNorm;
+        }
+      } else {
+        // ---- IMU 版（或简化 MARG）：只用重力梯度 ----
+        const f1 = 2 * (x * z - w * y) - ax;
+        const f2 = 2 * (w * x + y * z) - ay;
+        const f3 = 2 * (0.5 - x * x - y * y) - az;
+        residual = Math.hypot(f1, f2, f3);
+        let s0 = -2 * y * f1 + 2 * x * f2;
+        let s1 = 2 * z * f1 + 2 * w * f2 - 4 * x * f3;
+        let s2 = -2 * w * f1 + 2 * z * f2 - 4 * y * f3;
+        let s3 = 2 * x * f1 + 2 * y * f2;
+        // 简化 MARG：磁场只约束偏航——构造「绕机体系 z 轴」的梯度方向分量，
+        // 与重力梯度**并列**参与同一次归一化（而不是独立的 dt 缩放步）：
+        // 绕 z 转 δ 的下降方向是 ½·q⊗(0,0,δ)，对 (dw,dx,dy,dz) 的贡献与陀螺微分项同构。
+        // δ 取偏航最短角差 yawErr（已是角度而非角速度），与重力残差无量纲化后等权竞争。
+        if (magOk) {
+          const eu = qToEuler({ w, x, y, z });
+          const yawMag = tiltCompensatedYaw(eu.roll, eu.pitch, mag[0], mag[1], mag[2]);
+          yawMagDeg = yawMag * (180 / Math.PI);
+          let yawErr = yawMag - eu.yaw;
+          while (yawErr > Math.PI) yawErr -= 2 * Math.PI;
+          while (yawErr < -Math.PI) yawErr += 2 * Math.PI;
+          const dir = yawErr > 0 ? 1 : -1;
+          const magS = 0.5 * Math.min(1, Math.abs(yawErr)); // 修正强度随误差饱和（避免过冲）
+          dw += dir * magS * (-z);
+          dx += dir * magS * (y);
+          dy += dir * magS * (-x);
+          dz += dir * magS * (w);
+        }
+        const sNorm = Math.hypot(s0, s1, s2, s3);
+        if (sNorm > 1e-9) {
+          s0 /= sNorm; s1 /= sNorm; s2 /= sNorm; s3 /= sNorm;
+          dw -= betaEff * s0;
+          dx -= betaEff * s1;
+          dy -= betaEff * s2;
+          dz -= betaEff * s3;
+        }
       }
     }
     this.q = qNorm({ w: w + dw * dt, x: x + dx * dt, y: y + dy * dt, z: z + dz * dt });
@@ -473,13 +691,21 @@ export class MadgwickEstimator implements Estimator {
         residual,
         stepNorm: Math.hypot(dx, dy, dz) * dt,
         alignErrorDeg: alignDeg,
-        ...(magOk ? { yawMagDeg, magEnabled: 1 } : { magEnabled: 0 }),
+        gateMode: this.gate.mode(wouldReject),
+        rejectRatio: this.gate.ratio,
+        magResidual,
+        ...(magOk && this.magMode === "full"
+          ? { magModeFull: 1, magEnabled: 1 }
+          : magOk
+            ? { yawMagDeg, magEnabled: 1 }
+            : { magEnabled: 0 }),
       },
     };
   }
   reset(initial?: Quat): void {
     this.q = initial ? { ...initial } : qId();
     this.age = 0;
+    this.gate.reset();
     this.telemetry = emptyTelemetry(); // 与其它估计器一致：重置后不残留上一轮读数
   }
   getParams(): Record<string, number> {

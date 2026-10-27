@@ -117,13 +117,28 @@ export interface Euler {
  * 等价于绕固定轴先横滚、再俯仰、后偏航）。
  * pitch 用 atan2 双参数形式而非 asin：在 ±90°（万向节锁）附近数值更稳——
  * asin 在 |参数|→1 处导数发散，atan2 两侧始终良态（Wikipedia 收录的稳定公式）。
+ *
+ * **万向节锁特判（±90°）**：俯仰恰为 ±90° 时，roll 与 yaw 的两个 atan2 分母
+ * 同时为 0，直接按公式取值会返回**任意**角度——实测三元组甚至不与原四元数等价
+ * （真值横滚 30° 时重建偏差达 60°）。这不是精度问题，而是欧拉参数化本身在那一点
+ * 丢了一个自由度。这里按通行约定退化：roll := 0，把信息全部归入 yaw。
+ * 于是「横滚读数」在锁点恒为 0——**这正是万向节锁的含义**，不是 bug
+ * （见文档「万向节锁的算法后果」）。
  */
 export function qToEuler(q: Quat): Euler {
-  const d = Math.max(-0.5, Math.min(0.5, q.w * q.y - q.z * q.x)); // ½·sin(pitch)
+  const { w, x, y, z } = q;
+  const sinPitch = Math.max(-1, Math.min(1, 2 * (w * y - z * x)));
+  if (Math.abs(sinPitch) >= 1 - 1e-12) {
+    // 锁点：pitch = ±90°，roll 约定为 0，yaw 吸收全部旋转
+    const pitch = sinPitch > 0 ? Math.PI / 2 : -Math.PI / 2;
+    const yaw = sinPitch > 0 ? 2 * Math.atan2(-x, y) : 2 * Math.atan2(x, -y);
+    return { roll: 0, pitch, yaw };
+  }
+  const d = Math.max(-0.5, Math.min(0.5, w * y - z * x)); // ½·sin(pitch)
   return {
-    roll: Math.atan2(2 * (q.w * q.x + q.y * q.z), 1 - 2 * (q.x * q.x + q.y * q.y)),
+    roll: Math.atan2(2 * (w * x + y * z), 1 - 2 * (x * x + y * y)),
     pitch: 2 * Math.atan2(Math.sqrt(1 + 2 * d), Math.sqrt(1 - 2 * d)) - Math.PI / 2,
-    yaw: Math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z)),
+    yaw: Math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z)),
   };
 }
 
@@ -256,4 +271,54 @@ export function qToMatrix(q: Quat): number[] {
     2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x),
     2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y),
   ];
+}
+
+/**
+ * 3×3 实对称矩阵的特征分解（Jacobi 旋转，纯函数，可在 Node 自检）。
+ * 用途：把卡尔曼的 3×3 姿态协方差块画成「不确定度椭球」——
+ * 特征向量给椭球的主轴方向，特征值给各方向的方差（→ 半轴长度）。
+ * 对称矩阵用 Jacobi 足够：3×3 只需几次扫描，且数值稳定、无需分支特判。
+ * 返回 { values, vectors }，vectors 按列存主轴（行主序展平）。
+ */
+export function symmetricEigen3(m: number[]): { values: number[]; vectors: number[] } {
+  // 复制成可写的对称矩阵；先把上下三角平均一下（数值上保证严格对称）
+  const a = new Array<number>(9);
+  for (let i = 0; i < 3; i++) {
+    for (let j = 0; j < 3; j++) a[i * 3 + j] = (m[i * 3 + j] + m[j * 3 + i]) / 2;
+  }
+  const v = [1, 0, 0, 0, 1, 0, 0, 0, 1];
+  for (let sweep = 0; sweep < 12; sweep++) {
+    let off = 0;
+    for (const [p, q] of [[0, 1], [0, 2], [1, 2]] as const) {
+      off += a[p * 3 + q] * a[p * 3 + q];
+      const apq = a[p * 3 + q];
+      if (Math.abs(apq) < 1e-18) continue;
+      const theta = (a[q * 3 + q] - a[p * 3 + p]) / (2 * apq);
+      const t = Math.sign(theta || 1) / (Math.abs(theta) + Math.sqrt(theta * theta + 1));
+      const c = 1 / Math.sqrt(t * t + 1);
+      const s = t * c;
+      // 旋转 A ← JᵀAJ（只更新受影响的四个元素）
+      const app = a[p * 3 + p], aqq = a[q * 3 + q];
+      a[p * 3 + p] = app - t * apq;
+      a[q * 3 + q] = aqq + t * apq;
+      a[p * 3 + q] = 0;
+      a[q * 3 + p] = 0;
+      for (let k = 0; k < 3; k++) {
+        if (k === p || k === q) continue;
+        const akp = a[k * 3 + p], akq = a[k * 3 + q];
+        a[k * 3 + p] = c * akp - s * akq;
+        a[p * 3 + k] = a[k * 3 + p];
+        a[k * 3 + q] = s * akp + c * akq;
+        a[q * 3 + k] = a[k * 3 + q];
+      }
+      // 累积特征向量 V ← VJ
+      for (let k = 0; k < 3; k++) {
+        const vkp = v[k * 3 + p], vkq = v[k * 3 + q];
+        v[k * 3 + p] = c * vkp - s * vkq;
+        v[k * 3 + q] = s * vkp + c * vkq;
+      }
+    }
+    if (off < 1e-24) break;
+  }
+  return { values: [a[0], a[4], a[8]], vectors: v };
 }

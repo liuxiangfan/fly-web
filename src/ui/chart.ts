@@ -38,6 +38,14 @@ export class RollingChart {
     this.render();
   }
 
+  /** 运行时换色（色觉友好配色切换用）：只改系列颜色并重绘，不动数据 */
+  setSeriesColors(colors: (string | undefined)[]): void {
+    colors.forEach((c, i) => {
+      if (c && this.series[i]) this.series[i].color = c;
+    });
+    this.render();
+  }
+
   clear(): void {
     this.count = 0;
     this.head = 0;

@@ -11,6 +11,14 @@ export interface ImuParams {
   gyroNoiseDps: number;
   /** 陀螺零偏随机游走 σ（°/s/√s）——由 World 持有游走状态并每步注入；0 = 关闭（不消耗随机数） */
   gyroWalkDps: number;
+  /** 陀螺满量程（°/s）：读数被削平在 ±量程。0 = 关闭（不截断）。
+   *  真实器件在剧烈机动/碰撞时会饱和，积分器拿到一串恒定最大速率 → 姿态大幅跑偏。 */
+  gyroRangeDps: number;
+  /** 陀螺刻度因子误差（0..0.05）：各轴增益失配（确定性、三轴符号固定）。
+   *  速率相关的姿态误差——**零偏估计吸收不了它**（它随 ω 变号，不是常数偏置）。 */
+  gyroScaleErr: number;
+  /** 陀螺三轴非正交/安装失准（0..0.05）：各轴混入另外两轴的比例项 */
+  gyroMisalign: number;
   /** 加计白噪声 σ（m/s²） */
   accelNoise: number;
   /** 加计交叉轴敏感度（0..0.1）：每轴混入另外两轴各 k·a 的读数（MPU-9250 规格 ±2%）。0 = 关闭 */
@@ -29,6 +37,10 @@ export interface ImuParams {
   hardIron: number;
   /** 交变磁干扰强度 0..1（叠加在 x/y 分量的低频正弦，模拟电机通电磁场） */
   disturbMag: number;
+  /** 传感器群延迟（ms，0..30）：整帧采样延后交给算法。
+   *  真实 MEMS 的传输 + 抗混叠滤波会带来群延迟；机动中它让姿态**滞后** ω·τ，
+   *  在控制回路里吃掉相位裕度（增益加到某个值就振）。0 = 关闭 */
+  sensorDelayMs: number;
 }
 
 export interface ImuSample {
@@ -91,6 +103,29 @@ export function simulateImu(
     omegaTrue[1] + biasRad[1] + gauss.next() * p.gyroNoiseDps / 57.29578,
     omegaTrue[2] + biasRad[2] + gauss.next() * p.gyroNoiseDps / 57.29578,
   ];
+
+  // 刻度因子误差 + 三轴非正交（安装失准）：作用于**真实角速度**，再叠加零偏与噪声。
+  // 确定性矩阵（不适配随机数），各轴符号固定以便复现。这两项都是**速率相关**误差，
+  // 与零偏（常数项）性质不同：6 维 ESKF 的零偏状态吸收不了它们。
+  if (p.gyroScaleErr > 0 || p.gyroMisalign > 0) {
+    const s = p.gyroScaleErr;
+    const m = p.gyroMisalign;
+    const M = [
+      [1 + s, m * 0.6, -m * 0.4],
+      [-m * 0.5, 1 - s * 0.6, m * 0.3],
+      [m * 0.7, -m * 0.3, 1 + s * 0.3],
+    ];
+    const w0 = omegaTrue[0], w1 = omegaTrue[1], w2 = omegaTrue[2];
+    for (let i = 0; i < 3; i++) {
+      gyro[i] += M[i][0] * w0 + M[i][1] * w1 + M[i][2] * w2 - omegaTrue[i];
+    }
+  }
+  // 满量程饱和：读数在 ±range 处被削平（真实器件输出即如此），
+  // 积分器拿到一串「恒定最大速率」→ 姿态落后于真实机动且无法察觉
+  if (p.gyroRangeDps > 0) {
+    const lim = p.gyroRangeDps / 57.29578;
+    for (let i = 0; i < 3; i++) gyro[i] = Math.max(-lim, Math.min(lim, gyro[i]));
+  }
 
   // 加计确定性部分：重力投影 + 机动线加速度 + 振动
   const accelBase: V3 = [

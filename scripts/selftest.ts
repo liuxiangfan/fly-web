@@ -101,8 +101,8 @@ function runStatic(
 }
 
 // 磁参数全零：守护既有噪声序列不变（磁采样不消耗随机数）
-const clean: ImuParams = { gyroBiasDps: 0, gyroNoiseDps: 0, gyroWalkDps: 0, accelNoise: 0, accelCrossAxis: 0, accelNonlin: 0, linAccel: 0, vibration: 0, magNoise: 0, magQuantUts: 0, hardIron: 0, disturbMag: 0 };
-const dirty: ImuParams = { gyroBiasDps: 1, gyroNoiseDps: 0.2, gyroWalkDps: 0, accelNoise: 0.15, accelCrossAxis: 0, accelNonlin: 0, linAccel: 0.5, vibration: 0.3, magNoise: 0, magQuantUts: 0, hardIron: 0, disturbMag: 0 };
+const clean: ImuParams = { gyroBiasDps: 0, gyroNoiseDps: 0, gyroWalkDps: 0, gyroRangeDps: 0, sensorDelayMs: 0,  gyroScaleErr: 0, gyroMisalign: 0,  accelNoise: 0, accelCrossAxis: 0, accelNonlin: 0, linAccel: 0, vibration: 0, magNoise: 0, magQuantUts: 0, hardIron: 0, disturbMag: 0 };
+const dirty: ImuParams = { gyroBiasDps: 1, gyroNoiseDps: 0.2, gyroWalkDps: 0, gyroRangeDps: 0, sensorDelayMs: 0,  gyroScaleErr: 0, gyroMisalign: 0,  accelNoise: 0.15, accelCrossAxis: 0, accelNonlin: 0, linAccel: 0.5, vibration: 0.3, magNoise: 0, magQuantUts: 0, hardIron: 0, disturbMag: 0 };
 
 // 1. 欧拉角 ↔ 四元数 往返
 {
@@ -1179,6 +1179,173 @@ const dirty: ImuParams = { gyroBiasDps: 1, gyroNoiseDps: 0.2, gyroWalkDps: 0, ac
     "实验库数据完整性",
     bad === 0 && EXPERIMENTS.length >= 8,
     `${EXPERIMENTS.length} 个实验（${EXPERIMENTS.map((e) => e.name).join("/")}），id 唯一且字段齐全=${bad === 0}`,
+  );
+}
+
+// 43. 万向节锁的算法后果（本轮新增，全装置最锋利的一条教学剧本）：
+//     俯仰**精确**停在 90° 再让横滚移动。此姿态下重力沿机体 x 轴，
+//     加速度计对横滚**完全失去信息**（任何横滚给出同一读数），于是：
+//       · 互补滤波工作在欧拉角空间——它每帧用 (加计横滚, 加计俯仰, 陀螺偏航)
+//         重建姿态，而这三个数在锁点已不能唯一确定姿态（加计的横滚/俯仰提取退化为
+//         与真值无关的垃圾值），估计被主动拽飞；
+//       · 四元数空间的 Mahony / Madgwick 算的是「实测重力 × 预测重力」的叉积误差，
+//         锁点上该误差为零 → 它们只是**停止修正**，靠（正确的）陀螺积分继续走，
+//         降级优雅。
+//     这就是「姿态解算为什么用四元数而不用欧拉角」的当场可复现证据。
+{
+  const run = (p: ImuParams) => {
+    const world = new World(scenarios.pitchHold);
+    const comp = new ComplementaryEstimator();
+    const mahony = new MahonyEstimator();
+    const madg = new MadgwickEstimator();
+    for (const e of [comp, mahony, madg]) {
+      e.reset();
+      e.rampEnabled = false;
+    }
+    let pc = 0, pm = 0, pg = 0;
+    let pitchHit = 0;
+    for (let i = 0; i < Math.round(13 / H); i++) {
+      const s = world.step(H, p);
+      comp.update(s.gyro, s.accel, s.mag, H);
+      mahony.update(s.gyro, s.accel, s.mag, H);
+      madg.update(s.gyro, s.accel, s.mag, H);
+      if (i * H > 3.5) {
+        pc = Math.max(pc, qAngleBetween(comp.q, world.q) * DEG);
+        pm = Math.max(pm, qAngleBetween(mahony.q, world.q) * DEG);
+        pg = Math.max(pg, qAngleBetween(madg.q, world.q) * DEG);
+      }
+      // 俯仰确实到过 90°（否则本测试什么都没测到）
+      pitchHit = Math.max(pitchHit, Math.abs(qToEuler(world.q).pitch) * DEG);
+    }
+    return { pc, pm, pg, pitchHit };
+  };
+  const r = run(clean);
+  check(
+    "万向节锁：互补滤波崩坏、四元数算法无伤",
+    r.pitchHit > 89.99 && r.pc > 90 && r.pm < 1 && r.pg < 1,
+    `俯仰停驻 90°（实测峰值 ${r.pitchHit.toFixed(2)}°）+ 横滚移动：互补 ${r.pc.toFixed(1)}° ` +
+      `vs Mahony ${r.pm.toFixed(2)}° / Madgwick ${r.pg.toFixed(2)}°（须 互补>90°、四元数<1°）`,
+  );
+  // 有零偏时四元数算法也会漂（锁点上没有观测能拉住它），但量级远小于互补
+  const biased = run({ ...clean, gyroBiasDps: 1 });
+  check(
+    "万向节锁：零偏 1°/s 下四元数算法仍远优于互补",
+    biased.pm < 15 && biased.pg < 15 && biased.pc > 60,
+    `零偏 1°/s：互补 ${biased.pc.toFixed(1)}° vs Mahony ${biased.pm.toFixed(1)}° / Madgwick ${biased.pg.toFixed(1)}°`,
+  );
+}
+
+// 44. qToEuler 的万向节锁约定：±90° 处不再返回任意角度
+//     （修复前实测：真值横滚 30° 时重建姿态偏差达 60°——三元组甚至不与原四元数等价）
+{
+  let worst = 0;
+  for (const pitch of [-90, -89.99, -45, 0, 45, 89.99, 90]) {
+    for (const roll of [-90, -45, 0, 30, 45, 90]) {
+      for (const yaw of [-180, -90, 0, 90, 180]) {
+        const q = qFromEuler(roll * RAD, pitch * RAD, yaw * RAD);
+        const e = qToEuler(q);
+        const back = qFromEuler(e.roll, e.pitch, e.yaw);
+        worst = Math.max(worst, qAngleBetween(back, q) * DEG);
+      }
+    }
+  }
+  const lockEuler = qToEuler(qFromEuler(45 * RAD, 90 * RAD, 0));
+  check(
+    "qToEuler 万向节锁约定（roll := 0，信息归入 yaw）",
+    worst < 1e-8 && Math.abs(lockEuler.roll) < 1e-12 && Math.abs(lockEuler.yaw + 45 * RAD) < 1e-9,
+    `210 组姿态往返最大偏差 ${worst.toExponential(2)}°；俯仰 90°+横滚 45° → 读数 (0°, 90°, ${(lockEuler.yaw * DEG).toFixed(2)}°)`,
+  );
+}
+
+// 45. 完整 MARG（磁倾角补偿参考场）vs 简化 MARG（磁只约束偏航）
+//     两者在干净磁场下等价；收益在磁场被交变干扰污染时显现——
+//     完整版用整条磁场向量做误差，且参考场由测量本身构造（倾角自洽），
+//     简化版从脏数据里解一个倾斜补偿航向，被干扰牵着走。
+{
+  const runMarg = (mode: "yaw" | "full", p: ImuParams) => {
+    const world = new World(scenarios.composite);
+    const e = new MahonyEstimator();
+    e.magEnabled = true;
+    e.magMode = mode;
+    e.rampEnabled = false;
+    e.reset();
+    let sum = 0, n = 0, peak = 0;
+    for (let i = 0; i < Math.round(16 / H); i++) {
+      const s = world.step(H, p);
+      e.update(s.gyro, s.accel, s.mag, H);
+      if (i * H > 5) {
+        const err = qAngleBetween(e.q, world.q) * DEG;
+        sum += err;
+        peak = Math.max(peak, err);
+        n++;
+      }
+    }
+    return { mean: sum / n, peak };
+  };
+  const cleanYaw = runMarg("yaw", clean);
+  const cleanFull = runMarg("full", clean);
+  const disturbYaw = runMarg("yaw", { ...clean, disturbMag: 0.5 });
+  const disturbFull = runMarg("full", { ...clean, disturbMag: 0.5 });
+  check(
+    "完整 MARG vs 简化 MARG:干净磁场等价、交变干扰下显著更优",
+    cleanYaw.mean < 0.2 && cleanFull.mean < 0.2 &&
+      disturbFull.mean < disturbYaw.mean / 3 && disturbFull.peak < disturbYaw.peak / 5,
+    `干净：简化 ${cleanYaw.mean.toFixed(2)}° ≈ 完整 ${cleanFull.mean.toFixed(2)}°；` +
+      `交变干扰 0.5：简化 ${disturbYaw.mean.toFixed(2)}°（峰值 ${disturbYaw.peak.toFixed(1)}°）→ 完整 ${disturbFull.mean.toFixed(2)}°（峰值 ${disturbFull.peak.toFixed(1)}°）`,
+  );
+}
+
+// 46. 观测门控的滞回恢复窗：拒绝太久自动放行（Fusion 同款机制，默认关闭）
+//     同一段「持续侧向 4 m/s²」：恢复窗关 → 观测被拒到底、估计钉在真值；
+//     恢复窗开 → 5 s 后判定「可能是我自己偏了」放行观测 → 姿态被污染拉走。
+//     这个对照本身就是工程取舍：门控不是万能的。
+{
+  const qTrue = qFromEuler(15 * RAD, 25 * RAD, 40 * RAD);
+  const gBody = qRotInv(qTrue, [0, 0, G_ACC]);
+  const accelDisturbed: V3 = [gBody[0] + 4.0, gBody[1], gBody[2]];
+  const run = (recovery: boolean) => {
+    const c = new ComplementaryEstimator();
+    c.alpha = 2;
+    c.rampEnabled = false;
+    c.gateRecovery = recovery;
+    c.reset(qTrue);
+    let peak = 0;
+    for (let i = 0; i < Math.round(30 / H); i++) {
+      c.update([0, 0, 0], accelDisturbed, [0, 0, 0], H);
+      peak = Math.max(peak, qAngleBetween(c.q, qTrue) * DEG);
+    }
+    return peak;
+  };
+  const off = run(false);
+  const on = run(true);
+  check(
+    "门控滞回恢复窗（默认关，开则放弃拒绝）",
+    off < 0.5 && on > 15,
+    `持续侧向 4 m/s² 30s：恢复窗关 ${off.toFixed(2)}°（拒绝到底）｜ 开 ${on.toFixed(2)}°（被污染拉走）`,
+  );
+}
+
+// 47. 方向门控阈值可调（面板滑块）：同一个 22° 污染的观测，
+//     阈值 20° 时被拒（估计不动）、放宽到 30° 时穿堂而过。
+{
+  const qTrue = qFromEuler(15 * RAD, 25 * RAD, 40 * RAD);
+  const gBody = qRotInv(qTrue, [0, 0, G_ACC]);
+  const accelDisturbed: V3 = [gBody[0] + 4.0, gBody[1], gBody[2]];
+  const run = (gateDeg: number) => {
+    const c = new ComplementaryEstimator();
+    c.alpha = 2;
+    c.rampEnabled = false;
+    c.gateDeg = gateDeg;
+    c.reset(qTrue);
+    for (let i = 0; i < Math.round(10 / H); i++) c.update([0, 0, 0], accelDisturbed, [0, 0, 0], H);
+    return qAngleBetween(c.q, qTrue) * DEG;
+  };
+  const t20 = run(20);
+  const t30 = run(30);
+  check(
+    "方向门控阈值可调（20° 拒收 / 30° 放行）",
+    t20 < 0.5 && t30 > 15,
+    `污染方向偏 22°：门限 20° → ${t20.toFixed(2)}°（拒收）；门限 30° → ${t30.toFixed(2)}°（放行、被拽偏）`,
   );
 }
 

@@ -28,6 +28,7 @@
       <button id="btn-reset" class="btn">重置</button>
       <button id="btn-share" class="btn" title="把当前面板状态编码进链接复制">分享</button>
       <button id="btn-export" class="btn" title="导出本轮姿态记录为 CSV（含算法参数头部）">导出 CSV</button>
+      <label class="csv-quat-toggle" title="额外导出每个算法的四元数分量（qw/qx/qy/qz）——四元数无法从欧拉角可靠反算，尤其在万向节锁附近"><input type="checkbox" id="csv-quat" /> <span>含 q</span></label>
       <button id="btn-docs" class="btn" title="文档（Esc 关闭）">文档</button>
     </div>
   </header>
@@ -101,6 +102,8 @@
             <option value="pitch">俯仰摆动</option>
             <option value="composite">复合机动</option>
             <option value="violent">剧烈机动</option>
+            <option value="pitchHold">万向节锁·停驻 90°</option>
+            <option value="pitchSweep">穿越万向节锁 ±90°</option>
           </select>
         </div>
         <div id="manual-group" class="sub-group hidden">
@@ -199,6 +202,40 @@
           </div>
           <p class="hint">进阶器件误差（数据手册规格，MPU-9250：交叉轴 ±2%、非线性 ±0.5%；确定性建模，不影响噪声序列）。</p>
         </div>
+        <div class="sub-group">
+          <div class="row">
+            <label for="imu-gyro-range">陀螺仪量程</label>
+            <select id="imu-gyro-range">
+              <option value="0" selected>不截断（理想）</option>
+              <option value="2000">±2000 °/s</option>
+              <option value="1000">±1000 °/s</option>
+              <option value="500">±500 °/s</option>
+              <option value="250">±250 °/s</option>
+              <option value="150">±150 °/s</option>
+              <option value="100">±100 °/s</option>
+              <option value="60">±60 °/s</option>
+            </select>
+          </div>
+          <div class="slider-row with-inputs">
+            <label>陀螺刻度误差</label>
+            <input type="range" id="imu-gyro-scale" min="0" max="5" step="0.1" value="0" />
+            <input type="number" class="num-input" data-num="imu-gyro-scale" step="any" />
+            <input type="number" class="step-input" data-step="imu-gyro-scale" min="0.005" max="2.5" title="滑杆步距" />
+          </div>
+          <div class="slider-row with-inputs">
+            <label>陀螺安装失准</label>
+            <input type="range" id="imu-gyro-misalign" min="0" max="5" step="0.1" value="0" />
+            <input type="number" class="num-input" data-num="imu-gyro-misalign" step="any" />
+            <input type="number" class="step-input" data-step="imu-gyro-misalign" min="0.005" max="2.5" title="滑杆步距" />
+          </div>
+          <div class="slider-row with-inputs">
+            <label>传感器群延迟</label>
+            <input type="range" id="imu-delay" min="0" max="30" step="1" value="0" />
+            <input type="number" class="num-input" data-num="imu-delay" step="any" />
+            <input type="number" class="step-input" data-step="imu-delay" min="0.5" max="15" title="滑杆步距" />
+          </div>
+          <p class="hint">器件级非理想：<b>量程饱和</b>把读数削平在 ±量程（剧烈机动时姿态大幅跑偏，曲线看不出「我削顶了」）；<b>刻度误差 / 安装失准</b>是速率相关误差——卡尔曼的零偏状态吸收不了它（零偏是常数项，它是 ω 的函数）；<b>群延迟</b>让算法拿到过时的数据，姿态滞后约 ω·τ，在控制回路里表现为相位裕度被吃掉。</p>
+        </div>
         <div class="slider-row with-inputs">
           <label>机动线加速度</label>
           <input type="range" id="imu-lin-accel" min="0" max="5" step="0.1" value="1" />
@@ -267,11 +304,43 @@
       <section class="panel-section section-algo" data-section="algo" id="sec-algo">
         <h2 class="panel-head"><button type="button" class="panel-toggle" aria-expanded="true" aria-controls="body-algo"><span class="ph-title">解算算法</span><span class="ph-summary" id="sum-algo"></span><span class="ph-chev" aria-hidden="true"></span></button></h2>
         <div class="panel-body" id="body-algo">
+        <div class="row">
+          <label for="solve-rate">解算频率</label>
+          <select id="solve-rate">
+            <option value="500" selected>500 Hz（仿真原生）</option>
+            <option value="250">250 Hz</option>
+            <option value="125">125 Hz</option>
+            <option value="100">100 Hz</option>
+            <option value="50">50 Hz</option>
+          </select>
+        </div>
         <div class="row check-row mag-row">
           <label><input type="checkbox" id="mag-enable" checked /> 启用磁力计（MARG，约束偏航）</label>
         </div>
+        <div class="row">
+          <label for="mag-mode">磁修正形态</label>
+          <select id="mag-mode">
+            <option value="yaw" selected>简化：磁只约束偏航</option>
+            <option value="full">完整 MARG：磁倾角补偿</option>
+          </select>
+        </div>
         <div class="row check-row">
-          <label><input type="checkbox" id="gate-toggle" checked /> 加速度计观测门控（幅度 35% + 方向 20°）</label>
+          <label><input type="checkbox" id="gate-toggle" checked /> 加速度计观测门控</label>
+        </div>
+        <div class="slider-row with-inputs">
+          <label>方向阈值</label>
+          <input type="range" id="gate-deg" min="5" max="45" step="1" value="20" />
+          <input type="number" class="num-input" data-num="gate-deg" step="any" />
+          <input type="number" class="step-input" data-step="gate-deg" min="0.5" max="45" title="滑杆步距" />
+        </div>
+        <div class="slider-row with-inputs">
+          <label>幅度阈值</label>
+          <input type="range" id="gate-mag" min="10" max="80" step="5" value="35" />
+          <input type="number" class="num-input" data-num="gate-mag" step="any" />
+          <input type="number" class="step-input" data-step="gate-mag" min="1" max="40" title="滑杆步距" />
+        </div>
+        <div class="row check-row">
+          <label><input type="checkbox" id="gate-recovery" /> 拒绝过久自动恢复（滞回，默认关）</label>
         </div>
         <div class="slider-row with-inputs">
           <label>Mahony Kp</label>
@@ -322,7 +391,7 @@
       </section>
 
       <section class="panel-section section-secondary section-view collapsed" data-section="view" id="sec-view">
-        <h2 class="panel-head"><button type="button" class="panel-toggle" aria-expanded="false" aria-controls="body-view"><span class="ph-title">3D 显示</span><span class="ph-summary" id="sum-view"></span><span class="ph-chev" aria-hidden="true"></span></button></h2>
+        <h2 class="panel-head"><button type="button" class="panel-toggle" aria-expanded="false" aria-controls="body-view"><span class="ph-title">显示与配色</span><span class="ph-summary" id="sum-view"></span><span class="ph-chev" aria-hidden="true"></span></button></h2>
         <div class="panel-body" id="body-view">
         <div class="row">
           <label for="source-select">模型姿态来源</label>
@@ -348,6 +417,10 @@
         <div class="row check-row">
           <label><input type="checkbox" id="telemetry-toggle" /> 显示算法内部量（玻璃盒）</label>
         </div>
+        <div class="row check-row">
+          <label><input type="checkbox" id="palette-toggle" /> 色觉友好配色（红/绿换成 Okabe–Ito 色板）</label>
+        </div>
+        <p class="hint">曲线常同时在场 6–12 条，默认色里的「纯积分红 × Madgwick 绿」正是红色盲的典型混淆对。勾上后换成色觉研究通用的 Okabe–Ito 色板（朱红/黄/蓝/蓝绿/品红紫），色相与明度双重区分，深色底上也够亮。</p>
       </div>
       </section>
 
@@ -425,8 +498,8 @@
             <span class="ptr-label">累计旋转</span>
             <span class="mono" id="proj-turn">已左乘 0 次 · 累计 0° · q = +1（单位姿态）</span>
           </div>
-          <canvas id="proj-section" width="520" height="120" role="img" aria-label="S³ 剖面（w–i 平面）：q 与 −q 在 4D 超球截面上的实时位置" title="S³ 剖面（w–i 平面）：q 与 −q 在 4D 超球截面上的实时位置"></canvas>
-          <p class="hint">S³ 剖面（w–i 平面）＝「抬升」视角：q 真正走在 4D 超球的这个截面上（青点），−q 是它的对径点（品红）。三段式看懂立体投影：<b>① 抬升</b>——本剖面里 q 沿 1→i 的圆弧走；<b>② 旋转</b>——3D 姿态由 q 的「半角」决定；<b>③ 投影</b>——上方球里的青色影子是 q 压进 w=0 的结果。</p>
+          <canvas id="proj-section" width="640" height="320" role="img" aria-label="S³ 剖面：包含 +1 与 q 的大圆平面，青点 q 与品红点 −q 实时位置，标注半角" title="S³ 剖面：包含 +1 与 q 的大圆平面（青点 q、品红点 −q），并实时标注半角 θ"></canvas>
+          <p class="hint">S³ 剖面＝「抬升」视角：这张图是 4D 超球被「+1 与 q 张成的平面」切开的那一刀——横轴恒为实部方向（+1 / −1），纵轴是当前 q 的虚部方向。青点是 q、品红点是它的对径点 −q。三段式看懂立体投影：<b>① 抬升</b>——q 从 +1 出发沿这条圆弧走，<b>弧长就是半角 θ</b>（图上直接标了数值）；<b>② 旋转</b>——真正转过的角度是 2θ，所以 q 绕一圈（θ 到 180°）实际转了 360°；<b>③ 投影</b>——上方球里的青色影子是把 q 压进 w=0 的结果。</p>
           <p class="hint">
             球面 = 4D 超球的赤道（w = 0）；青点 = q（球内，w &gt; 0），品红点 = −q（球外，w &lt; 0，一对倒易点）。
             下方小四轴 = q 的 3D 姿态，与球内青点同步转动。
@@ -519,6 +592,10 @@
         <div class="chart-legend" id="att-legend"></div>
       </div>
       <canvas id="att-canvas" role="img" aria-label="欧拉角三通道时序曲线（真实姿态与五种解算算法）"></canvas>
+      <details class="chart-table">
+        <summary>以表格查看「姿态角」当前读数（画布的等价文本）</summary>
+        <div class="tscroll"><table id="att-table"><tbody></tbody></table></div>
+      </details>
     </div>
 
     <div class="chart-block err" id="block-err">
@@ -532,6 +609,10 @@
         <div class="chart-legend" id="err-legend-b"></div>
       </div>
       <canvas id="err-canvas" role="img" aria-label="各算法姿态总误差时序曲线（A/B 对比时含快照组虚线）"></canvas>
+      <details class="chart-table">
+        <summary>以表格查看「姿态总误差」当前读数（画布的等价文本）</summary>
+        <div class="tscroll"><table id="err-table"><tbody></tbody></table></div>
+      </details>
     </div>
 
     <div class="chart-block imu collapsed" id="block-imu">
@@ -549,6 +630,10 @@
         <div class="chart-legend" id="imu-legend"></div>
       </div>
       <canvas id="imu-canvas" role="img" aria-label="IMU 原始波形：陀螺仪/加速度计/磁力计三轴实测与模拟真值"></canvas>
+      <details class="chart-table">
+        <summary>以表格查看「IMU 原始波形」当前读数（画布的等价文本）</summary>
+        <div class="tscroll"><table id="imu-table"><tbody></tbody></table></div>
+      </details>
     </div>
   </section>
 
@@ -578,6 +663,34 @@
           <span class="mod-name">滤波算法讲解</span>
           <span class="mod-desc">五种算法的直觉与选型</span>
         </button>
+        <button class="module-link" data-doc="labs">
+          <span class="mod-name">实验与练习</span>
+          <span class="mod-desc">学习路径 · 实验索引 · 自测题</span>
+        </button>
+        <button class="module-link" data-doc="guide">
+          <span class="mod-name">硬件与固件</span>
+          <span class="mod-desc">真实 IMU 接入 · 帧协议 · 接线</span>
+        </button>
+        <button class="module-link" data-doc="trouble">
+          <span class="mod-name">排障手册</span>
+          <span class="mod-desc">曲线不对 / 接不上 / 页面异常</span>
+        </button>
+        <button class="module-link" data-doc="glossary">
+          <span class="mod-name">术语与符号索引</span>
+          <span class="mod-desc">全库术语、符号、约定速查</span>
+        </button>
+        <button class="module-link" data-doc="refs">
+          <span class="mod-name">参考文献</span>
+          <span class="mod-desc">出处与延伸阅读（含外链）</span>
+        </button>
+        <button class="module-link" data-doc="about">
+          <span class="mod-name">关于本装置</span>
+          <span class="mod-desc">口径声明 · 变更日志 · 致谢</span>
+        </button>
+        <div class="docs-search">
+          <input type="search" id="docs-search-input" placeholder="搜索全文（Ctrl/⌘ + K）" aria-label="在全部文档中搜索" autocomplete="off" />
+          <div class="docs-search-hits hidden" id="docs-search-hits" role="listbox" aria-label="搜索结果"></div>
+        </div>
         </nav>
 
       <div class="doc-pages">
@@ -754,6 +867,34 @@
           </div>
 
           <div class="ctl">
+            <div class="ctl-name">陀螺仪量程 <span class="ctl-range">不截断 / ±60 – ±2000 °/s</span></div>
+            <p><span class="k k1">是什么</span>器件的满量程档位。真实陀螺仪的输出在 ±量程处被<b>削平</b>（饱和），本装置按同一行为截断读数。</p>
+            <p><span class="k k2">起什么作用</span>制造一类最危险也最隐蔽的误差：读数看起来完全正常（只是变成了「恒定最大速率」），积分器无从察觉，姿态开始大幅跑偏。本装置机动的峰值角速度约 240°/s，所以量程选在 250°/s 以下才会触发。</p>
+            <p><span class="k k3">改了会怎样</span>用「陀螺仪量程饱和」实验：±150°/s 时 Mahony 峰值误差约 22°、纯积分约 48°（自检实测）；切到 IMU 原始波形 → 陀螺仪，看那条被削平的平顶。工程上靠量程告警 + 抬高陀螺噪声（让滤波器少信积分项）应对。</p>
+          </div>
+
+          <div class="ctl">
+            <div class="ctl-name">陀螺刻度误差 <span class="ctl-range">0 – 5 %</span></div>
+            <p><span class="k k1">是什么</span>三轴增益失配：真实角速度被按不同比例放大/缩小（各轴符号固定，确定性建模）。</p>
+            <p><span class="k k2">起什么作用</span>产生<b>速率相关</b>的姿态误差——转得快时误差大、静止时为零。这与零偏（常数项）性质完全不同：卡尔曼的零偏状态、Mahony 的 Ki 积分<b>都吸收不了它</b>，因为它们只能补偿「不随 ω 变号的偏差」。</p>
+            <p><span class="k k3">改了会怎样</span>5% 时纯积分峰值误差约 8°（自检/诊断实测），融合算法只能压住一部分。真实器件靠转台标定或在磁辅助下标定（见参考文献的陀螺标定线索）。</p>
+          </div>
+
+          <div class="ctl">
+            <div class="ctl-name">陀螺安装失准 <span class="ctl-range">0 – 5 %</span></div>
+            <p><span class="k k1">是什么</span>三个敏感轴不完全正交（非正交误差），某一轴的转动会漏进另外两轴的读数。与「交叉轴敏感度」是同一件事在陀螺与加计上的两个版本。</p>
+            <p><span class="k k2">起什么作用</span>同样是速率相关误差，量级通常比刻度误差小但更「斜」——它把纯净的单轴转动污染成三轴混合。</p>
+            <p><span class="k k3">改了会怎样</span>3% 时纯积分峰值误差约 2°。它与刻度误差合起来构成「六位置/转台标定」要解决的问题。</p>
+          </div>
+
+          <div class="ctl">
+            <div class="ctl-name">传感器群延迟 <span class="ctl-range">0 – 30 ms</span></div>
+            <p><span class="k k1">是什么</span>从「物理量发生」到「算法拿到读数」之间的固定时延：传输 + 抗混叠滤波 + 调度。本装置把整帧采样延后指定毫秒数（一阶模型）。</p>
+            <p><span class="k k2">起什么作用</span>让算法用<b>过时</b>的数据积分。机动姿态滞后约 <b>ω·τ</b>：峰值 240°/s × 25 ms ≈ 6°。在闭环里这就是被吃掉的相位裕度——增益加到某个值系统就开始振荡，往往就是它干的。</p>
+            <p><span class="k k3">改了会怎样</span>用「传感器群延迟」实验：把零偏噪声都归零，纯积分那条红线本该是 0，延迟一加整条抬起来，抬升高度就是 ω·τ（自检实测与理论一致）。</p>
+          </div>
+
+          <div class="ctl">
             <div class="ctl-name">硬铁偏移 <span class="ctl-range">0 – 1（≈0 – 8 μT）</span></div>
             <p><span class="k k1">是什么</span>机身金属、扬声器、电流回路在磁力计位置产生的<b>恒定</b>附加磁场。它不让读数抖动，而是把整个「磁球」从原点平移到另一个球心。</p>
             <p><span class="k k2">起什么作用</span>制造 MARG 最典型的系统性错误：水平分量方向恒偏，偏航被拉到一个稳定错误值——而且无论机体怎么转，这个偏移都跟着走。它与「磁干扰强度」（交变）合起来覆盖硬铁/软铁两类工程干扰。</p>
@@ -835,6 +976,34 @@
               经倾斜补偿后专门约束偏航通道。</p>
             <p><span class="k k3">改了会怎样</span>有零偏时（默认 1°/s），关掉它偏航误差持续累积、琥珀色机头箭头慢慢离开罗盘方向；
               勾上后偏航被磁场拉住回正。若同时把「磁干扰强度」拉大，偏航会被拉偏一个稳定误差——磁场被污染了。</p>
+          </div>
+
+          <div class="ctl">
+            <div class="ctl-name">磁修正形态：简化 / 完整 MARG <span class="ctl-range">下拉选择</span></div>
+            <p><span class="k k1">是什么</span>磁场参与修正的两种形态。<b>简化</b>（默认）：只取磁场误差的偏航分量，磁力计只用来钉住航向。<b>完整 MARG</b>：用<b>整条磁场向量</b>做误差，并把磁测量旋到世界系后丢掉水平面的东向分量、归一化成参考场（<span class="mono">b = [0, b<sub>x</sub>, 0, b<sub>z</sub>]</span>）——这是 Madgwick / Mahony 论文里的标准做法，也叫「磁倾角补偿」。</p>
+            <p><span class="k k2">起什么作用</span>参考场由测量本身构造，于是<b>参考场与实测场的倾角天然一致</b>：磁场的倾角信息用来修倾角，而不是把干扰全部塞给偏航。简化版做不到这一点，还额外依赖欧拉角（见「万向节锁的算法后果」）。</p>
+            <p><span class="k k3">改了会怎样</span>干净磁场下两者<b>完全等价</b>（自检实测均值都是 0.06°）——所以默认用更简单的那一种。把「磁干扰强度」拉到 0.5 再对比：简化版偏航均值 8.5°（峰值 20.8°），完整版 1.0°（峰值 1.7°）。硬铁未标定时完整版也更好（2.1° → 1.1°）。</p>
+          </div>
+
+          <div class="ctl">
+            <div class="ctl-name">门控·方向 / 幅度阈值 <span class="ctl-range">5 – 45 ° / 10 – 80 %</span></div>
+            <p><span class="k k1">是什么</span>两个门控的判定阈值：方向阈值是「实测重力与预测重力的夹角」上限，幅度阈值是「‖a‖ 相对 g 的偏离比例」上限。</p>
+            <p><span class="k k2">起什么作用</span>它们决定了「什么算污染」。太松：污染穿堂而过，姿态被拽偏；太紧：正常机动甚至高频振动都会被误判为污染，估计退化成纯积分、失去纠错能力。这是一条 U 形权衡，没有普适最优值。</p>
+            <p><span class="k k3">改了会怎样</span>面对一个方向偏 22° 的持续侧向污染：阈值 20° 时被拒（互补误差 0.00°）；放宽到 30° 就直接放行（误差 24°）。自检里有这一对照。工业库（Fusion）取 10° 方向拒绝 + 5 秒恢复窗，比本装置默认的 20° 更严。</p>
+          </div>
+
+          <div class="ctl">
+            <div class="ctl-name">拒绝过久自动恢复（滞回） <span class="ctl-range">开关，默认关</span></div>
+            <p><span class="k k1">是什么</span>工业库 Fusion 的做法：统计最近 5 秒里被拒绝的帧占比，超过 90% 就判定「可能是我自己（估计）偏了」，开启 1.5 秒恢复窗——期间无条件放行观测，把姿态拉回观测后再交还门控。本装置按同一机制实现，但<b>默认关闭</b>。</p>
+            <p><span class="k k2">起什么作用</span>解决「拒绝太久反而失去纠错能力」的问题：门控的初衷是拒绝污染，但若污染持续存在（传感器装反、器件故障），估计会一直漂而没有任何机制把它拉回来。滞回就是这个「认输重来」的机制。</p>
+            <p><span class="k k3">改了会怎样</span>用「门控滞回的双刃」实验：同一段持续侧向加速度，关 → 30 秒内误差 0.00°（拒绝到底）；开 → 5 秒后恢复窗放行，姿态被污染拉走约 24°。<b>没有绝对更优的那一个</b>——取决于「污染是暂时的还是永久的」，这正是它默认关闭、做成显式开关的原因。</p>
+          </div>
+
+          <div class="ctl">
+            <div class="ctl-name">解算频率 <span class="ctl-range">50 – 500 Hz</span></div>
+            <p><span class="k k1">是什么</span>估计器的更新节拍。仿真本身始终按 500 Hz 定步长推进，这个下拉只决定「算法每 1/f 秒才吃一次数据」（dt 为累积的真实时长）。</p>
+            <p><span class="k k2">起什么作用</span>真实飞控的传感器采样率与姿态环频率常常不同（传感器 1 kHz、姿态环 250 Hz）。降低解算频率有两个后果：每步转过的角度变大（积分近似误差上升）、以及高速机动下的跟踪损失。</p>
+            <p><span class="k k3">改了会怎样</span>用「解算频率」实验（50 Hz + 剧烈机动）：本装置用的是精确指数积分而<b>不是一阶欧拉</b>，所以低频率下仍能跟住大部分机动，误差抬头比教科书里的欧拉积分温和得多。切换频率会自动重置仿真，保证曲线起点一致。</p>
           </div>
 
           <div class="ctl">
@@ -1073,7 +1242,9 @@
               相当于在 S³ 上绕对应轴走 180°。</p>
             <p><span class="k k2">起什么作用</span>「累计旋转」读数把双重覆盖变成可数的事实：按 1 次 = 180°，
               按 2 次（360°）3D 姿态已复原但 q 变号（青品红两点内外互换），按 4 次（720°）才真正回到 +1。
-              下方 S³ 剖面图（w–i 平面）是「抬升」视角：能同时看到 q 与 −q 在超球截面上的对径位置。</p>
+              下方 S³ 剖面图是「抬升」视角：它画的是超球被「+1 与当前 q 张成的平面」切开的那一刀，
+              横轴恒为实部方向、纵轴是 q 的虚部方向，所以任意 q 都落在圆周上；青点 q 与品红点 −q 互为对径点，
+              而 q 从 +1 走过来的<b>弧长就是半角 θ</b>（图上实时标注，物理转角是它的两倍）。</p>
             <p><span class="k k3">改了会怎样</span>面板标题右侧的摘要实时显示累计转角与当前 q（如「累计 180° · q = +i」）；
               图例也会切换成投影模式的说明（q / −q / i-j-k 基向量）。「重置」回单位姿态并清空两条轨迹。</p>
           </div>
@@ -1443,6 +1614,120 @@ R(φ, 90°, ψ) =
           </p>
         </section>
 
+        <section id="m-lock" class="math-section">
+          <h2>万向节锁的算法后果：同一个 90°，两种视角</h2>
+          <div class="doc-hook"><b>开胃问题</b>：俯仰 90° 时，把横滚推 +60° 与把偏航推 −60°，得到的是<b>同一个姿态</b>。这意味着什么？不只是在环架上「两个滑块控制一个自由度」——它意味着加速度计在那一点上<b>对横滚完全没有信息</b>，而任何把姿态拆成欧拉角再拼回去的算法都会当场崩掉。</div>
+          <p>
+            万向节锁在装置里有三张面孔，三张都值得看一遍：<b>机械面</b>（万向节锁视图：环轴重合、丢一个自由度）、
+            <b>代数面</b>（旋转矩阵退化成只含 φ−ψ）、以及<b>算法面</b>（本节的实测曲线）。
+            前两张脸分别是「看得见的」和「算得出的」，最后一张最要紧：它决定了你的滤波器在那一刻输出什么。
+          </p>
+
+          <h3>一、为什么加速度计在 90° 处「看不见」横滚</h3>
+          <p>
+            加速度计测的是重力方向。设真姿态为 <span class="mono">qFromEuler(φ, 90°, 0)</span>，把重力转到机体系：
+          </p>
+          <div class="formula">R = R<sub>z</sub>(0)·R<sub>y</sub>(90°)·R<sub>x</sub>(φ)
+
+　　　<span class="mtx"><i class="ml"></i><span class="mrows" style="--cols:3"><span>0</span><span>sinφ</span><span>cosφ</span><span>0</span><span>cosφ</span><span>−sinφ</span><span>−1</span><span>0</span><span>0</span></span><i class="mr"></i></span>
+
+g<sub>body</sub> = R<sup>T</sup>·(0,0,1) = (cosφ, −sinφ, 0)</div>
+          <p>
+            看起来 φ 还在？但注意：<b>重力落在机体水平面内</b>（z 分量为 0），它的方向完全由 φ 决定——
+            而姿态抽取要用的两个角度是
+            <span class="mono">roll<sub>acc</sub> = atan2(a<sub>y</sub>, a<sub>z</sub>)</span> 与
+            <span class="mono">pitch<sub>acc</sub> = atan2(−a<sub>x</sub>, √(a<sub>y</sub>²+a<sub>z</sub>²))</span>：
+            第二个角度在 z 分量为 0 时只反映「重力有多斜」，而第一个角度……把 (cosφ, −sinφ, 0) 代进去会得到
+            <span class="mono">atan2(−sinφ, 0) = −90°</span>（与 φ 无关！），
+            <span class="mono">atan2(−cosφ, sinφ) = −(90°−φ)</span>。
+            <b>两个角度加起来的信息量仍然只有 1 个自由度</b>——它对应的是「重力在水平面内的朝向」，
+            而在俯仰 90° 的姿态下，机体水平面内的重力朝向是 φ 与 ψ 的<b>组合</b>，拆不开。
+          </p>
+          <p class="plain">
+            一句话：<b>俯仰 90° 时，横滚与偏航在观测里是同一个自由度</b>。这不是数值问题，是物理上的不可观
+            （见「可观性」一节）——任何只用加速度计定倾角的做法，在那一点上都拿不到横滚信息。
+          </p>
+
+          <h3>二、互补滤波为什么会崩：它把「重建」当成了状态</h3>
+          <p>
+            互补滤波工作在<b>欧拉角空间</b>：它每一帧做的事是
+            「用陀螺积分得到 q<sub>gyro</sub> → 从加计取出 (roll<sub>acc</sub>, pitch<sub>acc</sub>) →
+            用 q<sub>gyro</sub> 的偏航拼出目标姿态 q<sub>acc</sub> = qFromEuler(roll<sub>acc</sub>, pitch<sub>acc</sub>, yaw<sub>gyro</sub>) →
+            按 α 向它靠拢」。
+          </p>
+          <p>
+            在锁点上，这个「重建」拿到的三个数<b>不再唯一确定姿态</b>（甚至 roll<sub>acc</sub> 本身就是个与真值无关的 −90°）。
+            于是它不再是在「修正」，而是在<b>主动丢弃</b>陀螺积分出来的正确姿态、换上一个错误的拟合。
+            实测（本装置「万向节锁·停驻 90°」剧本，传感器噪声全部归零）：
+          </p>
+          <div class="tscroll"><table class="docs-table">
+            <thead><tr><th>时间</th><th>真值俯仰</th><th>互补滤波误差</th><th>Mahony</th><th>Madgwick</th></tr></thead>
+            <tbody>
+              <tr><td>t = 4.1 s</td><td>90.000°</td><td>0.00°</td><td>0.01°</td><td>0.02°</td></tr>
+              <tr><td>t = 5.0 s</td><td>90.000°</td><td>9.29°</td><td>0.00°</td><td>0.02°</td></tr>
+              <tr><td>t = 6.0 s</td><td>90.000°</td><td>37.15°</td><td>0.00°</td><td>0.03°</td></tr>
+              <tr><td>t = 7.8 s</td><td>90.000°</td><td>118.58°</td><td>0.00°</td><td>0.03°</td></tr>
+              <tr><td>t = 8.8 s</td><td>90.000°</td><td><b>161.11°</b></td><td>0.00°</td><td>0.03°</td></tr>
+            </tbody>
+          </table></div>
+          <p class="plain">
+            俯仰一旦停在 90°，互补滤波的误差就<b>单调走大</b>（本例到 161°，长跑会到 180°），
+            而两个四元数算法稳定在 0.03° 以内。旁边「穿越 ±90°」剧本是它的暂态版本：慢扫穿过时只出现一个尖峰。
+          </p>
+
+          <h3>三、四元数算法为什么「无伤」：它只是停止修正</h3>
+          <p>
+            Mahony 与 Madgwick 的修正来源都是同一个几何量——实测重力方向与预测重力方向的<b>夹角/叉积</b>：
+          </p>
+          <div class="formula">e = a<sub>实测</sub> × <i class="oh">g</i><sub>预测</sub>　　　　　（Mahony 的比例项来源）
+f = <i class="oh">g</i><sub>预测</sub> − a<sub>实测</sub>，　s = J<sup>T</sup>f　（Madgwick 的梯度来源）</div>
+          <p>
+            锁点上，如果估计是对的，那么 <span class="mono">a<sub>实测</sub> = ĝ<sub>预测</sub></span>——
+            它们的夹角是 0、叉积是 0、残差是 0。于是<b>修正量恰好为零</b>，两个算法只是「不再修正」，
+            继续用它本来就很准的陀螺积分往下走。这不是它们「更聪明」，而是它们<b>没有中间表示可以出错</b>：
+            姿态就是 q 本身，不存在「拆成三个角再拼回来」这一步。
+          </p>
+          <p class="plain">
+            代价也要说清楚：<b>锁点上没有任何观测能拉住它</b>。给陀螺 1°/s 的零偏，Mahony 与 Madgwick 的误差会涨到 7–8°（互补滤波则 116°）——
+            因为那里真的没有可用信息。工程上这叫「退化但优雅」：可用的观测都用上了，不可用的不硬编。
+          </p>
+
+          <h3>四、欧拉角在锁点上的「数值退化」（本装置踩过的坑）</h3>
+          <p>
+            上面说的是<b>物理</b>不可观。还有一层<b>数值</b>问题：把四元数转回欧拉角的标准公式，在 ±90° 处
+            两个 atan2 的分母同时趋近 0，直接代入会返回<b>任意</b>角度。本装置实测（修复前）：
+          </p>
+          <div class="tscroll"><table class="docs-table">
+            <thead><tr><th>真值（俯仰 90°）</th><th>旧实现返回的横滚</th><th>重建回四元数的偏差</th></tr></thead>
+            <tbody>
+              <tr><td>横滚 30°</td><td>90.00°</td><td><b>60.00°</b></td></tr>
+              <tr><td>横滚 45°</td><td>26.57°</td><td>18.43°</td></tr>
+              <tr><td>横滚 60°</td><td>26.57°</td><td>33.43°</td></tr>
+            </tbody>
+          </table></div>
+          <p>
+            注意这不是「精度差一点」：返回的三元组<b>甚至不与原四元数等价</b>（重建偏差 60°）。
+            现行实现按通行约定特判：俯仰恰为 ±90° 时令 <b>roll := 0</b>，把全部旋转归入 yaw——
+            于是重建偏差回到 1e-11 量级（自检「qToEuler 万向节锁约定」守住这条）。
+          </p>
+          <p class="plain">
+            这个约定本身也值得注意：它意味着<b>在锁点上「横滚读数」恒为 0</b>，无论飞机实际滚了多少度。
+            这不是 bug，是欧拉角在那一点丢掉了这个自由度——信息跑到 yaw 里去了。所以任何依赖「横滚读数」做判断的逻辑，
+            在俯仰接近 ±90° 时都必须重新想清楚它到底想读什么。
+          </p>
+
+          <h3>五、结论与工程口径</h3>
+          <ul>
+            <li><b>教学结论</b>：姿态解算用四元数而不是欧拉角，不是因为「更快」，而是因为欧拉参数化有三个奇点，
+              而在奇点附近它的条件数会垮掉——互补滤波这种「在欧拉空间做融合」的结构会被直接击中。</li>
+            <li><b>工程口径</b>：真实飞控里，姿态内环永远用四元数/旋转矩阵；欧拉角只作为
+              <b>人机界面与航迹规划</b>的输出，而且要在俯仰接近 ±90° 时做保护（限幅、切换表示、或干脆不显示横滚）。</li>
+            <li><b>顺带一提</b>：这也是为什么「四元数插值」必须用 Slerp——如果在欧拉空间插值，穿过 ±90° 时同样会翻车
+              （见「Slerp」一节与四元数视图里的品红弧）。</li>
+          </ul>
+          <p class="hint">想看现场：右侧「实验库」→「万向节锁的算法后果」（噪声已归零、便于看清现象），或直接把机动模式切到「万向节锁·停驻 90°」。切换显示源到「互补滤波」，看它如何被拖走。</p>
+        </section>
+
         <section id="m-ijk" class="math-section optional">
           <h2>i、j、k 到底是什么</h2>
           <div class="doc-hook"><b>开胃问题</b>：把手绕竖直轴匀速转 360°——你回到原样了吗？物理上「是」，四元数的世界里「没有」：你走到了 −q，还要再转一整圈才真正回家。i、j、k 就是这桩怪事的三张身份证。</div>
@@ -1584,6 +1869,22 @@ i² = j² = k² = i·j·k = −1</div>
 　磁力计——定偏航、怕电磁干扰</div>
         </section>
 
+                  <h3>附：加速度计测的是「比力」，不是加速度</h3>
+          <p>
+            真实器件输出的是<b>比力</b>（specific force）f = a − g（机体上方向为正的约定），
+            也就是「除重力之外所有作用力产生的加速度」。这句话有三个直接推论：
+          </p>
+          <ul>
+            <li><b>静止时它不为零</b>：静止的自由落体加速度为 0，比力却是 +g——所以静止读数 ≈ 9.8 m/s²（本装置取反号，读数指向机体的「下」）。「加速度计静止却有读数」不是故障，是它的定义。</li>
+            <li><b>自由落体时它为零</b>：这才是「真正的零加速度」的状态。此时加计不提供任何姿态信息——本装置的门控里有「‖a‖ ≈ 0 → 跳过修正」这一支，就是为了这个情况。</li>
+            <li><b>机动时它是「重力 + 机动加速度」的叠加</b>，且两者不可区分。这就是线加速度污染的理论根：4 m/s² 的侧向机动和重力的真实方向差了 22°，滤波器无从分辨哪个是哪个——只能靠门控拒收，或靠时间上的统计特性去分开。</li>
+          </ul>
+          <p class="plain">
+            这也是本装置文档里反复强调的「加计读数是重力投影方向」的口径来源：把 f 取反号得到 −f = g − a，
+            静止时就是重力方向。归一化后送进算法，与算法的预测重力方向直接可比。
+          </p>
+        </section>
+
         <section id="m-integral" class="math-section" data-toc="陀螺仪积分方程：q̇ = ½ · q ⊗ ω 的完整推导">
           <div class="doc-hook"><b>开胃问题</b>：0.1°/s 的零偏 × 3600 秒 = 360°——一小时的飞行足够让「以为水平」的无人机原地转一整圈。积分不原谅任何误差；这行方程就是误差的入口。</div>
           <h2>陀螺仪积分方程：<i class="od">q</i> = <span class="frac"><span class="n">1</span><span class="d">2</span></span> · q ⊗ ω 的完整推导</h2>
@@ -1642,6 +1943,40 @@ i² = j² = k² = i·j·k = −1</div>
             零偏 1 °/s 跑 60 秒就是 60° 的偏差——「横滚 360°」剧本里红线飞走的原因。
             预测一步无法自救，必须引入不漂的观测来持续纠偏：进入下一节「误差与修正」。
           </p>
+        </section>
+
+          <h3>附：离散化不是只有一种写法</h3>
+          <p>
+            上面推导给出的是「一步 = q ⊗ Δq(ω·dt)」。这里的 Δq 有几种取法，差别在低采样率与高角速度下才显现：
+          </p>
+          <div class="tscroll"><table class="docs-table">
+            <thead><tr><th>写法</th><th>更新式</th><th>误差量级</th><th>本装置</th></tr></thead>
+            <tbody>
+              <tr><td>一阶欧拉（最常见）</td><td>q ← q + ½·q⊗ω·dt</td><td>O((ω·dt)³)，且会让 ‖q‖ 缓慢偏离 1</td><td>不用</td></tr>
+              <tr><td>中点 / 梯形</td><td>用 (ω<sub>t</sub>+ω<sub>t+dt</sub>)/2 后再积分</td><td>O((ω·dt)⁴)，需要下一帧数据（半步延迟）</td><td>不用</td></tr>
+              <tr><td><b>精确指数映射</b></td><td>Δq = [cos(θ/2), ω̂·sin(θ/2)]，θ = ‖ω‖·dt</td><td>恒定角速度假设下<b>解析精确</b>，无缩放误差</td><td><b>采用</b>（<span class="mono">qIntegrate</span>）</td></tr>
+            </tbody>
+          </table></div>
+          <p class="plain">
+            本装置选精确指数映射，所以在「解算频率」降到 50 Hz（每步转过的角度很大）时仍能跟住大部分机动。
+            代价只有每步一次 sinc 计算——500 Hz 下完全不是负担。
+          </p>
+
+          <h3>附：圆锥与划船效应——高更新率不够时会发生什么</h3>
+          <p>
+            还有一个更隐蔽的误差来源：<b>同时存在的旋转与振荡是不可交换的</b>。
+            机体一边高频摆动、一边整体旋转时，「先转 A 再转 B」与「先 B 再 A」的差别不会互相抵消，
+            而是逐周期累积成净漂移——纯姿态积分里的这一项叫<b>圆锥误差（coning）</b>；
+            加速度积分里的同源项叫<b>划船误差（sculling）</b>，位置积分里的叫<b>滚动误差（scrolling）</b>。
+          </p>
+          <ul>
+            <li><b>它不属于传感器误差</b>：即便器件完美无噪声，圆锥效应照样存在——它是「有限采样率下把连续运动当成阶梯」造成的算法误差。</li>
+            <li><b>量级</b>：与 (ω·dt)² 及振荡幅值成正比，随更新率下降迅速上升，在强振动环境（旋翼桨叶通过频率）里最明显。</li>
+            <li><b>对策</b>：提高更新率、在算法里做圆锥补偿（用多子样构造等价的旋转矢量），或用更高阶的积分格式（本装置的指数映射本身已消除一阶项）。</li>
+            <li><b>本装置的边界</b>：模拟 IMU 的振动是加计侧的确定性正弦，没有与旋转耦合的高频机动，所以看不到圆锥误差本身。这里只作口径说明——真要复现它需要一个「旋转 + 高频摆动」的专门剧本。</li>
+          </ul>
+          <p class="hint">出处：Wu《iNavFIter》(arXiv:1905.11615) 明确把 coning/sculling/scrolling 归为「运动不可交换性」误差；Savage《Strapdown Analytics》是圆锥补偿的经典参考。见「参考文献」模块。</p>
+
         </section>
 
         <section id="m-error" class="math-section">
@@ -1707,6 +2042,33 @@ i² = j² = k² = i·j·k = −1</div>
             夹角超过 40° 即判为野值丢弃。前者看「测量本身正不正常」，后者看「测量与预测合不合拍」——
             共同守住「坏观测不如没观测」。
           </p>
+        </section>
+
+          <h3>附：可观性——什么能被看见，靠什么看见</h3>
+          <p>
+            「滤波器能不能修好某个误差」不是算法优劣问题，而是<b>可观性</b>问题：观测里到底有没有这个状态的痕迹。
+            姿态估计的可观性可以一句话说清：
+          </p>
+          <div class="tscroll"><table class="docs-table">
+            <thead><tr><th>可用观测</th><th>可观测的自由度</th><th>不可观的部分</th><th>装置里的现象</th></tr></thead>
+            <tbody>
+              <tr><td>陀螺仪 + 加速度计（IMU / 6 轴）</td><td>横滚、俯仰（重力方向给了 2 个自由度）</td><td><b>偏航</b>（绕重力轴转，重力读数不变）</td><td>勾掉 MARG：偏航曲线慢慢分家，谁也没错——它确实看不见</td></tr>
+              <tr><td>陀螺仪 + 加计 + 磁力计（MARG / 9 轴）</td><td>3 个自由度（磁场提供第二个非共线参考）</td><td>无（但前提是磁场未被污染、且与重力不共线）</td><td>打开 MARG：偏航被拉回；磁干扰时被拉偏</td></tr>
+              <tr><td>俯仰恰为 ±90° 时（任意配置）</td><td>实际只剩 2 个（横滚与偏航在观测里合并）</td><td>横滚与偏航的<b>拆分</b></td><td>万向节锁：互补滤波崩坏、四元数算法只能靠陀螺</td></tr>
+              <tr><td>只有陀螺仪</td><td>0 个（全靠积分）</td><td>全部——零偏与噪声直接积分成漂移</td><td>纯陀螺仪积分那条红线</td></tr>
+            </tbody>
+          </table></div>
+          <p>
+            两条推论值得记住：
+          </p>
+          <ul>
+            <li><b>陀螺零偏的可观性依附于姿态的可观性</b>：卡尔曼能估出零偏，靠的是「姿态误差里含零偏的痕迹」；
+              所以在偏航不可观的场景里，偏航方向的零偏同样估不出来（各算法在 IMU 模式下的偏航都会缓慢漂，谁也不例外）。</li>
+            <li><b>初始对准的方向受限</b>：静止时能观测到的只有重力方向与磁北，所以粗对准能直接摆出的姿态也必须依赖这两者——
+              没有磁力计（或 GNSS/视觉等外部航向）时，冷启动的<b>偏航是任意的</b>。这不是实现缺陷，是可观性的硬约束。</li>
+          </ul>
+          <p class="hint">延伸：Yi, Wang, Manchester《Attitude estimation from vector measurements: necessary and sufficient conditions》(arXiv:2206.13058) 给出了「向量观测能否定姿」的充要条件（观测向量的数量与非共线性）。</p>
+
         </section>
 
         <section id="m-fusion" class="math-section">
@@ -1805,6 +2167,25 @@ m<sub>y</sub>' = m<sub>y</sub>·cos φ − m<sub>z</sub>·sin φ
           </p>
         </section>
 
+          <h3>附：磁北不等于真北——磁偏角</h3>
+          <p>
+            上面的推导有个隐含前提：世界磁场的水平分量指向「北」。这在<b>磁北</b>意义下成立，但地图和航线用的是<b>真北</b>。
+            两者的夹角叫<b>磁偏角（declination, D）</b>，地磁场的完整描述是三个量：
+          </p>
+          <div class="formula">h<sub>0</sub> = F·[cos I·cos D,  cos I·sin D,  sin I]
+
+F：总场强（本装置取 50 μT）
+I：磁倾角（本装置取 49°）——决定水平分量与垂直分量的比例
+D：磁偏角（<b>本装置按 0 处理</b>，即把磁北当成真北）</div>
+          <ul>
+            <li><b>为什么可以先忽略</b>：磁偏角是一个<b>常值旋转</b>（同一地点同一天里几乎不变），它不会影响「偏航是否收敛」「MARG 是否被干扰拉动」这些本装置要演示的机制——只是让整体的航向零位偏一个常数。</li>
+            <li><b>什么时候不能忽略</b>：任何要把航向用于导航的场合。中国的磁偏角大致在 −10°（西部）到 +10°（东北）量级，跨区飞行必须补偿；而且它<b>随年份缓慢变化</b>（长期变化）。查表入口见「参考文献」里的 NOAA 世界地磁模型（WMM）。</li>
+            <li><b>怎么补偿</b>：拿到当地 D 之后，把磁场参考向量整体绕世界 z 轴旋转 D，或在输出航向时加 D。本装置若要加，只需改 <span class="mono">MAG_WORLD_NED</span> 的构建方式与航向读数两处。</li>
+            <li><b>顺带一个陷阱</b>：磁倾角 I 虽然本装置固定为 49°，但它随纬度变化很大（赤道附近接近 0°、磁极附近接近 90°）。<b>I 接近 90° 时磁力计的水平分量极小</b>，倾斜补偿航向会变得极不稳定——这正是「完整 MARG」用整条磁场向量、而不是只解一个水平航向的原因之一。</li>
+          </ul>
+
+        </section>
+
         <section id="m-quat-intuition" class="math-section">
           <h2>四元数的四种直觉：从「四个数」到「可测量的姿态」</h2>
           <div class="doc-hook"><b>开胃问题</b>：同一个姿态，四元数、旋转矩阵、轴角、欧拉角各写一遍——
@@ -1895,6 +2276,22 @@ R(q₁⊗q₂) = R(q₁)·R(q₂)　（矩阵乘法同样不可交换，两者�
             把「σ²」换成协方差矩阵 P，把「谁的方差小」交给矩阵运算自动完成。
             所以理解卡尔曼不需要先学矩阵——先把这个标量版本吃透。
           </p>
+
+          <figure class="doc-fig doc-fig-demo">
+            <canvas id="fig-kf1d-demo" width="720" height="280" role="img" aria-label="一维卡尔曼滤波交互演示：先验分布、观测分布与乘积得到的后验分布，以及卡尔曼增益随两个方差变化的实时读数" title="一维卡尔曼最优加权交互演示"></canvas>
+            <div class="doc-ctrl">
+              <label class="dc-item">先验不确定度 σ₁ <input type="range" min="0.3" max="4" step="0.05" value="1.2" data-dock="kf-s1" aria-label="先验标准差 σ1" /><span class="dc-val mono" data-dockval="kf-s1"></span></label>
+              <label class="dc-item">观测不确定度 σ₂ <input type="range" min="0.3" max="4" step="0.05" value="0.8" data-dock="kf-s2" aria-label="观测标准差 σ2" /><span class="dc-val mono" data-dockval="kf-s2"></span></label>
+            </div>
+            <figcaption class="fig-cap">
+              <b>动手试试</b>：两个滑块分别改「先验有多不确定」与「观测有多不确定」。
+              灰线是先验（当前信念）、橙线是这次观测的似然、绿线是两者相乘归一化后的<b>后验</b>。
+              三件事值得看：① 后验永远比两者都<b>窄</b>（融合一定让不确定度变小）；
+              ② 谁窄，后验就靠近谁（增益 K 就是「观测相对先验的可信度」）；
+              ③ 右侧实时显示 K = σ₁²/(σ₁²+σ₂²) 与后验标准差——把 σ₂ 拉到极大，K → 0，
+              卡尔曼退化成「只信预测」，这正是装置里把「卡尔曼 R」拉满时它变成准纯积分的原因。
+            </figcaption>
+          </figure>
 
           <h3>第二层：协方差椭圆（不确定度的形状）</h3>
           <p>
@@ -2131,6 +2528,28 @@ Squad(q₁, q₂, s₁, s₂, t) = Slerp( Slerp(q₁, q₂, t), Slerp(s₁, s₂
             <b>[姿态误差 δθ, 速度, 位置, 陀螺零偏, 加速度计零偏]</b>，观测来自 GNSS/里程计等；
             还有杆臂效应、地球自转补偿等高阶项。本装置的 6 维 [δθ, δb] 是它的姿态-零偏子集，
             教学取舍是合理的：结构相同、维度更小。</p>
+          <h3>时域与频域的系统性误差：延迟、采样率、饱和</h3>
+          <p>前面讲的是「标定」能解决的误差（零偏、刻度、安装、硬铁软铁）。还有三类误差标定解决不了，只能在系统设计里处理：</p>
+          <ul>
+            <li><b>群延迟</b>——从物理量发生到算法拿到读数之间的固定时延（传输 + 抗混叠滤波 + 调度）。
+              它让积分用上过时的数据，姿态滞后约 <b>ω·τ</b>：峰值 240°/s、延迟 25 ms 时就是 6°。
+              控制回路里延迟吃的是<b>相位裕度</b>：增益加到某个值系统开始振荡，往往就是它干的。
+              工程做法：测量并补偿时延、时间戳对齐、或直接把延迟建模进滤波器状态。本装置用「传感器群延迟」滑块一阶模拟。</li>
+            <li><b>采样率与混叠</b>——任何高于奈奎斯特频率的运动都会折叠回低频，变成假的「慢速运动」。
+              旋翼的桨叶通过频率（几十到几百赫兹）正好落在这个区域：它会既污染加计倾角、又混进陀螺读数。
+              工程做法：ADC 前的模拟抗混叠滤波、足够高的采样率、在已知激励频率上做陷波。
+              本装置用「解算频率」滑块让你看到低更新率的代价——注意它演示的是<b>解算</b>频率，
+              不是采样率；混叠本身没有建模（那需要一个专门的高频机动剧本）。</li>
+            <li><b>量程饱和</b>——角速度超过陀螺满量程时读数被削平成一串「恒定最大速率」。
+              危险之处在于它<b>看不出来</b>：曲线只反映姿态跑偏，原始波形上那条平顶是唯一线索。
+              工程做法：量程告警位、抬高陀螺测量噪声让滤波器少信积分项、在检测到饱和时切换到「以向量观测为主」。</li>
+          </ul>
+          <p class="plain">
+            把这三项与本页前面那些「可标定误差」放在一起看，就是一份完整的工程误差预算：
+            <b>标定能去掉系统性的常数与比例项，滤波能平均掉零均值噪声，而延迟、混叠、饱和只能靠系统设计规避。</b>
+            面板上对应的滑块分别让你把这三类「设计层误差」当场调出来。
+          </p>
+
           <p class="plain">一句话：面板上每个「误差滑块」，在真实工程里都对应一条成熟的标定/估计流水线——演示装置把流水线简化成滑块，正是为了让「病」可以随手调出来看。</p>
         </section>
 
@@ -2170,6 +2589,21 @@ Squad(q₁, q₂, s₁, s₂, t) = Slerp( Slerp(q₁, q₂, t), Slerp(s₁, s₂
           <h2 class="has-detail"><a href="#f-comp-detail">互补滤波：最直观的入门方案</a></h2>
           <div class="ctl">
             <div class="ctl-name">核心思想 <span class="ctl-range">频域互补</span></div>
+
+          <figure class="doc-fig doc-fig-demo">
+            <canvas id="fig-bode-demo" width="720" height="300" role="img" aria-label="互补滤波频域视角交互演示：陀螺通道的高通、加速度计通道的低通，以及随 α 移动的交叉频率与截止频率读数" title="互补滤波的频域互补与交叉频率"></canvas>
+            <div class="doc-ctrl">
+              <label class="dc-item">互补 α <input type="range" min="0.1" max="10" step="0.1" value="1" data-dock="bode-alpha" aria-label="互补滤波融合速率 α" /><span class="dc-val mono" data-dockval="bode-alpha"></span></label>
+            </div>
+            <figcaption class="fig-cap">
+              <b>动手试试</b>：拖动 α，看两条曲线交点（<b>交叉频率</b>）左右移动，右侧读数同步给出截止频率与等效时间常数。
+              读法：<b>交点左边的频率全交给加速度计</b>（慢速的真实倾角，加计可信），
+              <b>交点右边全交给陀螺仪</b>（快速的真实运动，加计被机动加速度污染）。
+              图上两个色带标注了典型信号的位置：0.1–1 Hz 是「机动」、30 Hz 附近是「电机振动」——
+              把交点与它们相对照，就明白为什么「按传感器噪声与目标带宽定 α」比「调大一点看起来好了」更靠谱。
+              Mahony 的 Kp 起同样的作用：线性化后 Kp 就是这条截止频率（单位 1/s）。
+            </figcaption>
+          </figure>
             <p><b>一句话</b>：陀螺仪高通 + 加速度计低通，两路取长补短。参数：<span class="mono">互补 α</span> 滑块。</p>
             <p><b>数据流</b>：陀螺仪积分得到姿态角 → 加速度计 atan2 反解出倾角 → 两者差乘 α 折回积分通道。偏航来自陀螺仪（MARG 开时用倾斜补偿磁航向替换）。</p>
             <p><b>调参现象</b>：α 大 → 跟随快但抖；α 小 → 平滑但慢。调到极端值对比 Mahony，能看出欧拉角域实现的局限（±90° 附近误差定义退化）。</p>
@@ -2566,7 +3000,671 @@ A = <span class="mtx"><i class="ml"></i><span class="mrows" style="--cols:2"><sp
           </p>
       </article>
 
+      <article class="doc-page" data-doc-page="labs" hidden>
+        <h1>实验与练习</h1>
+        <p class="docs-lede">
+          把前三个模块的内容变成<b>可执行的路径</b>与<b>可自测的题目</b>。
+          实验库的 17 条实验是「一键复现一条因果链」，这一页负责告诉你在什么顺序下用它、以及怎么检验自己学会了。
+        </p>
 
+        <section id="l-path">
+          <h2>三条学习路径</h2>
+          <p>按你的背景挑一条。每条都标了「读完应该能回答的问题」——答不上来就回对应章节补。</p>
+
+          <h3>路线 A · 零基础（约 60–90 分钟）</h3>
+          <ol>
+            <li>控制项手册「快速上手」（5 min）：知道三个视图各看什么、顶栏按钮干什么。</li>
+            <li>数学原理「四元数的四种直觉」（12 min）：先不碰公式，只建印象。</li>
+            <li>实验库跑「零偏漂移」（5 min）：亲眼看见「只信陀螺仪会一路漂」。</li>
+            <li>数学原理「为什么恰好是四个数」+「i、j、k 到底是什么」（15 min）。</li>
+            <li>滤波算法讲解：总览 → 互补滤波（15 min）。</li>
+            <li>实验库「方向门控救场」+「电机振动」（10 min）。</li>
+            <li>滤波算法讲解「怎么读这张图：五条曲线的诊断手册」（10 min）。</li>
+          </ol>
+          <p class="plain"><b>读完应能回答</b>：陀螺仪单独用为什么漂？加速度计为什么不能直接当姿态用？互补滤波的 α 是什么？</p>
+
+          <h3>路线 B · 有信号处理 / 控制基础（约 90–120 分钟）</h3>
+          <ol>
+            <li>数学原理「传感器测量模型」→「陀螺仪积分方程 q̇ = ½q⊗ω」的完整推导（20 min）。</li>
+            <li>数学原理「叉积误差」+「修正律」（15 min）。</li>
+            <li>滤波算法讲解 Mahony / Madgwick 详解，再进两篇「完整推导 →」独立页（30 min）。</li>
+            <li>实验库「卡尔曼 Q/R 调参」，对照「卡尔曼滤波完整推导」页（25 min）。</li>
+            <li>数学原理「可观性：什么可观测、靠什么」「传感器群延迟与采样率」（15 min）。</li>
+            <li>排障手册「曲线不对」一节，当自测题做。</li>
+          </ol>
+          <p class="plain"><b>读完应能回答</b>：为什么偏航在只用加计时不可观？Kp 与截止频率什么关系？EKF 的协方差为什么会自己长大又收缩？</p>
+
+          <h3>路线 C · 只想接硬件（约 30 分钟）</h3>
+          <ol>
+            <li>数学原理「坐标系与约定」（约定错了后面全错，先花 5 分钟）。</li>
+            <li>控制项手册「IMU 传感器模拟」一节 + 器件预设下拉（5 min）。</li>
+            <li>硬件与固件：帧协议表 → 接线 → 组帧与 CRC → 真实模式语义（15 min）。</li>
+            <li>磁力计校准面板：先「用当前磁模型自动采集」跑一遍看懂流程，再接真机（5 min）。</li>
+            <li>排障手册「硬件接不上」整节。</li>
+          </ol>
+          <p class="plain"><b>读完应能回答</b>：我的帧为什么被拒？accel 的符号约定是什么？无真值时误差曲线以谁为基准？</p>
+        </section>
+
+        <section id="l-index">
+          <h2>实验索引：现象 → 结论</h2>
+          <p>实验库（右侧「实验库」分区，需先展开）里每条实验的速查表。点实验按钮即可拿到这条因果链的完整现场。</p>
+          <div class="tscroll"><table class="docs-table">
+            <thead><tr><th>实验</th><th>改了什么</th><th>该看到什么</th><th>结论</th></tr></thead>
+            <tbody>
+              <tr><td>零偏漂移</td><td>陀螺零偏 3°/s</td><td>红线匀速直线爬升</td><td>斜率 = 零偏；无观测通道必漂</td></tr>
+              <tr><td>方向门控救场</td><td>机动线加速度 4 m/s²</td><td>门控开：曲线贴地；关：持续被拽偏</td><td>垂直方向的污染对范数只有二阶影响，方向门控才是主手段</td></tr>
+              <tr><td>电机振动</td><td>振动滑块拉满</td><td>所有融合曲线同步起毛刺</td><td>高频零均值污染：能平均掉，但增益越高抖得越厉害</td></tr>
+              <tr><td>磁干扰与偏航</td><td>硬铁 + 交变干扰</td><td>MARG 开被拉偏、关则漂</td><td>磁力计能定北，但必须先标定</td></tr>
+              <tr><td>初始对准</td><td>随机初始姿态偏差 20–35°</td><td>四家融合几秒内收敛，纯积分停在原处</td><td>启动增益 ramp / 大初始协方差是加速收敛的两条路</td></tr>
+              <tr><td>闭环控制</td><td>反馈改用纯积分姿态</td><td>机体真的飞偏</td><td>估计误差会变成物理轨迹误差</td></tr>
+              <tr><td>卡尔曼 Q/R 调参</td><td>Q、R 两端拉满</td><td>R 大 → 退化成准纯积分</td><td>Q/R 比值决定带宽</td></tr>
+              <tr><td>万向节锁</td><td>俯仰 ±90°（环架视图）</td><td>两环变红、轴向重合</td><td>机械视角：丢一个自由度</td></tr>
+              <tr><td><b>万向节锁的算法后果</b></td><td>俯仰<b>停驻</b> 90° + 横滚移动</td><td>互补滤波一路走偏（自检 180°），四元数算法稳在 0.1°</td><td>算法视角：欧拉参数化在锁点丢信息，四元数没这问题</td></tr>
+              <tr><td>穿越 ±90°</td><td>俯仰 0→180° 慢扫</td><td>互补在穿越点出现尖峰</td><td>与「停驻」对照：暂态 vs 持续命中奇点</td></tr>
+              <tr><td>完整 MARG vs 简化</td><td>磁修正形态切换 + 交变干扰</td><td>简化版偏航被牵着走（8.5°），完整版 1.0°</td><td>参考场由测量本身构造 → 磁倾角自洽</td></tr>
+              <tr><td>门控滞回的双刃</td><td>打开「拒绝过久自动恢复」</td><td>6 秒后互补被污染拉走</td><td>拒绝观测保短期准确，拒绝太久会失去纠错能力</td></tr>
+              <tr><td>陀螺仪量程饱和</td><td>量程 ±150°/s + 剧烈机动</td><td>原始波形出现平顶，姿态大幅跑偏</td><td>削顶的读数看起来「正常」，积分器无从察觉</td></tr>
+              <tr><td>传感器群延迟</td><td>延迟 25 ms</td><td>纯积分那条红线整条抬起 ≈ ω·τ</td><td>延迟在控制回路里吃掉相位裕度</td></tr>
+              <tr><td>解算频率</td><td>降到 50 Hz</td><td>高速机动下误差抬头</td><td>指数积分缓解了、但没有消除低采样率的损失</td></tr>
+              <tr><td>Slerp vs 欧拉插值</td><td>多轴姿态对播放</td><td>两弧中点分叉 50°+</td><td>动画必须用四元数插值</td></tr>
+              <tr><td>4D 立体投影</td><td>连按「左乘 i」两次</td><td>姿态复原但 q 变号</td><td>双重覆盖：转 360° ≠ 没转</td></tr>
+            </tbody>
+          </table></div>
+        </section>
+
+        <section id="l-exercise">
+          <h2>练习与自测（答案即一次实验）</h2>
+          <p>
+            每题都可在装置上验证：<b>先在纸上给答案，再去实验里把数字调出来对</b>。
+            观察要点就是答案的判据。共 12 题，按难度递增。
+          </p>
+
+          <div class="ctl">
+            <div class="ctl-name">第 1 题 · 斜率即零偏</div>
+            <p><span class="k k1">题</span>把陀螺仪零偏设为 2°/s，纯陀螺仪积分的误差曲线在 10 s 时大约多少度？为什么是直线而不是抛物线？</p>
+            <p><span class="k k2">验证</span>实验「零偏漂移」，把零偏从 1 调到 3，看斜率是否变成三倍。读数看「本轮评测」的当前值。</p>
+            <p><span class="k k3">答案</span>约 20°。误差 = 零偏 × 时间（b·t），零偏是常数，积分出来就是一次函数。若再打开「零偏随机游走」，零偏本身开始游走，曲线就会变成超线性（≈√t 累积后再积分）。</p>
+          </div>
+
+          <div class="ctl">
+            <div class="ctl-name">第 2 题 · 门控看得见什么、看不见什么</div>
+            <p><span class="k k1">题</span>侧向 4 m/s² 的持续机动：加计读数范数偏了多少？方向偏了多少？幅度门控能拦住它吗？</p>
+            <p><span class="k k2">验证</span>实验「方向门控救场」，分别关掉/打开「加速度计观测门控」，看 Mahony 的误差。</p>
+            <p><span class="k k3">答案</span>范数只偏约 8%（√(4²+9.8²)=10.6 对 9.8），方向却偏了 22°。幅度门控（阈 35%）完全看不见它——<b>垂直于重力的污染对模长只有二阶影响</b>。这正是方向门控存在的原因。</p>
+          </div>
+
+          <div class="ctl">
+            <div class="ctl-name">第 3 题 · 初始姿态偏差的可观性</div>
+            <p><span class="k k1">题</span>给所有算法一个 30° 的初始偏差。如果偏差轴是<b>纯偏航</b>，只靠加速度计能把它们拉回来吗？如果偏差轴以横滚为主呢？</p>
+            <p><span class="k k2">验证</span>勾选「重置时给各算法随机初始姿态偏差」多按几次重置，观察误差曲线的收敛形态；再对照排障手册的「收敛」行。</p>
+            <p><span class="k k3">答案</span>纯偏航偏差<b>不可观</b>——重力绕自身轴旋转没有变化，加计看不出任何异常，任何算法都拉不回来（打开 MARG 才能靠磁场拉）。横滚/俯仰偏差则一眼可见，几秒内收敛。这也是「初始对准必须借助磁力计或外部航向」的原因。</p>
+          </div>
+
+          <div class="ctl">
+            <div class="ctl-name">第 4 题 · β 与稳态误差</div>
+            <p><span class="k k1">题</span>Madgwick 没有积分项。给定 2°/s 的恒定零偏、β = 0.1，收敛后的姿态误差台阶大约是多大？把 β 调到 0.4，台阶变小还是变大？代价是什么？</p>
+            <p><span class="k k2">验证</span>改「Madgwick β」滑块，看误差曲线的稳态台阶高度与毛刺幅度。</p>
+            <p><span class="k k3">答案</span>台阶 ≈ 零偏/β ≈ 2/0.1 = 20°。β 调大台阶变小（4 → 5°），但曲线明显更抖——β 同时是「收敛速度」与「噪声放大倍数」，这是它作为单参数的全部代价。</p>
+          </div>
+
+          <div class="ctl">
+            <div class="ctl-name">第 5 题 · Ki 在记什么账</div>
+            <p><span class="k k1">题</span>Mahony 的 Ki = 0 与 Ki = 0.05，在 2°/s 零偏下的长期行为差别是什么？把 Ki 拉到 0.5 会怎样？</p>
+            <p><span class="k k2">验证</span>打开玻璃盒看「∫e 用量」与「零偏估计」；切换 Ki 观察曲线尾部。</p>
+            <p><span class="k k3">答案</span>Ki = 0 时残余一个永久台阶（比例项只能把误差压到某个非零值）；Ki > 0 时积分项慢慢把零偏「记」进来，台阶最终归零，但收敛慢。Ki 过大（0.5）会在有噪声时来回振荡——积分的经典代价。</p>
+          </div>
+
+          <div class="ctl">
+            <div class="ctl-name">第 6 题 · 卡尔曼在学什么</div>
+            <p><span class="k k1">题</span>设零偏 2°/s，看卡尔曼面板的「零偏估计 |b|」。它会不会收敛到 2？如果 R 拉到最大呢？</p>
+            <p><span class="k k2">验证</span>实验「卡尔曼 Q/R 调参」，看 |b| 随时间的变化曲线（玻璃盒读数）。</p>
+            <p><span class="k k3">答案</span>会收敛到 ≈2°/s —— 这是它区别于固定增益算法的独门能力（姿态误差里含零偏的痕迹，滤波器顺着痕迹把它估出来）。R 拉到最大时观测变得不可信，零偏估计几乎不更新，卡尔曼退化成准纯积分，|b| 停在 0 附近。</p>
+          </div>
+
+          <div class="ctl">
+            <div class="ctl-name">第 7 题 · 万向节锁为什么让欧拉角失效</div>
+            <p><span class="k k1">题</span>俯仰停在 90° 时，把横滚滑块从 0 拉到 +45°、偏航从 0 拉到 −45°，两次得到的姿态一样吗？此时加计读数变化了吗？</p>
+            <p><span class="k k2">验证</span>万向节锁视图拖滑块；再切到「万向节锁·停驻 90°」剧本看算法误差曲线。</p>
+            <p><span class="k k3">答案</span>姿态<b>完全相同</b>（万向节锁的定义：两个滑块控制同一个自由度）。加计读数也完全相同——重力沿机体 x 轴，与横滚无关。所以互补滤波（用加计横滚重建姿态）在锁点上拿到的是无信息量、且数值退化的输入，姿态会被一路拽偏；四元数算法算的是「实测重力 × 预测重力」的叉积，锁点上该误差为零，于是只是停止修正、靠陀螺继续走。</p>
+          </div>
+
+          <div class="ctl">
+            <div class="ctl-name">第 8 题 · 完整 MARG 的收益从哪来</div>
+            <p><span class="k k1">题</span>「磁修正形态」切完整 MARG，磁干扰强度 0.5。为什么它比简化版稳得多？既然更稳，为什么不用它做默认？</p>
+            <p><span class="k k2">验证</span>实验「完整 MARG vs 简化」，对比偏航曲线；再把干扰归零，看两者是否重合。</p>
+            <p><span class="k k3">答案</span>完整版把磁测量旋到世界系后<b>丢掉水平面的东向分量</b>再归一化，得到与实测场倾角一致的参考场——磁场的倾角信息用来修倾角，而不是把干扰全部塞给偏航。干净磁场下两者等价（自检实测均值都是 0.06°），所以默认用更简单的简化版；只有磁场脏或倾角失配时才体现价值。</p>
+          </div>
+
+          <div class="ctl">
+            <div class="ctl-name">第 9 题 · 门控的滞回为什么是双刃剑</div>
+            <p><span class="k k1">题</span>持续侧向加速度下，「拒绝过久自动恢复」打开与关闭，30 秒后互补滤波的姿态各是什么状态？哪个更「对」？</p>
+            <p><span class="k k2">验证</span>实验「门控滞回的双刃」等 6 秒以上。</p>
+            <p><span class="k k3">答案</span>关：观测被拒绝到底，估计钉在真值附近（0.0°）；开：5 秒后判定「可能是我自己偏了」放行观测，姿态被污染拉走（约 24°）。<b>没有绝对更对的那一个</b>——如果污染真的会一直持续，拒绝到底意味着永久失去纠错能力；如果只是暂时机动，放行就是自毁。工业库选择「放行」，因为它面对的是传感器故障而非可预测的机动。</p>
+          </div>
+
+          <div class="ctl">
+            <div class="ctl-name">第 10 题 · 饱和的量级</div>
+            <p><span class="k k1">题</span>量程设 ±150°/s，剧烈机动的峰值角速度约 240°/s。姿态会错多少？为什么误差曲线不会告诉你「陀螺仪削顶了」？</p>
+            <p><span class="k k2">验证</span>实验「陀螺仪量程饱和」；切到 IMU 原始波形 → 陀螺仪页签，找那条平顶。</p>
+            <p><span class="k k3">答案</span>自检实测 Mahony 峰值误差约 22°、纯积分 48°。曲线只反映「姿态不对」，不反映原因——唯一线索是原始波形上被削平的那一段（真实工程里靠量程告警位或残差异常检测）。</p>
+          </div>
+
+          <div class="ctl">
+            <div class="ctl-name">第 11 题 · 延迟等于多少度</div>
+            <p><span class="k k1">题</span>群延迟 25 ms，机动峰值角速度 240°/s。纯陀螺仪积分（零偏噪声都设 0）为什么会出现误差？峰值约多少？</p>
+            <p><span class="k k2">验证</span>实验「传感器群延迟」。读数取误差曲线的峰值。</p>
+            <p><span class="k k3">答案</span>积分用的是<b>过时 25 ms</b> 的角速度，而真值已经转过 ω·τ = 240 × 0.025 = 6°。<b>误差恰好等于 ω·τ</b>——这是延迟最干净的一阶结论，也是控制回路里相位裕度被吃掉的物理量。</p>
+          </div>
+
+          <div class="ctl">
+            <div class="ctl-name">第 12 题 · 用两条曲线证明双重覆盖</div>
+            <p><span class="k k1">题</span>不进四元数视图，只用「累计旋转」读数与四元数分量读数，怎么证明「转 360° 不等于没转」？</p>
+            <p><span class="k k2">验证</span>四元数视图 → 4D 立体投影 → 连按同一按钮两次 / 四次，读 #proj-turn 与当前四元数分量。</p>
+            <p><span class="k k3">答案</span>按两次：读数显示「累计 360° · q = −1」，而姿态四轴看起来与初始完全相同 → 同一个姿态对应两个四元数（±q）。按四次（720°）读数才回到 q = +1。S³ 剖面里青点与品红点（q 与 −q）恰好互换位置——这就是双重覆盖的几何形态。</p>
+          </div>
+        </section>
+      </article>
+
+      <article class="doc-page" data-doc-page="guide" hidden>
+        <h1>硬件与固件</h1>
+        <p class="docs-lede">
+          把真实的 IMU 接到本装置上：帧协议、接线、参考组帧代码、以及「真实模式」下的语义变化。
+          本页内容与仓库 <span class="mono">firmware/</span> 目录（<span class="mono">gy87.h</span> + <span class="mono">README.md</span>）同源，已由用户真机验证。
+        </p>
+
+        <section id="g-what">
+          <h2>它到底连的是什么</h2>
+          <p>
+            本装置的「真实模式」通过 <b>Web Serial</b>（Chrome / Edge，HTTPS 或 localhost）打开一个串口，
+            按固定 28 字节帧读取三路传感器原始值。它<b>不解析任何现成 IMU 协议</b>——你需要在主控上写一小段组帧代码
+            （STM32F4 + GY-87 的参考实现见 <span class="mono">firmware/gy87.h</span>）。这样设计的原因：本装置要的是
+            「原始三路数据」，而现成模块（如 BNO055）直接输出四元数，用它就失去了「自己解算」的教学意义。
+          </p>
+          <p class="plain">如果你不想写固件，也可以只用模拟模式——全部教学主线（五种算法、误差链、门控、万向节锁、四元数视图）都不依赖真实硬件。</p>
+        </section>
+
+        <section id="g-frame">
+          <h2>帧协议（28 字节，小端）</h2>
+          <div class="tscroll"><table class="docs-table">
+            <thead><tr><th>偏移</th><th>字节</th><th>字段</th><th>说明</th></tr></thead>
+            <tbody>
+              <tr><td>0</td><td>2</td><td>帧头 <span class="mono">0xAA 0x55</span></td><td>重同步锚点；接收端从粘连的流里找它</td></tr>
+              <tr><td>2</td><td>1</td><td>长度 = 24</td><td>后面 payload 的字节数（不含帧头与 CRC）</td></tr>
+              <tr><td>3</td><td>2</td><td>seq (u16)</td><td>帧序号，回绕计数；用于统计固件层丢帧</td></tr>
+              <tr><td>5</td><td>4</td><td>tick (u32, ms)</td><td><b>采样时刻</b>的固件时间；接收端用它算真实积分步长</td></tr>
+              <tr><td>9</td><td>6</td><td>gyro i16 × 3</td><td>单位 0.1 °/s（机体系，静止 ≈ 0）</td></tr>
+              <tr><td>15</td><td>6</td><td>accel i16 × 3</td><td>单位 0.01 m/s²；<b>静止时机体 z ≈ +980</b>（见下方符号约定）</td></tr>
+              <tr><td>21</td><td>6</td><td>mag i16 × 3</td><td>单位 0.01 μT</td></tr>
+              <tr><td>27</td><td>1</td><td>CRC-8</td><td>多项式 0x07、初值 0，覆盖第 2…26 字节（含长度字段）</td></tr>
+            </tbody>
+          </table></div>
+          <div class="formula">CRC 覆盖范围　data[2 .. 26]（共 25 字节）
+　crc ← 0
+　for b in data:
+　　 crc ^= b
+　　 repeat 8: crc ← (crc &amp; 0x80) ? ((crc &lt;&lt; 1) ^ 0x07) &amp; 0xFF : (crc &lt;&lt; 1) &amp; 0xFF</div>
+          <p class="hint">
+            接收端行为（<span class="mono">src/core/serial.ts</span> 的纯函数实现，自检有往返用例）：
+            找不到帧头 → 丢弃到下一个 <span class="mono">0xAA 0x55</span>；长度字段错或 CRC 错 → 丢弃 2 字节后重同步（
+            假定那是巧合的帧头）；帧不完整 → 留在缓冲里等更多字节。
+          </p>
+        </section>
+
+        <section id="g-wiring">
+          <h2>接线与安装方向</h2>
+          <ul>
+            <li><b>电气</b>：GY-87（或 MPU-9250 / ICM-42688-P + AK8963）→ I²C 接主控 → USB-UART（CP2102 / CH340 / ST-Link VCP）→ 电脑。本装置默认波特率 <b>921600</b>（8N1），可在代码里改。</li>
+            <li><b>安装方向</b>：面板里的「模块 X 朝前 / Y 朝左 …」下拉决定模块丝印轴 → 机体 NED（x 前 / y 右 / z 下）的重排。四种组合覆盖常见的水平安装；换方向时缓冲会被清空，避免半帧带旧方向。</li>
+            <li><b>符号约定</b>：加速度计读数 = <b>重力在机体系的投影方向</b>，因此静止时 z 轴读数 ≈ +9.8 m/s²（指向机体的「下」）。这是本装置的约定，与固件组帧时的取号一致；若你的器件输出相反（很多库输出 +9.8 表示「向上」的反作用力），请在固件里取反，不要改本装置的约定。</li>
+            <li><b>磁力计</b>：AK8963 需要先写 CNTL1 进入连续测量模式（GY-87 的板载磁力计不随 MPU-9250 的 I²C 直通自动启动），这一步最容易漏。</li>
+          </ul>
+        </section>
+
+        <section id="g-real-semantics">
+          <h2>真实模式下装置会怎么变</h2>
+          <p>没有真值这一件事会连锁改变很多东西，理解这些变化才不会把「设计取舍」当成 bug：</p>
+          <ul>
+            <li><b>误差曲线改以 Mahony 为基准</b>：真实世界没有真值，曲线标题会变成「vs Mahony 基准」，读数里真实姿态那一栏标注「基准(Mahony)」。Mahony 自身不再参与评分。</li>
+            <li><b>幻影隐藏</b>：幻影显示的是模拟剧本的姿态，与真实机体无关。</li>
+            <li><b>模拟控件置灰</b>：剧本、模拟噪声、手动目标、闭环、初始偏差全部停用——数据完全来自串口帧。</li>
+            <li><b>时钟跟随固件 tick</b>：每个 <span class="mono">tick</span> 差就是一步积分步长（100–200 Hz 随固件而定），不是 500 Hz。丢失 tick 或 u32 回绕时退回名义帧间隔，并夹在 1–50 ms。</li>
+            <li><b>帧队列与积压保护</b>：串口帧先进队列（上限 128 帧、溢出丢最旧），主循环按 rAF 节奏消费；断流 1.5 s 会在状态行报警。</li>
+            <li><b>静止检测粗对准仍可用</b>：3 秒静止会把融合算法摆到加计/磁力计给出的姿态——这是真实冷启动最实用的一步。</li>
+          </ul>
+        </section>
+
+        <section id="g-debug">
+          <h2>调试建议</h2>
+          <ol>
+            <li><b>先离线验证帧</b>：用厂商上位机或 <span class="mono">firmware/README.md</span> 里给的参考代码，确认主控确实按 28 字节发帧、CRC 正确。</li>
+            <li><b>再看状态行</b>：连接后状态行显示「帧/s · dt · seq 丢帧 · 积压丢弃」。帧率应稳定在固件的设定值附近；dt 应稳定在 1/帧率。</li>
+            <li><b>原始波形页签</b>是排查现场：陀螺仪三轴静止应在 0 附近抖、加速度计 z ≈ 9.8、磁力计模长应接近当地地磁强度（本装置用 50 μT 作参考；若你的地点是 45 或 30 μT，磁力计可信度判定会偏严，可以先把「磁力计噪声」等滑块的量级调小观察）。</li>
+            <li><b>磁校准</b>：接真机后先做一次校准（缓慢翻滚采集 240+ 点），否则硬铁偏移会让 MARG 偏航稳定地偏一个角度。</li>
+          </ol>
+        </section>
+      </article>
+
+      <article class="doc-page" data-doc-page="trouble" hidden>
+        <h1>排障手册</h1>
+        <p class="docs-lede">
+          三类问题：<b>曲线不对</b>（算法/仿真层）、<b>硬件接不上</b>（串口/固件层）、<b>页面本身异常</b>（浏览器层）。
+          先按症状定位到哪一类，再往下看。
+        </p>
+
+        <section id="t-curve">
+          <h2>一、曲线不对</h2>
+          <p>「五条曲线的诊断手册」（滤波算法讲解模块）已把 9 种常见形态整理成表。这里是它的<b>反向索引</b>：从你的疑问出发找答案。</p>
+          <div class="tscroll"><table class="docs-table">
+            <thead><tr><th>你的疑问</th><th>大概率原因</th><th>怎么确认</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>「红线（纯积分）也在动？」</td>
+                <td>纯积分对零偏噪声极其敏感；或是「解算频率」被调低、或开了「传感器群延迟」</td>
+                <td>把零偏/噪声/延迟/刻度全部归零，红线应当接近 0（只剩数值噪声）。若仍在动，看是否为「初始姿态偏差」开关所致</td>
+              </tr>
+              <tr>
+                <td>「所有曲线一起抖动」</td>
+                <td>振动或噪声直接进了观测；增益过高</td>
+                <td>把「电机振动」归零排除；再把 β/α/Kp 调小看抖动是否下降</td>
+              </tr>
+              <tr>
+                <td>「某条曲线突然跳到很大的值」</td>
+                <td>互补滤波在万向节锁附近崩坏（>90°）；或切剧本造成一次瞬态</td>
+                <td>看机动模式是不是「万向节锁·停驻 90°」；切剧本后的台阶是预期行为，点「重置」再看</td>
+              </tr>
+              <tr>
+                <td>「误差曲线全都趴在 0 附近，什么都看不出来」</td>
+                <td>污染太干净，或者误差图被别的曲线压扁了</td>
+                <td>打开实验库跑「零偏漂移」或「电机振动」；检查图例里是否有曲线被手动关掉</td>
+              </tr>
+              <tr>
+                <td>「卡尔曼比别人差」</td>
+                <td>Q/R 与当前噪声水平不匹配（Q 太小则太信陀螺，R 太大则几乎不修正）</td>
+                <td>跑实验「卡尔曼 Q/R 调参」；把 R 拉到 1.0 看它退化成准纯积分</td>
+              </tr>
+              <tr>
+                <td>「MARG 开着，偏航反而更差」</td>
+                <td>磁干扰（硬铁/交变）没被补偿</td>
+                <td>把「硬铁偏移」「磁干扰强度」归零；或走一遍磁力计校准；或把「磁修正形态」切到完整 MARG</td>
+              </tr>
+              <tr>
+                <td>「切换显示源后姿态跳了一下」</td>
+                <td>显示源只是换「用谁的四元数画模型」，各算法本身的姿态本来就不同</td>
+                <td>看读数块：四元数分量确实随显示源变化——这是正常现象</td>
+              </tr>
+              <tr>
+                <td>「A/B 两条线完全重合」</td>
+                <td>B 组是 A 组的参数克隆，没改参数时逐点重合（这是设计，不是 bug）</td>
+                <td>改任意参数后两条线立刻分叉；纯积分已移出 B 组（它无参数、永远重合）</td>
+              </tr>
+            </tbody>
+          </table></div>
+        </section>
+
+        <section id="t-hardware">
+          <h2>二、硬件接不上</h2>
+          <div class="tscroll"><table class="docs-table">
+            <thead><tr><th>症状</th><th>可能原因与处理</th></tr></thead>
+            <tbody>
+              <tr><td>「连接真实 IMU」点了没反应</td><td>需 Chrome/Edge 且页面是 HTTPS 或 localhost；Firefox/Safari 不支持 Web Serial。状态行会给出明确提示。</td></tr>
+              <tr><td>选端口对话框里没有我的设备</td><td>串口被别的程序占用（SerialWeb / 厂商上位机 / 另一个标签页）。关掉它们；必要时拔插 USB。</td></tr>
+              <tr><td>连上了但一直「等待数据帧」</td><td>固件没在发帧，或波特率不匹配（默认 921600）。先用厂商上位机确认有数据。</td></tr>
+              <tr><td>状态行显示很大的「seq 丢帧」</td><td>主机侧来不及消费：帧率过高、或页面被切到后台（rAF 停摆）。降低固件帧率，或保持页面在前台。</td></tr>
+              <tr><td>「数据流中断 1.5 s」反复出现</td><td>线缆接触不良、供电不足（USB 口带不动）、或固件里有阻塞式操作。</td></tr>
+              <tr><td>帧全部被拒（帧率 0）</td><td>CRC 覆盖范围不对（必须是 data[2..26]）、长度字段不是 24、或字节序写成了大端。拿 <span class="mono">firmware/gy87.h</span> 的组帧函数逐字节对照。</td></tr>
+              <tr><td>加速度计 z 是负的 / 姿态整体反了</td><td>符号约定不符：本装置要求加计读数 = 重力投影（静止 z ≈ +9.8）。在固件里取反，不要改装置的约定。</td></tr>
+              <tr><td>磁力计读数几乎是常数</td><td>AK8963 没进连续测量模式（GY-87 常见坑）。写 CNTL1 = 0x16（16 bit、连续测量 100 Hz）再读。</td></tr>
+              <tr><td>误差曲线名字变成「vs Mahony 基准」</td><td>这是真实模式的正常语义（没有真值），不是故障。</td></tr>
+            </tbody>
+          </table></div>
+        </section>
+
+        <section id="t-page">
+          <h2>三、页面本身异常</h2>
+          <div class="tscroll"><table class="docs-table">
+            <thead><tr><th>症状</th><th>原因与处理</th></tr></thead>
+            <tbody>
+              <tr><td>部署新版后页面还是旧的</td><td>Service Worker 的导航策略是 network-first，理论上刷一次就好；若仍异常，按 Ctrl+F5 强刷，或 DevTools → Application → Service Workers → Unregister。</td></tr>
+              <tr><td>切到别的标签页回来后，时间/曲线都冻住了</td><td>浏览器会冻结后台标签页的 rAF（这是规范行为，页面本身正常）。切回前台自动恢复。</td></tr>
+              <tr><td>3D 区域黑屏或一片空白</td><td>WebGL 不可用（禁用硬件加速 / 远程桌面 / 显卡驱动被屏蔽）。此时装置会降级为「无 3D 模式」并给出说明条，曲线、面板、文档全部照常可用。</td></tr>
+              <tr><td>改了源码但浏览器没变化</td><td><span class="mono">npm run preview</span> 服务的是 <span class="mono">dist/</span>：必须先 <span class="mono">npm run build</span> 再强刷。</td></tr>
+              <tr><td>预览端口不是 4173</td><td>端口被占用时 vite 会自动换端口（4174…），以终端输出为准。</td></tr>
+              <tr><td>文档里某张图没有动画</td><td>文档里的 Canvas 演示只在文档打开<b>且停留在对应页</b>时运行（省 CPU）。切到那一页即可。</td></tr>
+              <tr><td>快捷键没反应</td><td>焦点在输入框/下拉框里时单键快捷键会让位（避免打字被劫持）；按钮/链接上只让位空格。点一下空白处再按。</td></tr>
+            </tbody>
+          </table></div>
+        </section>
+
+        <section id="t-perf">
+          <h2>四、性能与卡顿</h2>
+          <ul>
+            <li><b>帧率读数</b>在页脚右端（fps）。低于 30 fps 时优先检查：是否同时开了三块曲线面板 + 文档层 + 四元数视图播放。</li>
+            <li>文档层的四个 Canvas 演示只在对应页运转；离开该页会自动停。</li>
+            <li>曲线每 40 ms 记录一点、窗口 30 s——历史数据不会无限增长。</li>
+            <li>如果只有 3D 视图卡：把浏览器窗口缩小、或关掉「玻璃盒」（双箭头 + 每帧更新的隔行读数）。</li>
+          </ul>
+        </section>
+      </article>
+
+      <article class="doc-page" data-doc-page="glossary" hidden>
+        <h1>术语与符号索引</h1>
+        <p class="docs-lede">
+          全库的术语、符号与约定速查。每条给一句话定义与「出自哪一章」——
+          读到一半想回头查某个记号时来这里，比翻章节快。
+        </p>
+
+        <section id="gl-quat">
+          <h2>四元数与旋转</h2>
+          <div class="tscroll"><table class="docs-table">
+            <thead><tr><th>记号 / 术语</th><th>含义</th><th>出处</th></tr></thead>
+            <tbody>
+              <tr><td class="mono">q = [w, x, y, z]</td><td>单位四元数；本装置表示<b>机体系 → 世界系</b>的旋转。w 是标量（实部），(x,y,z) 是向量（虚部）</td><td>数学原理 · 四种姿态表示</td></tr>
+              <tr><td class="mono">⊗</td><td>四元数乘法（Hamilton 积）：先做右边的旋转，再做左边的（左乘复合）</td><td>数学原理 · i、j、k 到底是什么</td></tr>
+              <tr><td class="mono">q⁻¹ / q*</td><td>单位四元数的逆 = 共轭：把世界系向量转回机体系</td><td>数学原理 · 数学工具箱</td></tr>
+              <tr><td class="mono">q̇ = ½·q⊗ω</td><td>姿态微分方程：角速度 ω 如何改变 q。本装置用其精确指数积分解</td><td>数学原理 · 陀螺仪积分方程</td></tr>
+              <tr><td class="mono">Δq</td><td>单步旋转增量：Δq = [cos(θ/2), ω̂·sin(θ/2)]，θ = ‖ω‖·dt</td><td>数学原理 · 陀螺仪积分方程</td></tr>
+              <tr><td>轴角 / 等效旋转矢量</td><td>(轴单位向量 n̂, 转角 θ) 表示旋转；与四元数一一对应（q = [cos(θ/2), n̂·sin(θ/2)]）</td><td>数学原理 · 四种姿态表示</td></tr>
+              <tr><td>双重覆盖</td><td>q 与 −q 表示<b>同一个</b>旋转；姿态空间转 360° 对应 q 走 180°</td><td>数学原理 · 立体投影</td></tr>
+              <tr><td class="mono">R(q) / DCM</td><td>方向余弦矩阵：world = R(q)·body；与四元数严格等价，行主序 3×3</td><td>数学原理 · 四种姿态表示</td></tr>
+              <tr><td>Slerp / Squad</td><td>球面线性插值（恒定角速度走测地线）/ 多关键帧 C¹ 光滑插值</td><td>数学原理 · Slerp</td></tr>
+              <tr><td class="mono">qLog / qExp</td><td>四元数对数/指数映射：把旋转写成「轴×半角」的向量，反之亦然</td><td>数学原理 · Slerp</td></tr>
+              <tr><td>万向节锁</td><td>俯仰 ±90° 时横滚与偏航退化为同一自由度；欧拉参数化在该点奇异</td><td>数学原理 · 万向节锁的算法后果</td></tr>
+              <tr><td>ZYX 内旋序</td><td>本装置的欧拉角约定：R = R_z(ψ)·R_y(θ)·R_x(φ)</td><td>数学原理 · 四种姿态表示</td></tr>
+            </tbody>
+          </table></div>
+        </section>
+
+        <section id="gl-sensor">
+          <h2>传感器与误差</h2>
+          <div class="tscroll"><table class="docs-table">
+            <thead><tr><th>记号 / 术语</th><th>含义</th><th>出处</th></tr></thead>
+            <tbody>
+              <tr><td>比力</td><td>加速度计实际测量的量（真实器件沿机体「上」）；本装置取反号即「重力投影」，静止沿机体「下」</td><td>数学原理 · 传感器测量模型</td></tr>
+              <tr><td>零偏 (bias)</td><td>陀螺仪在零输入下的非零输出，<b>常数项</b>；可被积分项或状态估计吸收</td><td>滤波算法讲解 · 对比与选型</td></tr>
+              <tr><td>零偏随机游走</td><td>零偏本身随时间缓慢漂移（速率随机游走），σ 单位 °/s/√s；不可标定，只能让滤波器跟随</td><td>控制项手册 · IMU 传感器模拟</td></tr>
+              <tr><td>白噪声</td><td>每采样点独立的高斯噪声，σ 单位 °/s 或 m/s²；可通过平均与滤波压制</td><td>同上</td></tr>
+              <tr><td>Allan 方差</td><td>用 σ(τ) 的 log-log 曲线分辨噪声类型：−½ 斜率=白噪声、0=零偏不稳定性、+½=随机游走</td><td>控制项手册 · 传感器测量模型</td></tr>
+              <tr><td>刻度因子误差</td><td>输出相对真值的比例误差（速率相关）——<b>零偏估计吸收不了</b></td><td>控制项手册 · 陀螺仪刻度误差</td></tr>
+              <tr><td>三轴非正交 / 安装失准</td><td>三个敏感轴不完全垂直，导致一轴转动混入另一轴读数（速率相关）</td><td>同上</td></tr>
+              <tr><td>交叉轴敏感度</td><td>加速度计的同类误差（MPU-9250 规格 ±2%）</td><td>控制项手册 · 交叉轴敏感度</td></tr>
+              <tr><td>满量程饱和</td><td>读数超过量程后被削平在 ±range，积分器无从察觉</td><td>控制项手册 · 陀螺仪量程</td></tr>
+              <tr><td>群延迟</td><td>采样到算法之间的固定时延（传输 + 抗混叠滤波），造成 ω·τ 的姿态滞后</td><td>控制项手册 · 传感器群延迟</td></tr>
+              <tr><td>硬铁 / 软铁</td><td>磁力计的加性偏移（金属剩磁）/ 乘性畸变（铁磁材料导磁），前者推走球心、后者拉成椭球</td><td>数学原理 · 磁力计与 MARG</td></tr>
+              <tr><td>磁倾角 / 磁偏角</td><td>地磁场与水平面的夹角（本装置取 49°）/ 磁北与真北的夹角（本装置未模拟）</td><td>数学原理 · 磁力计与 MARG</td></tr>
+              <tr><td>MARG</td><td>磁力计 + 角速度 + 重力：三路齐用，偏航被磁场约束</td><td>数学原理 · 磁力计与 MARG</td></tr>
+            </tbody>
+          </table></div>
+        </section>
+
+        <section id="gl-algo">
+          <h2>算法与估计</h2>
+          <div class="tscroll"><table class="docs-table">
+            <thead><tr><th>记号 / 术语</th><th>含义</th><th>出处</th></tr></thead>
+            <tbody>
+              <tr><td>互补滤波 / α</td><td>用陀螺积分做高频、加计倾角做低频的加权融合；α 是倾角的融合速率（1/s）</td><td>滤波算法讲解 · 互补滤波</td></tr>
+              <tr><td class="mono">Mahony Kp / Ki</td><td>误差叉积的比例 / 积分反馈增益；Kp 决定带宽，Ki 让零偏可被吸收</td><td>滤波算法讲解 · Mahony</td></tr>
+              <tr><td class="mono">Madgwick β</td><td>梯度下降步长；β = √(3/4)·ζ̄（ζ̄ 为陀螺误差模长量级）</td><td>滤波算法讲解 · Madgwick</td></tr>
+              <tr><td>误差叉积 e = a × ĝ</td><td>实测重力方向与预测重力方向的叉积，方向即「该往哪边修正」，大小随夹角增大</td><td>数学原理 · 叉积误差</td></tr>
+              <tr><td>新息 (innovation)</td><td>实测 − 预测。卡尔曼用它的马氏距离做野值判定；玻璃盒里显示为「重力新息角」</td><td>滤波算法讲解 · 卡尔曼</td></tr>
+              <tr><td>ESKF / MEKF</td><td>误差状态卡尔曼 / 乘性误差卡尔曼：状态写成「标称姿态 ⊕ 小误差」，误差维数 3 而非 4</td><td>滤波算法讲解 · 卡尔曼完整推导</td></tr>
+              <tr><td class="mono">P, Q, R, K</td><td>协方差 / 过程噪声 / 观测噪声 / 增益。K = P·Hᵀ·(H·P·Hᵀ+R)⁻¹</td><td>同上</td></tr>
+              <tr><td>Joseph 形式</td><td>P ← (I−KH)P(I−KH)ᵀ + KRKᵀ，保证任意 K 下 P 对称正定</td><td>同上</td></tr>
+              <tr><td>可观性</td><td>某个状态能否从观测中反推出来。加计只给 2 个自由度 → 偏航不可观</td><td>数学原理 · 可观性</td></tr>
+              <tr><td>观测门控</td><td>观测不可信时拒绝使用（幅度/方向/新息三类），被拒帧退化为纯积分</td><td>滤波算法讲解 · 对比与选型</td></tr>
+              <tr><td>滞回恢复窗</td><td>拒绝太久就自动放行一段时间重新收敛（本装置默认关，可开）</td><td>控制项手册 · 拒绝过久自动恢复</td></tr>
+              <tr><td>启动增益 ramp</td><td>重置后把修正增益临时放大再衰减，用于初始偏差的快速收敛</td><td>数学原理 · 工程实践备忘</td></tr>
+              <tr><td>粗对准 / 精对准</td><td>静止时用加计+磁力计直接摆出初始姿态 / 交给滤波器慢慢收敛</td><td>同上</td></tr>
+              <tr><td>圆锥 / 划船效应</td><td>同时存在的旋转与线振荡不可交换而累积的算法误差；靠更高更新率或圆锥补偿算法压制</td><td>数学原理 · 圆锥与划船效应</td></tr>
+              <tr><td>Wahba 问题 / TRIAD</td><td>用两组非共线向量观测直接求姿态（一次性最优解），是滤波之外的经典路线</td><td>数学原理 · 工程实践备忘</td></tr>
+            </tbody>
+          </table></div>
+        </section>
+
+        <section id="gl-coord">
+          <h2>坐标、单位与实现约定</h2>
+          <div class="tscroll"><table class="docs-table">
+            <thead><tr><th>记号 / 术语</th><th>含义</th><th>出处</th></tr></thead>
+            <tbody>
+              <tr><td>NED</td><td>世界系：x 北、y 东、z 下（航空惯导通用约定）</td><td>控制项手册 · 坐标系与约定</td></tr>
+              <tr><td>FRD（机体系）</td><td>x 前、y 右、z 下。因此 z 轴箭头指向地面<b>不是 bug</b></td><td>同上</td></tr>
+              <tr><td>显示坐标系</td><td>把 NED 绕显示 X 轴 +90° 得到：X=北、Y=上、Z=东（基变换 S = Rx(90°)）</td><td>同上</td></tr>
+              <tr><td class="mono">dt / dtAnim</td><td>物理时间轴（≤50 ms）与动画时间轴（≤250 ms），刻意分开</td><td>控制项手册 · 快速上手</td></tr>
+              <tr><td class="mono">state.simTime</td><td>界面/曲线/统计统一使用的时钟（模拟模式 = 世界时间；真实模式按固件 tick 累加）</td><td>同上</td></tr>
+              <tr><td>Hamilton 约定</td><td>ij = k；本装置、Eigen、ROS、SciPy 都用它（JPL/Shuster 用 ij = −k，直接对代码时最容易踩）</td><td>数学原理 · 四种姿态表示</td></tr>
+              <tr><td>μT / °/s / m s⁻²</td><td>磁场强度 / 角速度 / 加速度单位；固件帧里分别放大 100 / 10 / 100 倍存成整数</td><td>本页 · 硬件与固件</td></tr>
+            </tbody>
+          </table></div>
+        </section>
+      </article>
+
+      <article class="doc-page" data-doc-page="refs" hidden>
+        <h1>参考文献与延伸阅读</h1>
+        <p class="docs-lede">
+          本装置的公式与工程口径都对照过下列资料。每条注明<b>它对应装置的哪一处</b>——
+          这样你可以顺着「装置里的某个现象」去找理论出处，而不是漫无目的地读文献。
+        </p>
+        <p class="hint">外链会在新标签页打开；若打不开，可把标题粘到搜索引擎（论文标题通常比链接更稳）。</p>
+
+        <section id="r-core">
+          <h2>核心数学与算法</h2>
+          <div class="tscroll"><table class="docs-table">
+            <thead><tr><th>文献</th><th>对应装置哪里</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>Joan Solà《Quaternion kinematics for the error-state Kalman filter》<br /><a href="https://arxiv.org/abs/1711.02508" target="_blank" rel="noopener">arXiv:1711.02508</a></td>
+                <td>卡尔曼完整推导页的全部结构（乘性误差状态、Φ 一阶截断、误差注入）；双重覆盖与 Slerp 短路径处理的规范写法</td>
+              </tr>
+              <tr>
+                <td>Madgwick《An efficient orientation filter for inertial and inertial/magnetic sensor arrays》(2011 内部报告)</td>
+                <td>Madgwick 详解与完整推导页；「完整 MARG」的磁倾角补偿参考场 b = [0, b<sub>x</sub>, 0, b<sub>z</sub>] 与 β = √(3/4)·ζ̄</td>
+              </tr>
+              <tr>
+                <td>Mahony, Hamel, Pflimlin《Nonlinear Complementary Filters on the Special Orthogonal Group》IEEE TAC 53(5), 2008<br /><a href="https://doi.org/10.1109/TAC.2008.923738" target="_blank" rel="noopener">doi:10.1109/TAC.2008.923738</a></td>
+                <td>Mahony 详解的原始出处；e = a × ĝ 的与 P/I 分工、以及 k₁/k₂ 传感器加权</td>
+              </tr>
+              <tr>
+                <td>Markley《Multiplicative vs. Additive Filtering for Spacecraft Attitude Determination》</td>
+                <td>为什么用乘性误差状态（加性会让模长不确定度与姿态不确定度纠缠）</td>
+              </tr>
+              <tr>
+                <td>Shoemake《Animating Rotation with Quaternion Curves》SIGGRAPH '85</td>
+                <td>Slerp / Squad 的原始来源；四元数插值在动画里的用法</td>
+              </tr>
+              <tr>
+                <td>Welch &amp; Bishop《An Introduction to the Kalman Filter》(UNC TR 95-041)</td>
+                <td>卡尔曼三层直觉里的「两台秤最优加权」与协方差传播</td>
+              </tr>
+              <tr>
+                <td>Kok, Hol, Schön《Using Inertial Sensors for Position and Orientation Estimation》<br /><a href="https://arxiv.org/abs/1704.06053" target="_blank" rel="noopener">arXiv:1704.06053</a></td>
+                <td>工程实践备忘里「姿态解算在完整导航系统中的位置」、死推算误差随时间增长的量级</td>
+              </tr>
+              <tr>
+                <td>Wu《iNavFIter: Next-Generation Inertial Navigation Computation Based on Functional Iteration》<br /><a href="https://arxiv.org/abs/1905.11615" target="_blank" rel="noopener">arXiv:1905.11615</a></td>
+                <td>「圆锥与划船效应」一章：运动不可交换性、圆锥/划船/滚动误差的定义与补偿思路</td>
+              </tr>
+            </tbody>
+          </table></div>
+        </section>
+
+        <section id="r-hw">
+          <h2>器件、标定与工程实践</h2>
+          <div class="tscroll"><table class="docs-table">
+            <thead><tr><th>文献</th><th>对应装置哪里</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>NXP AN4248《Implementing a Tilt-Compensated eCompass》</td>
+                <td>倾斜补偿磁航向公式（互补滤波与简化 MARG 都在用）</td>
+              </tr>
+              <tr>
+                <td>NXP AN4246《Calibrating an eCompass in the Presence of Hard- and Soft-Iron Interference》</td>
+                <td>磁力计校准面板的球拟合思路（本装置实现的是对角线软铁入门版）</td>
+              </tr>
+              <tr>
+                <td>Analog Devices AN-1057《Accelerometer and Tilt Sensing》<br /><a href="https://www.analog.com/media/en/technical-documentation/application-notes/AN-1057.pdf" target="_blank" rel="noopener">analog.com AN-1057</a></td>
+                <td>「零偏 50 mg → 倾角误差约 2.9°」这类可引用的量级；±1g 两点标定；转动机械对加计的 AC 污染</td>
+              </tr>
+              <tr>
+                <td>teslabs《Calibrating a magnetometer》<br /><a href="https://teslabs.com/articles/magnetometer-calibration/" target="_blank" rel="noopener">teslabs.com</a></td>
+                <td>地磁场模型 h₀ = F[cosI·cosD, cosI·sinD, sinI] 与磁偏角/磁倾角在标定里的角色</td>
+              </tr>
+              <tr>
+                <td>NOAA NCEI 世界地磁模型（WMM）<br /><a href="https://www.ncei.noaa.gov/products/world-magnetic-model" target="_blank" rel="noopener">ncei.noaa.gov</a></td>
+                <td>「磁偏角与真北」一节：declination / inclination / 年变化的官方定义与查询入口</td>
+              </tr>
+              <tr>
+                <td>InvenSense MPU-9250 产品规格书 PS-MPU-9250A-01</td>
+                <td>器件预设（噪声密度换算）、交叉轴 ±2%、非线性 ±0.5%、AK8963 磁分辨率 0.6 μT/LSB</td>
+              </tr>
+              <tr>
+                <td>TDK InvenSense ICM-42688-P 产品页</td>
+                <td>器件预设中的现役低噪声档</td>
+              </tr>
+              <tr>
+                <td>Bosch BNO055 数据手册</td>
+                <td>「片上融合 vs 软件融合」小节：7 种融合模式与黑盒取舍</td>
+              </tr>
+              <tr>
+                <td>VectorNav《Inertial Navigation Primer》</td>
+                <td>粗对准/精对准、比力与加速度的区别</td>
+              </tr>
+              <tr>
+                <td>handwiki「Allan variance」<br /><a href="https://handwiki.org/wiki/Allan_variance" target="_blank" rel="noopener">handwiki.org</a></td>
+                <td>Allan 曲线各段斜率（白噪声 τ<sup>−1/2</sup>、闪烁 τ⁰、随机游走 τ<sup>+1/2</sup>）</td>
+              </tr>
+            </tbody>
+          </table></div>
+        </section>
+
+        <section id="r-teach">
+          <h2>教学设计与其他实现</h2>
+          <div class="tscroll"><table class="docs-table">
+            <thead><tr><th>文献</th><th>对应装置哪里</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>Bartosz Ciechanowski 的交互长文（如 GPS、Tesseract）<br /><a href="https://ciechanow.ski/" target="_blank" rel="noopener">ciechanow.ski</a></td>
+                <td>本装置「文档内嵌 Canvas 演示」「渐进式叙事」的设计参照</td>
+              </tr>
+              <tr>
+                <td>Bzarg《How a Kalman filter works, in pictures》<br /><a href="https://www.bzarg.com/p/how-a-kalman-filter-works-in-pictures/" target="_blank" rel="noopener">bzarg.com</a></td>
+                <td>卡尔曼「三层直觉」与「一维两台秤 playground」的讲解范式（高斯斑块叠加 + 协方差椭圆）</td>
+              </tr>
+              <tr>
+                <td>Nicky Case / Explorable Explanations<br /><a href="https://explorabl.es/" target="_blank" rel="noopener">explorabl.es</a></td>
+                <td>「先失败后补救」的叙事结构与可探索解释的方法论</td>
+              </tr>
+              <tr>
+                <td>eater.net/quaternions（Ben Eater 可视化四元数）<br /><a href="https://eater.net/quaternions" target="_blank" rel="noopener">eater.net/quaternions</a></td>
+                <td>四元数视图的 4D 立体投影交互思路</td>
+              </tr>
+              <tr>
+                <td>Kevin Godden 的 ahrs 库文档<br /><a href="https://ahrs.readthedocs.io/" target="_blank" rel="noopener">ahrs.readthedocs.io</a></td>
+                <td>Mahony ECF 的方程形式与 k₁/k₂ 权重、Madgwick 的 b 向量构造、Wahba/TRIAD/QUEST 家族清单</td>
+              </tr>
+              <tr>
+                <td>xioTechnologies/Fusion（现代 AHRS C 库）<br /><a href="https://github.com/xioTechnologies/Fusion" target="_blank" rel="noopener">github.com/xioTechnologies/Fusion</a></td>
+                <td>启动增益 ramp、加速度拒绝 10° + 5 秒恢复窗、磁拒绝/恢复的同构机制</td>
+              </tr>
+              <tr>
+                <td>i2Nav《惯性导航姿态算法》讲义 / KF-GINS<br /><a href="https://github.com/i2Nav-WHU/KF-GINS" target="_blank" rel="noopener">github.com/i2Nav-WHU/KF-GINS</a></td>
+                <td>四种姿态表示框架、ESKF 状态扩展路线图（15 态 / 24 态）</td>
+              </tr>
+              <tr>
+                <td>PX4 / ArduPilot 官方文档（EKF2 / EKF3）</td>
+                <td>观测可信度管理的工程口径、初始对准门槛、24 状态估计器的分工</td>
+              </tr>
+            </tbody>
+          </table></div>
+        </section>
+      </article>
+
+      <article class="doc-page" data-doc-page="about" hidden>
+        <h1>关于本装置</h1>
+        <p class="docs-lede">
+          版本、技术口径、<b>已知的简化与偏离</b>、变更日志与致谢。
+          教学装置的可信度取决于它对自己边界说得有多清楚，所以这一页刻意写得直白。
+        </p>
+
+        <section id="a-scope">
+          <h2>它是什么、不是什么</h2>
+          <p>
+            一个<b>纯前端、无后端、零密钥</b>的交互式教学装置：模拟或真实串口 IMU 喂数据，
+            五种姿态解算算法同屏对比误差，配三个 3D 视图（四轴姿态 / 万向节锁 / 四元数）与一套应用内文档。
+            所有计算都在浏览器本地完成，没有服务器、没有遥测。
+          </p>
+          <p class="plain">
+            <b>它不是</b>飞控、不是能直接上飞机的姿态估计器、也不是完整的惯导系统。
+            它是一个把「教科书公式」变成「可调、可观察、可复现的现场」的教具——
+            目标读者是第一次接触姿态解算的学生，以及想快速把算法现象调出来的工程师。
+          </p>
+        </section>
+
+        <section id="a-deviations">
+          <h2>已知简化与偏离（诚实清单）</h2>
+          <div class="tscroll"><table class="docs-table">
+            <thead><tr><th>项</th><th>本装置的做法</th><th>真实工程的做法 / 影响</th></tr></thead>
+            <tbody>
+              <tr><td>地磁场模型</td><td>固定 50 μT、磁倾角 49°、<b>磁偏角按 0 处理</b>（磁北即真北）</td><td>实际需按经纬度与日期查 WMM（磁偏角在中国大部分地区可达 ±10° 量级）。所以本装置给出的「偏航」是磁航向，不是真航向</td></tr>
+              <tr><td>默认磁修正形态</td><td><b>简化版</b>：磁只约束偏航（可用「磁修正形态」切到完整 MARG）</td><td>文献标准做法的参考场由测量本身构造（磁倾角补偿），干净磁场下两者等价，磁场脏时完整版明显更优（自检实测 8.5° → 1.0°）</td></tr>
+              <tr><td>卡尔曼状态</td><td>6 维 [δθ, δb]（姿态 + 陀螺零偏）</td><td>组合导航级是 15 态起步（加速度计零偏、速度、位置）乃至 24 态。本装置是它的姿态子集，结构同源、维度更小</td></tr>
+              <tr><td>卡尔曼数值实现</td><td>Φ ≈ I + A·dt 一阶截断；40° 固定角门控；误差注入后不重置协方差</td><td>文献用矩阵指数/RK4、χ² 马氏距离门控、注入后 P ← G·P·Gᵀ。教学够用，工程上是明确的简化</td></tr>
+              <tr><td>磁力计标定</td><td>球拟合 + <b>对角</b>软铁缩放</td><td>完整做法是 3×3 椭球拟合（含交叉项与非正交安装误差）。覆盖度不足时对角线近似会把误差抄进参数（实测可见：点云没铺满时标定后反而更差）</td></tr>
+              <tr><td>仿真时间模型</td><td>模拟模式固定 500 Hz 定步长；装置不模拟地球自转、运输率、重力模型随纬度变化</td><td>高精度惯导必须补偿这些项（地球自转 15°/h、重力随纬度变化 ~0.5%）。本装置的教学场景里它们远小于噪声</td></tr>
+              <tr><td>圆锥 / 划船效应</td><td>装置用精确指数积分，且不模拟高频角振荡与线振荡同时存在</td><td>真实高动态场景需要圆锥补偿算法；装置只在文档里说明，没有可调现场</td></tr>
+              <tr><td>传感器时延</td><td>用「群延迟」滑块一阶建模（整帧延后）</td><td>真实器件的时延还包含非整数倍采样周期与抖动；本模型够用来看清 ω·τ 的主导效应</td></tr>
+              <tr><td>无 GNSS / 视觉 / 里程计</td><td>只有 IMU 三路</td><td>位置与速度不可得；偏航只能靠磁力计（或静止时的粗对准）。这是本装置的边界，不是缺陷</td></tr>
+            </tbody>
+          </table></div>
+        </section>
+
+        <section id="a-arch">
+          <h2>技术口径</h2>
+          <ul>
+            <li><b>技术栈</b>：TypeScript + Vite；Three.js 是唯一运行时依赖（程序化建模，无外部模型文件）；数学排版只用了 KaTeX 的字体（无其运行时）；图表是手写 Canvas 2D；无前端框架。</li>
+            <li><b>坐标系</b>：世界 NED、机体 FRD、四元数为机体系→世界系；显示坐标 X=北、Y=上、Z=东。</li>
+            <li><b>数值</b>：姿态积分用精确指数映射（不是一阶欧拉）；两姿态夹角用相对四元数的 atan2（零角附近分辨率 ~1e-15 而非 acos 的 1e-8）；欧拉角在 ±90° 处按通行约定取 roll := 0。</li>
+            <li><b>验证</b>：类型检查 + 86 项数值自检 + 10 项三维场景几何自检 + 12 项 HTML↔TS 契约检查 + 浏览器端到端冒烟测试。所有断言都可在本地复现（见页脚与仓库 README）。</li>
+            <li><b>隐私</b>：无网络请求、无分析脚本、无 Cookie；串口数据只在你本机内存里流转。Service Worker 只缓存本站静态资源。</li>
+          </ul>
+        </section>
+
+        <section id="a-changelog">
+          <h2>变更日志</h2>
+          <p>面向使用者的变更摘要（开发视角的详细记录在仓库 <span class="mono">docs/PROJECT-STATE.md</span>）。</p>
+          <div class="tscroll"><table class="docs-table">
+            <thead><tr><th>版本 / 轮次</th><th>内容</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>本轮（教材深化轮）</td>
+                <td>
+                  新增「万向节锁的算法后果」剧本（互补滤波在锁点被拽偏、四元数算法无伤）与两个穿越剧本；
+                  新增「完整 MARG」（磁倾角补偿）可选形态；门控阈值可调 + 滞回恢复窗开关；
+                  陀螺量程饱和 / 刻度误差 / 安装失准 / 传感器群延迟 / 解算频率五个器件级控制；
+                  修正 qToEuler 在 ±90° 处返回非等价三元组的问题；
+                  文档新增 6 个模块（实验与练习 / 硬件与固件 / 排障手册 / 术语与符号 / 参考文献 / 关于）
+                  与全文搜索；4D 投影剖面图改为「含 q 的大圆平面」并修掉宽视口下溢出的版式问题。
+                </td>
+              </tr>
+              <tr><td>交互重做轮</td><td>右侧栏手风琴 + 曲线三块独立折叠（修掉折叠留空洞的真 bug）+ 万向环架与四元数视图重建 + 动画/物理时间轴分离</td></tr>
+              <tr><td>全面优化轮</td><td>真实串口模式重做（帧队列 + 固件 tick 时钟）、精确指数积分、磁力计校准、CSV 导出、深链分享、PWA、80 项自检</td></tr>
+              <tr><td>外部资料落地轮</td><td>器件预设、初始化对准 + 启动增益 ramp、观测门控（幅度 + 方向）、Allan 方差演示、Squad、立体投影三段式</td></tr>
+              <tr><td>v0.1.0（首次上线）</td><td>3D 可视化 + 模拟 IMU + 四算法 + 双图表 + 万向节锁环架 + 玻璃盒 + 四元数视图 + 文档页</td></tr>
+            </tbody>
+          </table></div>
+        </section>
+
+        <section id="a-credits">
+          <h2>致谢与出处</h2>
+          <p>
+            本装置的公式与工程口径对照过 Dan Simon、Joan Solà、Robert Mahony、Sebastian Madgwick、Markley、
+            Shoemake 等人的原始文献，以及 i2Nav（武大）惯导讲义、KF-GINS、xioTechnologies/Fusion、
+            PX4 与 ArduPilot 的工程文档——完整清单见「参考文献」模块。
+          </p>
+          <p class="plain">
+            教学叙事的组织方式受 Bartosz Ciechanowski 的交互长文、Nicky Case 的 Explorable Explanations
+            与 Ben Eater 的四元数可视化启发。三维可视化部分使用 Three.js（MIT）。
+          </p>
+        </section>
+      </article>
 
       </div>
       <aside class="docs-chapter-toc" id="docs-chapter-toc" aria-label="本页目录"></aside>

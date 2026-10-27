@@ -161,6 +161,101 @@ export const EXPERIMENTS: ExperimentSpec[] = [
     view: "quat",
     reset: false,
   },
+  {
+    id: "lockAlgo",
+    name: "万向节锁的算法后果",
+    tag: "几何×算法",
+    observe:
+      "俯仰<b>精确</b>停在 90°（重力沿机体 x 轴，加速度计对横滚完全失去信息），再让横滚移动。" +
+      "<b>橙色（互补滤波，活在欧拉角空间）的姿态被一路拽走（自检实测 180°）</b>，" +
+      "而蓝/绿（Mahony / Madgwick，活在四元数空间）稳在 <b>0.1° 以内</b>——" +
+      "它们在锁点上只是「停止修正」，靠陀螺积分继续走，属于优雅降级。" +
+      "本实验把噪声全部归零，好让现象干净；把「陀螺仪噪声」调到 0.2 再看，" +
+      "互补的偏差反而会变小（噪声把那套错误的修正方向「抖散」了）——误差不是消失了，是被掩盖了。" +
+      "把陀螺仪零偏调到 1°/s：四元数算法也开始漂（锁点上没有观测能拉住它），但仍远好于互补。",
+    sliders: {
+      "imu-gyro-bias": 0, "imu-gyro-noise": 0, "imu-accel-noise": 0, "imu-mag-noise": 0,
+      "imu-lin-accel": 0, "imu-vibration": 0,
+    },
+    checks: { "telemetry-toggle": true, "mag-enable": false },
+    selects: { "scenario-select": "pitchHold", "source-select": "comp" },
+  },
+  {
+    id: "sweep90",
+    name: "穿越 ±90°",
+    tag: "几何×算法",
+    observe:
+      "俯仰从 0° 慢扫到 180° 再回来，两次穿过万向节锁。" +
+      "看误差曲线的形状：互补滤波在穿越点出现尖峰（欧拉重建在锁点邻域条件数急剧恶化），" +
+      "四元数算法基本平坦。与「停驻 90°」剧本对照——一个是穿越的暂态，一个是持续命中奇点。",
+    sliders: { "imu-gyro-bias": 0.5, "imu-gyro-noise": 0.1, "imu-lin-accel": 0.3, "imu-vibration": 0.1 },
+    checks: { "telemetry-toggle": false },
+    selects: { "scenario-select": "pitchSweep", "source-select": "comp" },
+  },
+  {
+    id: "margFull",
+    name: "完整 MARG vs 简化",
+    tag: "磁力计",
+    observe:
+      "「磁修正形态」切到<b>完整 MARG</b>：用整条磁场向量做误差，参考场由测量本身构造（磁倾角自洽）。" +
+      "先把「磁干扰强度」拉到 0.5，对比偏航曲线——简化版被交变干扰牵着走，完整版几乎不受影响" +
+      "（自检实测：均值 8.5° → 1.0°）。再把干扰归零：两者在干净磁场下完全等价，" +
+      "说明完整版不是「更强」，而是「对倾角失配更宽容」。",
+    sliders: { "imu-mag-disturb": 0.5, "imu-hard-iron": 0.3, "imu-mag-noise": 1, "imu-gyro-bias": 0.5 },
+    checks: { "mag-enable": true, "telemetry-toggle": true },
+    selects: { "mag-mode": "full", "scenario-select": "composite", "source-select": "mahony" },
+  },
+  {
+    id: "gateHysteresis",
+    name: "门控滞回的双刃",
+    tag: "抗扰",
+    observe:
+      "持续单向线加速度（协调转弯）会让观测被<b>连续拒绝</b>。工业库（Fusion）的做法是：" +
+      "拒绝占比超 90% 持续 5 秒就判「可能是我自己偏了」，开 1.5 秒恢复窗放行观测。" +
+      "打开「拒绝过久自动恢复」开关等 6 秒：互补滤波的姿态会被污染拉走——" +
+      "这就是门控的取舍：拒绝观测保短期准确，但拒绝太久会失去纠错能力。关掉开关则是「拒绝到底」。",
+    sliders: { "imu-lin-accel": 4, "imu-vibration": 0.1, "imu-gyro-bias": 0.5, "imu-mag-noise": 0.5, "gate-deg": 20, "gate-mag": 35 },
+    checks: { "gate-toggle": true, "gate-recovery": true, "telemetry-toggle": true },
+    selects: { "scenario-select": "composite", "source-select": "comp" },
+  },
+  {
+    id: "gyroSaturation",
+    name: "陀螺仪量程饱和",
+    tag: "器件",
+    observe:
+      "把「陀螺仪量程」拉到 ±150 °/s（真实器件的低档），再跑剧烈机动：" +
+      "峰值角速度超过量程的瞬间读数被<b>削平</b>，积分器拿到一串「恒定最大速率」→" +
+      "姿态大幅跑偏且<b>无法察觉</b>。切到 IMU 原始波形页签能看到那条平顶。" +
+      "工程上靠量程告警 + 抬高陀螺噪声让滤波器少信积分项。",
+    checks: { "telemetry-toggle": false },
+    selects: { "imu-gyro-range": "150", "scenario-select": "violent", "source-select": "mahony" },
+  },
+  {
+    id: "sensorDelay",
+    name: "传感器群延迟",
+    tag: "器件",
+    observe:
+      "真实 MEMS 有传输 + 抗混叠滤波延迟，算法拿到的是过时数据。把「传感器群延迟」拉到 25 ms：" +
+      "机动中姿态滞后约 <b>ω·τ</b>（峰值 240°/s × 0.025 s ≈ 6°）。" +
+      "看纯陀螺仪积分那条红线——它本该没有误差（零偏噪声都设为 0），现在整条抬起来了，" +
+      "抬升高度就是 ω·τ。控制回路里这就是被吃掉的相位裕度。",
+    sliders: { "imu-gyro-bias": 0, "imu-gyro-noise": 0, "imu-lin-accel": 0.3, "imu-vibration": 0.2, "imu-delay": 25 },
+    checks: { "telemetry-toggle": false },
+    selects: { "scenario-select": "violent", "source-select": "pure" },
+  },
+  {
+    id: "solveRate",
+    name: "解算频率",
+    tag: "实现",
+    observe:
+      "仿真仍是 500 Hz，但把「解算频率」降到 50 Hz——估计器每 20 ms 才吃一次数据。" +
+      "本装置用的是<b>精确指数积分</b>（不是一阶欧拉），所以低频率下仍能跟住大部分机动；" +
+      "高速旋转时每步转过的角度太大，误差才开始抬头。" +
+      "这就是飞控姿态环要跑在数百赫兹的原因。",
+    sliders: { "imu-gyro-bias": 0.5, "imu-gyro-noise": 0.2, "imu-lin-accel": 0.5, "imu-vibration": 0.2 },
+    checks: { "telemetry-toggle": false },
+    selects: { "solve-rate": "50", "scenario-select": "violent", "source-select": "madg" },
+  },
 ];
 
 /** 按 id 查实验（未知 id 返回 undefined，便于 UI 安全处理） */

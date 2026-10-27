@@ -210,3 +210,40 @@
   src: url('/fonts/fira-sans-600-latin.woff2') format('woff2');
   unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
+
+/* --------------------------------------------------------------------------
+   KaTeX 数学字体的**子集**（只保留 KaTeX_Main 一族）
+   --------------------------------------------------------------------------
+   文档公式块只需要 KaTeX_Main 的衬线字形（见 style.css 的 .formula）。
+   原先进的是 katex/dist/katex.min.css——它声明了 20 个字族 × woff2/woff/ttf
+   三种格式共 59 个文件（约 1.17 MB），而本装置一个 KaTeX 运行时都没用。
+   这里手写 4 个字面（常规/斜体/粗体/粗斜体，仅 woff2），产物里只留 4 个文件。
+   -------------------------------------------------------------------------- */
+@font-face {
+  font-family: "KaTeX_Main";
+  src: url("/fonts/KaTeX_Main-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "KaTeX_Main";
+  src: url("/fonts/KaTeX_Main-Italic.woff2") format("woff2");
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: "KaTeX_Main";
+  src: url("/fonts/KaTeX_Main-Bold.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "KaTeX_Main";
+  src: url("/fonts/KaTeX_Main-BoldItalic.woff2") format("woff2");
+  font-weight: 700;
+  font-style: italic;
+  font-display: swap;
+}

@@ -10,7 +10,8 @@ import type { Quat } from "../core/quat";
 import type { UiView } from "../ui/mode";
 
 export interface SceneHandles {
-  renderer: THREE.WebGLRenderer;
+  /** WebGL 渲染器；环境不支持 WebGL 时为 null（场景对象仍在，只是不渲染） */
+  renderer: THREE.WebGLRenderer | null;
   scene: THREE.Scene;
   camera: THREE.PerspectiveCamera;
   controls: OrbitControls;
@@ -35,6 +36,10 @@ export interface SceneHandles {
   /** 等效旋转轴指示（轴角表示，青色）：挂场景、从机体中心沿世界系旋转轴伸出，
    *  长度随转角缩放。由 main.ts 每帧更新（开关控制显隐） */
   axisArrow: THREE.ArrowHelper;
+  /** 卡尔曼不确定度椭球（机体系 3σ 姿态协方差）：挂四轴，随玻璃盒开关显隐 */
+  covEllipsoid: THREE.Mesh;
+  /** 椭球的线框叠层（与 covEllipsoid 共用变换，只为形状可读） */
+  covWire: THREE.Mesh;
 }
 
 /** 两个视图各自的取景 */
@@ -46,14 +51,35 @@ const VIEW_FRAMING: Record<UiView, { target: [number, number, number]; pos: [num
 };
 
 export function createScene(container: HTMLElement): SceneHandles {
-  const renderer = new THREE.WebGLRenderer({ antialias: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-  renderer.outputColorSpace = THREE.SRGBColorSpace;
-  renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.08;
-  renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-  container.appendChild(renderer.domElement);
+  /**
+   * WebGL 兜底：拿不到上下文时 `new WebGLRenderer()` 会抛异常。
+   * 这里降级为「无 3D 的可用应用」——所有场景对象照常构建（THREE 的 Group/Mesh/
+   * ArrowHelper 都不需要 GL 上下文），只把 renderer 置空：渲染调用被跳过，
+   * 曲线、统计、文档演示、面板交互全部照常运转。
+   */
+  let renderer: THREE.WebGLRenderer | null = null;
+  let canvasEl: HTMLElement;
+  try {
+    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.08;
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    container.appendChild(renderer.domElement);
+    canvasEl = renderer.domElement;
+  } catch (err) {
+    console.error("WebGL 上下文创建失败，3D 视图降级为停用：", err);
+    const ph = document.createElement("div");
+    ph.className = "no-webgl-note";
+    ph.innerHTML =
+      `<b>此环境无法创建 WebGL 上下文</b>，3D 视图（四轴 / 万向环架 / 四元数）已停用。<br />` +
+      `曲线、评测表、算法内部量、磁力计校准、实验库与文档页不受影响，仍可正常使用。<br />` +
+      `<span class="dim">常见原因：浏览器禁用硬件加速、远程桌面 / 虚拟机无 GPU、显卡驱动被列入屏蔽名单。</span>`;
+    container.appendChild(ph);
+    canvasEl = ph;
+  }
 
   const scene = new THREE.Scene();
   // 与 CSS 设计令牌 --bg (#030712) 保持一致，让 3D 视口与页面无缝衔接
@@ -62,12 +88,15 @@ export function createScene(container: HTMLElement): SceneHandles {
 
   // 环境光照（IBL）：程序化房间环境 → PMREM。所有 MeshStandard/Physical 材质
   // 自动获得反射与 ambient，金属件立刻有了「质感」——无需外部 HDR 文件。
-  const pmrem = new THREE.PMREMGenerator(renderer);
-  const envScene = new RoomEnvironment();
-  scene.environment = pmrem.fromScene(envScene, 0.04).texture;
-  scene.environmentIntensity = 0.35; // 深色舞台基调，反射作点缀而非主光
-  envScene.dispose();
-  pmrem.dispose();
+  // 无渲染器时跳过（PMREMGenerator 必须有 GL 上下文）
+  if (renderer) {
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    const envScene = new RoomEnvironment();
+    scene.environment = pmrem.fromScene(envScene, 0.04).texture;
+    scene.environmentIntensity = 0.35; // 深色舞台基调，反射作点缀而非主光
+    envScene.dispose();
+    pmrem.dispose();
+  }
 
   const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
   camera.position.set(1.9, 1.35, 2.4);
@@ -128,6 +157,29 @@ export function createScene(container: HTMLElement): SceneHandles {
   ghost.group.position.y = 1.0;
   scene.add(ghost.group);
 
+  // 卡尔曼的「不确定度椭球」：3×3 姿态协方差块特征分解后的可视化。
+  // 挂在四轴上（不是场景上）——协方差定义在**机体系**，椭球必须跟着机体转，
+  // 这样它的形状才代表「机体各轴方向上的姿态不确定度」。半透明、深色舞台里可辨认。
+  // 两个网格共用同一个 4×4 变换：实心面给「体量」，线框给「形状」。
+  // 只用实心面在深色舞台上太糊、只用线框又太虚，叠起来最接近教科书里的置信椭球。
+  const covGeo = new THREE.SphereGeometry(1, 18, 12);
+  const covEllipsoid = new THREE.Mesh(
+    covGeo,
+    new THREE.MeshBasicMaterial({
+      color: 0xe05fb0, transparent: true, opacity: 0.14, depthWrite: false, side: THREE.DoubleSide,
+    }),
+  );
+  const covWire = new THREE.Mesh(
+    covGeo,
+    new THREE.MeshBasicMaterial({ color: 0xff9ad8, wireframe: true, transparent: true, opacity: 0.3, depthWrite: false }),
+  );
+  for (const m of [covEllipsoid, covWire]) {
+    m.matrixAutoUpdate = false;
+    m.visible = false;
+    m.renderOrder = 2;
+    quad.group.add(m);
+  }
+
   // 玻璃盒：两根重力方向箭头，挂在显示四轴上随机体一起转。
   // 白色 = 算法预测的「下」（Rᵀ·ẑ）；品红 = 加计实测的「下」。
   // 收敛时两箭头重合；纯积分时白箭头缓慢转偏、品红纹丝不动——漂移的直观形态。
@@ -180,7 +232,7 @@ export function createScene(container: HTMLElement): SceneHandles {
   scene.add(quatView.group);
   quatView.setInterpolation([0, 0, 0], [140, 70, 160], 0);
 
-  const controls = new OrbitControls(camera, renderer.domElement);
+  const controls = new OrbitControls(camera, canvasEl);
   controls.target.set(0, 0.9, 0);
   controls.enableDamping = true;
   controls.dampingFactor = 0.08;
@@ -217,13 +269,13 @@ export function createScene(container: HTMLElement): SceneHandles {
     if (w === 0 || h === 0) return;
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
-    renderer.setSize(w, h);
+    renderer?.setSize(w, h);
   };
   resize();
   new ResizeObserver(resize).observe(container);
 
   return {
     renderer, scene, camera, controls, quad, ghost, gimbal, quatView, gravityArrows, headingArrow, axisArrow,
-    toDisplay, setView, syncVisibility,
+    covEllipsoid, covWire, toDisplay, setView, syncVisibility,
   };
 }

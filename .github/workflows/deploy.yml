@@ -3,6 +3,8 @@ name: Deploy to Cloudflare Workers
 on:
   push:
     branches: [master]
+  pull_request:
+    branches: [master]
   workflow_dispatch: {} # 允许在 GitHub 网页上手动触发
 
 permissions:
@@ -10,7 +12,9 @@ permissions:
   deployments: write
 
 jobs:
-  deploy:
+  # 先跑「不依赖部署凭据」的全部检查；只有它通过才部署。
+  # 这样 PR 与 push 走同一条验证链，部署步骤也不会把时间浪费在必然失败的提交上。
+  verify:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -30,6 +34,48 @@ jobs:
 
       - name: Selftest + Scenecheck + HTML contract
         run: npm run check
+
+      - name: Build
+        run: npm run build
+
+      # 产物体积预算：一次误 import 就能让产物多背一兆多的字体（本项目踩过），
+      # 而体积不会自己报警，所以让 CI 报警。
+      - name: Dist budget
+        run: npm run budget
+
+      # 真浏览器端到端（含假 Web Serial 端口用例）。CI runner 上没有本机 Edge/Chrome，
+      # 这里用 setup-chrome 装一个，并通过 CHROME_PATH 覆盖脚本的自动探测。
+      - name: Setup Chrome
+        id: chrome
+        uses: browser-actions/setup-chrome@v1
+        with:
+          chrome-version: stable
+
+      - name: Browser smoke test
+        env:
+          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
+          EDGE_PATH: ${{ steps.chrome.outputs.chrome-path }}
+        run: |
+          npm run preview -- --port 4173 --strictPort &
+          npx --yes wait-on http://127.0.0.1:4173 --timeout 90000
+          npm run smoke
+
+  deploy:
+    needs: verify
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
 
       - name: Build
         run: npm run build

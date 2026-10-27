@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 
 const URL = process.env.SMOKE_URL ?? "http://127.0.0.1:4173/";
 const CANDIDATES = [
+  process.env.CHROME_PATH,
   process.env.EDGE_PATH,
   "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
   "C:/Program Files/Microsoft/Edge/Application/msedge.exe",
@@ -22,7 +23,7 @@ const CANDIDATES = [
 ].filter(Boolean);
 const executablePath = CANDIDATES.find((p) => existsSync(p));
 if (!executablePath) {
-  console.error("找不到 Edge/Chrome，可用 EDGE_PATH 指定可执行文件");
+  console.error("找不到 Edge/Chrome，可用 CHROME_PATH / EDGE_PATH 指定可执行文件");
   process.exit(2);
 }
 

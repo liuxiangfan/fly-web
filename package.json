@@ -12,7 +12,8 @@
     "check": "npm run selftest && npm run scenecheck && npm run htmlcheck",
     "htmlcheck": "tsx scripts/htmlcheck.ts",
     "icons": "node scripts/make-icons.mjs",
-    "smoke": "node scripts/browser-smoke.mjs"
+    "smoke": "node scripts/browser-smoke.mjs",
+    "budget": "node scripts/distbudget.mjs"
   },
   "dependencies": {
     "katex": "^0.19.1",

@@ -19,6 +19,13 @@ export class World {
   /** 与 scenarios.manual 共享同一对象，滑块写入即生效 */
   manual: ManualTarget = manualTarget;
   gauss = new Gauss();
+  /**
+   * 传感器群延迟的环形缓冲（`sensorDelayMs` > 0 时启用）：
+   * 真实 MEMS 的传输 + 抗混叠滤波把整帧采样推迟若干毫秒，算法拿到的是**过时**的姿态源。
+   * 延迟对倒数第二步的积分没有影响（积分与采样同步滞后），但会让输出姿态相对真值
+   * 滞后 ω·τ —— 机动中直接看到误差抬头，控制回路里表现为相位裕度被吃掉。
+   */
+  private delayBuf: ImuSample[] = [];
 
   constructor(scenario: Scenario) {
     this.scenario = scenario;
@@ -35,6 +42,7 @@ export class World {
     this.q = qId();
     this.omega = [0, 0, 0];
     this.gyroWalk = [0, 0, 0];
+    this.delayBuf.length = 0;
   }
 
   /** 目标四元数：由当前剧本给出（手动模式即读滑块写入的共享目标） */
@@ -74,6 +82,24 @@ export class World {
     this.omega = omega;
     this.q = qIntegrate(this.q, omega, h);
     this.t += h;
-    return simulateImu(this.q, omega, this.t, imuParams, this.gauss, this.scenario.accelFactor, this.gyroWalk);
+    const sample = simulateImu(this.q, omega, this.t, imuParams, this.gauss, this.scenario.accelFactor, this.gyroWalk);
+    return this.delayed(sample, imuParams.sensorDelayMs, h);
+  }
+
+  /**
+   * 群延迟：把采样按 sensorDelayMs 排队，返回队列里最老的那一帧
+   * （队列始终保持约 delay/h 帧，因此输出恰好滞后 sensorDelayMs）。
+   * 延迟为 0 时零开销直通（不建队列、不改任何既有行为）。
+   */
+  private delayed(sample: ImuSample, delayMs: number, h: number): ImuSample {
+    if (!(delayMs > 0)) {
+      if (this.delayBuf.length) this.delayBuf.length = 0;
+      return sample;
+    }
+    this.delayBuf.push(sample);
+    const keep = Math.max(1, Math.round(delayMs / 1000 / h));
+    let out = sample;
+    while (this.delayBuf.length > keep) out = this.delayBuf.shift() as ImuSample;
+    return out;
   }
 }
