@@ -71,6 +71,7 @@ try {
   await page.waitForFunction(
     () => parseFloat((document.getElementById("clock")?.textContent ?? "").replace("t = ", "")) > 2,
     { timeout: 30000 }, // 软件渲染（swiftshader）下 CI 的首帧可能很慢，给足余量
+  );
   const boot = await page.evaluate(() => {
     const canvas = document.querySelector("#viewport canvas");
     const gl = canvas?.getContext("webgl2") || canvas?.getContext("webgl");
@@ -309,7 +310,8 @@ try {
   await page.goto(URL.split("#")[0] + deep.hash, { waitUntil: "domcontentloaded" });
   await page.waitForFunction(
     () => parseFloat((document.getElementById("clock")?.textContent ?? "").replace("t = ", "")) > 0.5,
-    { timeout: 30000 }, // 软件渲染（swiftshader）下 CI 的首帧可能很慢，给足余量
+    { timeout: 30000 },
+  );
   const deep2 = await page.evaluate(() => ({
     bias: document.getElementById("imu-gyro-bias").value,
     view: document.body.dataset.view,
