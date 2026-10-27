@@ -55,10 +55,12 @@ jobs:
         env:
           CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
           EDGE_PATH: ${{ steps.chrome.outputs.chrome-path }}
+        # 必须显式绑 127.0.0.1 并用 tcp: 探活：runner 上 `localhost` 会解析到 IPv6（::1），
+        # 而 vite preview 默认只绑 localhost，wait-on 探 127.0.0.1 会一直等到超时（首次跑 CI 就踩到）。
         run: |
-          npm run preview -- --port 4173 --strictPort &
-          npx --yes wait-on http://127.0.0.1:4173 --timeout 90000
-          npm run smoke
+          npm run preview -- --port 4173 --strictPort --host 127.0.0.1 > /tmp/preview.log 2>&1 &
+          npx --yes wait-on tcp:127.0.0.1:4173 --timeout 90000
+          npm run smoke || { echo "=== preview 日志 ==="; cat /tmp/preview.log; exit 1; }
 
   deploy:
     needs: verify
