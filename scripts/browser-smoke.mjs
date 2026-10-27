@@ -49,6 +49,12 @@ const browser = await puppeteer.launch({
     "--use-angle=swiftshader",
     "--enable-unsafe-swiftshader",
     "--hide-scrollbars",
+    // CI 的 headless Chrome 会把页面当成「后台标签页」→ rAF 被节流甚至停摆，
+    // 仿真时钟不动，冒烟第一步（等待 t>2s）就会超时 15 秒。
+    // 这三个标志是标准的抑制手段：关掉定时器节流、关掉窗口遮挡降级、关掉渲染进程降级。
+    "--disable-background-timer-throttling",
+    "--disable-backgrounding-occluded-windows",
+    "--disable-renderer-backgrounding",
   ],
 });
 const page = await browser.newPage();
@@ -64,8 +70,7 @@ try {
   // 等待真实仿真推进（rAF）——隐藏标签页会冻结，headless 新模式下正常运行
   await page.waitForFunction(
     () => parseFloat((document.getElementById("clock")?.textContent ?? "").replace("t = ", "")) > 2,
-    { timeout: 15000 },
-  );
+    { timeout: 30000 }, // 软件渲染（swiftshader）下 CI 的首帧可能很慢，给足余量
   const boot = await page.evaluate(() => {
     const canvas = document.querySelector("#viewport canvas");
     const gl = canvas?.getContext("webgl2") || canvas?.getContext("webgl");
@@ -304,8 +309,7 @@ try {
   await page.goto(URL.split("#")[0] + deep.hash, { waitUntil: "domcontentloaded" });
   await page.waitForFunction(
     () => parseFloat((document.getElementById("clock")?.textContent ?? "").replace("t = ", "")) > 0.5,
-    { timeout: 15000 },
-  );
+    { timeout: 30000 }, // 软件渲染（swiftshader）下 CI 的首帧可能很慢，给足余量
   const deep2 = await page.evaluate(() => ({
     bias: document.getElementById("imu-gyro-bias").value,
     view: document.body.dataset.view,

@@ -58,6 +58,9 @@ const browser = await puppeteer.launch({
     "--use-angle=swiftshader",
     "--enable-unsafe-swiftshader",
     "--hide-scrollbars",
+    "--disable-background-timer-throttling",
+    "--disable-backgrounding-occluded-windows",
+    "--disable-renderer-backgrounding",
   ],
 });
 const page = await browser.newPage();
