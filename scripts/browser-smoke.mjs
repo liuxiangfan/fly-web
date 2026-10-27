@@ -333,6 +333,21 @@ try {
   // 这条用例把「导出」与「导入回放」两端锁在一起——任何一端改了列名就会当场失败。
   const roundTrip = await page.evaluate(async () => {
     const NL = String.fromCharCode(10);
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    // CI 上 rAF 被节流、而仿真 dt 有 50 ms 上限 → 仿真时钟比墙钟慢好几倍，
+    // 「跑了几秒」不等于「记了足够多行」。这里先按弹窗里的真实行数等到够多，
+    // 再导出，否则会拿到一份十几行的 CSV（解析器的 20 帧下限会合理地拒收它）。
+    let rows = 0;
+    for (let i = 0; i < 60; i++) {
+      document.getElementById("btn-export").click();
+      await sleep(80);
+      const meta = document.getElementById("export-meta")?.textContent ?? "";
+      const m = meta.match(/已记录 (\d+) 行/);
+      rows = m ? Number(m[1]) : 0;
+      document.getElementById("export-cancel").click();
+      if (rows >= 40) break;
+      await sleep(400);
+    }
     let csv = null;
     const orig = URL.createObjectURL;
     URL.createObjectURL = (b) => {
@@ -359,7 +374,7 @@ try {
     window.attitudeDemo.replay.stop();
     await new Promise((r) => setTimeout(r, 300));
     const afterStop = window.attitudeDemo.replay.info;
-    return { header, imp, info, status, mode, controlsOff, afterStop };
+    return { header, imp, info, status, mode, controlsOff, afterStop, rows };
   });
   check(
     "导出→导入闭环：原始 IMU 能回放且退出后回到模拟",
@@ -370,7 +385,8 @@ try {
       roundTrip.mode === "real" &&
       roundTrip.controlsOff === true &&
       roundTrip.afterStop?.active === false,
-    `${roundTrip.imp}；回放中 ${roundTrip.info?.idx}/${roundTrip.info?.frames} 帧，模式=${roundTrip.mode}，模拟控件停用=${roundTrip.controlsOff}，退出后 active=${roundTrip.afterStop?.active}`,
+    `导出前已记录 ${roundTrip.rows} 行；${roundTrip.imp}；回放中 ${roundTrip.info?.idx}/${roundTrip.info?.frames} 帧，` +
+      `模式=${roundTrip.mode}，模拟控件停用=${roundTrip.controlsOff}，退出后 active=${roundTrip.afterStop?.active}`,
   );
 
   // 深链：当前 hash 重载后参数应保持
