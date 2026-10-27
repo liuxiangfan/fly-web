@@ -28,7 +28,7 @@
       <button id="btn-reset" class="btn">重置</button>
       <button id="btn-share" class="btn" title="把当前面板状态编码进链接复制">分享</button>
       <button id="btn-export" class="btn" title="导出本轮姿态记录为 CSV（含算法参数头部）">导出 CSV</button>
-      <label class="csv-quat-toggle" title="额外导出每个算法的四元数分量（qw/qx/qy/qz）——四元数无法从欧拉角可靠反算，尤其在万向节锁附近"><input type="checkbox" id="csv-quat" /> <span>含 q</span></label>
+      <label class="csv-quat-toggle" title="导出 CSV 的修饰开关：额外写出每个算法与参考姿态的四元数分量（多 24 列）。欧拉角无法可靠反算回四元数，尤其在万向节锁附近"><input type="checkbox" id="csv-quat" /> <span>含 q</span></label>
       <button id="btn-docs" class="btn" title="文档（Esc 关闭）">文档</button>
     </div>
   </header>
@@ -715,10 +715,30 @@
             <li><b>暂停 / 继续</b>——冻结整个仿真，便于对照读数。</li>
             <li><b>重置</b>——时间归零，所有姿态与算法内部状态清零回水平。</li>
             <li><b>分享</b>——把当前全部面板参数、视图与机动剧本编码进网址并复制：发给同学，打开就是同一套实验状态。</li>
-            <li><b>导出 CSV</b>——把本轮全部姿态/误差记录（25 Hz、含算法参数头部注释）下载为 CSV，可直接拖进 Excel/Python/MATLAB。</li>
+            <li><b>导出 CSV</b>——把本轮全部姿态/误差记录（25 Hz、含算法参数头部注释）下载为 CSV，可直接拖进 Excel/Python/MATLAB。
+              紧邻的 <b>「含 q」</b>勾选框是它的修饰开关：勾上后额外导出每个算法与参考姿态的四元数分量（多 24 列），
+              详见下方「导出 CSV / 含 q 开关」条目。</li>
             <li><b>文档</b>——打开本页（Esc 或「返回演示」关闭）。</li>
           </ul>
           <p>3D 区域：拖拽旋转视角、滚轮缩放。所有改动即时生效，无需保存。</p>
+
+          <div class="ctl">
+            <div class="ctl-name">导出 CSV / 紧邻的「含 q」开关 <span class="ctl-range">顶栏按钮 + 复选框</span></div>
+            <p><span class="k k1">是什么</span>「导出 CSV」把本轮记录（25 Hz 一行、含算法参数头注释）下载成表格。
+              「含 q」是它的<b>修饰开关</b>：勾上后每行额外写出<b>每个算法的四元数分量</b>
+              <span class="mono">qw/qx/qy/qz</span>，以及参考姿态的四元数；不勾则只有欧拉角与误差。</p>
+            <p><span class="k k2">起什么作用</span>为什么非要四元数？因为<b>欧拉角无法可靠地反算回四元数</b>——
+              尤其在万向节锁附近，同一个姿态对应的欧拉三元组并不唯一（本装置在俯仰 ±90° 处按约定返回
+              <span class="mono">roll := 0</span>，那是约定值而不是真实横滚，见数学原理「万向节锁的算法后果」）。
+              「用导出的欧拉角反推 q」恰恰会在最需要它的地方失真。要做双重覆盖（q 与 −q 对比）、
+              符号连续性、复现插值轨迹、检查归一化误差这类分析，必须拿到原始 q。</p>
+            <p><span class="k k3">改了会怎样</span>勾上后表宽大约翻倍（5 个算法 × 4 分量 + 参考 4 列 = 多 24 列），
+              所以默认关闭——只做误差对比和画图的用户不需要。列名是「算法 id + 分量」的组合，例如
+              <span class="mono">纯积分_qw</span>（实际写成 ASCII：<span class="mono">pure_qw</span>）、
+              <span class="mono">mahony_qw</span>；参考姿态一列在模拟模式叫 <span class="mono">truth_qw</span>，
+              真实串口模式叫 <span class="mono">mahony_ref_qw</span>（真实世界没有真值，以 Mahony 为基准）。
+              四元数按 6 位小数写出，与欧拉角列精度一致。</p>
+          </div>
 
           <div class="ctl">
             <div class="ctl-name">右侧控制台：手风琴式面板 <span class="ctl-range">10 个分区</span></div>

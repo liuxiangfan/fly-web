@@ -3819,7 +3819,8 @@ function exportCsv(): void {
     ...(quatOn
       ? ests.flatMap((e) => ["w", "x", "y", "z"].map((k) => `${e.id}_q${k}`))
       : []),
-    ...(quatOn ? ["truth_qw", "truth_qx", "truth_qy", "truth_qz"] : []),
+    // 参考姿态的四元数列与欧拉角列同源：模拟模式是 truth_*，真实串口模式是 mahony_ref_*
+    ...(quatOn ? ["w", "x", "y", "z"].map((k) => `${refLabel}_q${k}`) : []),
   ];
   const lines = [header.join(",")];
   for (const row of logRows) {
