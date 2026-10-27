@@ -28,7 +28,6 @@
       <button id="btn-reset" class="btn">重置</button>
       <button id="btn-share" class="btn" title="把当前面板状态编码进链接复制">分享</button>
       <button id="btn-export" class="btn" title="导出本轮姿态记录为 CSV（含算法参数头部）">导出 CSV</button>
-      <label class="csv-quat-toggle" title="导出 CSV 的修饰开关：额外写出每个算法与参考姿态的四元数分量（多 24 列）。欧拉角无法可靠反算回四元数，尤其在万向节锁附近"><input type="checkbox" id="csv-quat" /> <span>含 q</span></label>
       <button id="btn-docs" class="btn" title="文档（Esc 关闭）">文档</button>
     </div>
   </header>
@@ -127,6 +126,48 @@
             </div>
           <p class="hint">拖动滑块设定目标姿态，机体以受限角速度跟踪（下方三轴可试 ±90° 附近）。</p>
         </div>
+          <div class="ctl">
+            <div class="ctl-name">导入 IMU 日志回放 <span class="ctl-range">按钮 + 文件选择 + 倍速</span></div>
+            <p><span class="k k1">是什么</span>把一份<b>录制的原始 IMU</b> CSV 喂回装置做离线回放。
+              三种格式都认：① 本装置导出的 CSV（在导出弹窗里勾「原始 IMU 六/九轴」即可拿到，与回放形成闭环）；
+              ② 带表头的通用 CSV（列名里能认出 <span class="mono">t / gx… / ax… / mx…</span> 即可，
+              还支持 <span class="mono">rad/s</span> 与 <span class="mono">g</span> 单位自动换算）；
+              ③ 无表头的纯数字表（7 列 = 时间 + 陀螺 3 + 加计 3，10 列 = 再加磁力计 3）。</p>
+            <p><span class="k k2">起什么作用</span>两条用途：<b>①</b> 没有硬件也能用真实数据——把自己飞控日志里
+              的噪声/振动喂给五种算法，看它们在真实数据上的表现；<b>②</b> 同一段数据反复跑不同参数
+              （配合 A/B 与实验库），比较从「同一次现场」出发才公平。
+              回放<b>与真实串口同一套语义</b>：没有真值基准 → 误差曲线以 Mahony 为参照、幻影隐藏、模拟控件停用、
+              时钟按日志的时间戳走（不按墙钟）。倍速 1× / 2× / 5× / 10× / 最快；「退出回放」回到模拟模式。</p>
+            <p><span class="k k3">改了会怎样</span>导入成功后状态行显示「回放中 · 文件名 · 进度 · 帧数」，
+              播完提示一次并保留曲线与评测表。解析失败会把原因直接贴出来（列名认不出 / 帧数太少 / 列数不对），
+              成功的列映射与单位推断打在浏览器控制台——<b>猜错单位不会报错但会让数据看起来不对</b>，
+              所以宁可把这些假设说出来。没有磁力计列时 MARG 对这组数据无效，也会在提示里点明。</p>
+          </div>
+
+        <div class="sub-group">
+          <div class="row btn-row">
+            <button class="btn" id="btn-replay-import">导入 IMU 日志回放…</button>
+            <button class="btn hidden" id="btn-replay-stop">退出回放</button>
+          </div>
+          <input type="file" id="replay-file" accept=".csv,.txt,text/csv,text/plain" class="hidden" />
+          <div class="row">
+            <label for="replay-speed">回放倍速</label>
+            <select id="replay-speed">
+              <option value="1" selected>1×（按录制速率）</option>
+              <option value="2">2×</option>
+              <option value="5">5×</option>
+              <option value="10">10×</option>
+              <option value="0">最快（一口气跑完）</option>
+            </select>
+          </div>
+          <div class="ov-chip hidden" id="replay-status"></div>
+          <p class="hint">
+            把一份<b>录制的原始 IMU</b> CSV 喂回来做离线回放——不必有硬件，也可以用自己飞控日志里的真实噪声跑五种算法。
+            勾选导出弹窗里的「原始 IMU」即可拿到本装置格式；也接受带表头的通用 CSV（列名含
+            <span class="mono">t / gx… / ax… / mx…</span>，支持 rad/s 与 g 自动换算）或 7 / 10 列无表头文件。
+            回放与真实串口<b>同一套语义</b>：没有真值，误差曲线以 Mahony 为基准、幻影隐藏、模拟控件停用。
+          </p>
+        </div>
       </div>
       </section>
 
@@ -150,6 +191,23 @@
             <option value="y-front-x-left">模块 Y 朝前、X 朝左</option>
             <option value="y-front-x-right">模块 Y 朝前、X 朝右</option>
           </select>
+        </div>
+        <div class="row serial-row">
+          <label for="serial-baud">波特率</label>
+          <select id="serial-baud" title="必须与固件里串口初始化的波特率一致；连接后不可改（要改先断开）">
+            <option value="9600">9600</option>
+            <option value="19200">19200</option>
+            <option value="38400">38400</option>
+            <option value="57600">57600</option>
+            <option value="115200">115200</option>
+            <option value="230400">230400</option>
+            <option value="460800">460800</option>
+            <option value="921600" selected>921600（默认）</option>
+            <option value="1000000">1000000</option>
+            <option value="1500000">1500000</option>
+            <option value="2000000">2000000</option>
+          </select>
+          <span class="mono dim serial-baud-note" id="serial-baud-note">连接前可改</span>
         </div>
         <div class="ov-chip hidden" id="serial-status"></div>
         <p class="hint">连接后进入真实模式：模拟剧本与污染滑块停用，五种算法改吃真实数据（无真值基准，误差曲线以 Mahony 为参照）。固件帧协议见 firmware/README.md；固件调试先用 SerialWeb。</p>
@@ -637,6 +695,44 @@
     </div>
   </section>
 
+  <dialog id="export-dialog" class="export-dialog" aria-labelledby="export-title">
+    <h2 id="export-title">导出本轮记录</h2>
+    <p class="dlg-meta mono" id="export-meta">—</p>
+    <div class="dlg-opts" role="radiogroup" aria-label="导出内容">
+      <label class="dlg-opt">
+        <input type="radio" name="export-scope" value="angles" checked />
+        <span class="dlg-body">
+          <b>姿态角与误差</b>
+          <span class="dlg-sub">时间 + 参考姿态 × 3 + 五个算法各 × 3 + 五个误差（画图与对比够用）</span>
+        </span>
+      </label>
+      <label class="dlg-opt">
+        <input type="radio" name="export-scope" value="quat" />
+        <span class="dlg-body">
+          <b>姿态角 + 四元数分量</b>
+          <span class="dlg-sub">额外写出每个算法与参考姿态的 qw/qx/qy/qz</span>
+        </span>
+      </label>
+    </div>
+    <label class="dlg-extra">
+      <input type="checkbox" id="export-imu" />
+      <span class="dlg-body">
+        <b>原始 IMU 六/九轴</b>
+        <span class="dlg-sub">陀螺 °/s、加计 m/s²、磁力计 μT 各三轴（+9 列）。勾上后这份文件可以再用「导入 IMU 日志回放」喂回装置，形成闭环。</span>
+      </span>
+    </label>
+    <p class="dlg-count mono" id="export-count">将导出 24 列</p>
+    <p class="hint dlg-why">
+      为什么会有「四元数」这一档：<b>欧拉角无法可靠反算回四元数</b>——万向节锁附近同一个姿态对应的欧拉三元组不唯一
+      （本装置在俯仰 ±90° 处按约定返回 <span class="mono">roll := 0</span>，那是约定值而非真实横滚）。
+      要做双重覆盖对比（q 与 −q）、符号连续性检查、复现插值轨迹、检查 ‖q‖ 漂移，必须拿原始 q。
+    </p>
+    <div class="dlg-actions">
+      <button type="button" class="btn" id="export-cancel">取消</button>
+      <button type="button" class="btn primary" id="export-confirm">导出 CSV</button>
+    </div>
+  </dialog>
+
   <div id="toast-layer" class="toast-layer" role="status" aria-live="polite"></div>
 
   <footer id="app-footer">
@@ -715,29 +811,31 @@
             <li><b>暂停 / 继续</b>——冻结整个仿真，便于对照读数。</li>
             <li><b>重置</b>——时间归零，所有姿态与算法内部状态清零回水平。</li>
             <li><b>分享</b>——把当前全部面板参数、视图与机动剧本编码进网址并复制：发给同学，打开就是同一套实验状态。</li>
-            <li><b>导出 CSV</b>——把本轮全部姿态/误差记录（25 Hz、含算法参数头部注释）下载为 CSV，可直接拖进 Excel/Python/MATLAB。
-              紧邻的 <b>「含 q」</b>勾选框是它的修饰开关：勾上后额外导出每个算法与参考姿态的四元数分量（多 24 列），
-              详见下方「导出 CSV / 含 q 开关」条目。</li>
+            <li><b>导出 CSV</b>——点击后弹出选项：导出「姿态角与误差」（24 列）还是「姿态角 + 四元数分量」（48 列），
+              确认后把本轮全部记录（25 Hz、含算法参数头部注释）下载为 CSV，可直接拖进 Excel/Python/MATLAB。
+              详见下方「导出 CSV（点击后先弹选项）」条目。</li>
             <li><b>文档</b>——打开本页（Esc 或「返回演示」关闭）。</li>
           </ul>
           <p>3D 区域：拖拽旋转视角、滚轮缩放。所有改动即时生效，无需保存。</p>
 
           <div class="ctl">
-            <div class="ctl-name">导出 CSV / 紧邻的「含 q」开关 <span class="ctl-range">顶栏按钮 + 复选框</span></div>
-            <p><span class="k k1">是什么</span>「导出 CSV」把本轮记录（25 Hz 一行、含算法参数头注释）下载成表格。
-              「含 q」是它的<b>修饰开关</b>：勾上后每行额外写出<b>每个算法的四元数分量</b>
-              <span class="mono">qw/qx/qy/qz</span>，以及参考姿态的四元数；不勾则只有欧拉角与误差。</p>
-            <p><span class="k k2">起什么作用</span>为什么非要四元数？因为<b>欧拉角无法可靠地反算回四元数</b>——
-              尤其在万向节锁附近，同一个姿态对应的欧拉三元组并不唯一（本装置在俯仰 ±90° 处按约定返回
-              <span class="mono">roll := 0</span>，那是约定值而不是真实横滚，见数学原理「万向节锁的算法后果」）。
-              「用导出的欧拉角反推 q」恰恰会在最需要它的地方失真。要做双重覆盖（q 与 −q 对比）、
-              符号连续性、复现插值轨迹、检查归一化误差这类分析，必须拿到原始 q。</p>
-            <p><span class="k k3">改了会怎样</span>勾上后表宽大约翻倍（5 个算法 × 4 分量 + 参考 4 列 = 多 24 列），
-              所以默认关闭——只做误差对比和画图的用户不需要。列名是「算法 id + 分量」的组合，例如
-              <span class="mono">纯积分_qw</span>（实际写成 ASCII：<span class="mono">pure_qw</span>）、
-              <span class="mono">mahony_qw</span>；参考姿态一列在模拟模式叫 <span class="mono">truth_qw</span>，
+            <div class="ctl-name">导出 CSV（点击后先弹选项） <span class="ctl-range">顶栏按钮 + 选项弹窗</span></div>
+            <p><span class="k k1">是什么</span>点顶栏「导出 CSV」会先弹出一个小对话框，让你选这一份表<b>导出哪些内容</b>：
+              「姿态角与误差」（24 列）或「姿态角 + 四元数分量」（48 列，额外写出每个算法与参考姿态的
+              <span class="mono">qw/qx/qy/qz</span>）。弹窗里还会显示本轮已记录多少行，确认后才真正下载。
+              文件是 25 Hz 一行、开头带算法参数注释头的 UTF-8 CSV，可直接拖进 Excel / Python / MATLAB。</p>
+            <p><span class="k k2">起什么作用</span>两个选项的差别不只是列数。为什么会有「四元数」这一档？
+              因为<b>欧拉角无法可靠地反算回四元数</b>——尤其在万向节锁附近，同一个姿态对应的欧拉三元组并不唯一
+              （本装置在俯仰 ±90° 处按约定返回 <span class="mono">roll := 0</span>，那是约定值而不是真实横滚，
+              见数学原理「万向节锁的算法后果」）。「用导出的欧拉角反推 q」恰恰会在最需要它的地方失真。
+              要做双重覆盖对比（q 与 −q）、符号连续性检查、复现插值轨迹、检查 ‖q‖ 漂移这类分析，
+              必须拿到原始 q。</p>
+            <p><span class="k k3">改了会怎样</span>默认选「姿态角与误差」（大多数人的需求，表也窄）。
+              选择会被记住到本次会话结束，下次打开弹窗时停在同一个选项上——连着导几份不用每次重选。
+              列名是「算法 id + 分量」的组合：<span class="mono">pure_qw</span>、<span class="mono">mahony_qw</span>、
+              <span class="mono">kalman_qw</span> 等；参考姿态一列在模拟模式叫 <span class="mono">truth_qw</span>，
               真实串口模式叫 <span class="mono">mahony_ref_qw</span>（真实世界没有真值，以 Mahony 为基准）。
-              四元数按 6 位小数写出，与欧拉角列精度一致。</p>
+              四元数与欧拉角同为 6 位小数。Esc 或「取消」关闭弹窗、不导出。</p>
           </div>
 
           <div class="ctl">
@@ -866,10 +964,14 @@
           </div>
 
           <div class="ctl">
-            <div class="ctl-name">连接真实 IMU <span class="ctl-range">按钮 + 安装方向</span></div>
+            <div class="ctl-name">连接真实 IMU <span class="ctl-range">按钮 + 安装方向 + 波特率</span></div>
             <p><span class="k k1">是什么</span>通过浏览器的 Web Serial API 直连真实 IMU（本装置按 GY-87 的 28 字节帧协议，见仓库 firmware/README.md）。连接后进入<b>真实模式</b>：模拟剧本与污染滑块停用，五种算法改吃真实传感器数据流。</p>
-            <p><span class="k k2">起什么作用</span>让「传感器 → 解算」从模拟走进现实：真实器件的噪声、零偏、振动、安装误差全部原样进入算法——文档里所有误差描述第一次有了实物对照。安装方向下拉声明 GY-87 丝印轴在机体上的朝向（网页端据此重排到 NED 机体系）。</p>
-            <p><span class="k k3">改了会怎样</span>连接后：幻影隐藏（没有真值基准）、误差曲线改为「各算法 vs Mahony 基准」、第三面板「IMU 原始数据」成为确认传感器健康的主要窗口（静止加计模长≈1g、磁模长≈50μT）。断开自动回到模拟模式。要求 Chrome/Edge + HTTPS（本站已部署 HTTPS ✓）；固件调试阶段先用 SerialWeb 验证帧格式。</p>
+            <p><span class="k k2">起什么作用</span>让「传感器 → 解算」从模拟走进现实：真实器件的噪声、零偏、振动、安装误差全部原样进入算法——文档里所有误差描述第一次有了实物对照。安装方向下拉声明 GY-87 丝印轴在机体上的朝向（网页端据此重排到 NED 机体系）。
+              <b>波特率下拉</b>决定打开串口时使用的速率：必须与固件里串口初始化的值一致，
+              否则会看到「连上了但一直等待数据帧」或者一片 CRC 错。</p>
+            <p><span class="k k3">改了会怎样</span>连接后：幻影隐藏（没有真值基准）、误差曲线改为「各算法 vs Mahony 基准」、第三面板「IMU 原始数据」成为确认传感器健康的主要窗口（静止加计模长≈1g、磁模长≈50μT）。断开自动回到模拟模式。要求 Chrome/Edge + HTTPS（本站已部署 HTTPS ✓）；固件调试阶段先用 SerialWeb 验证帧格式。
+              <b>波特率在连接期间是锁定的</b>（Web Serial 在 open() 时就把端口参数固定，之后改没用）——
+              要换速率先「断开」，下拉会解锁并把当前档位写回提示行。</p>
           </div>
 
           <div class="ctl">
@@ -2089,6 +2191,32 @@ i² = j² = k² = i·j·k = −1</div>
           </ul>
           <p class="hint">延伸：Yi, Wang, Manchester《Attitude estimation from vector measurements: necessary and sufficient conditions》(arXiv:2206.13058) 给出了「向量观测能否定姿」的充要条件（观测向量的数量与非共线性）。</p>
 
+          <h3>附：滤波之前的经典路线——Wahba 问题与 TRIAD</h3>
+          <p>
+            上面讨论的都是「带时间记忆」的滤波器。其实还有一整类<b>一次性</b>的姿态确定方法：
+            给定两组（或更多组）已知参考方向与它们的实测方向，直接解出旋转矩阵——
+            不涉及时间、不涉及增益，一次最小二乘就得到姿态。
+          </p>
+          <div class="formula">Wahba 问题（1965）
+　给定 参考方向 {r<sub>i</sub>}（世界系）与 实测方向 {b<sub>i</sub>}（机体系），求旋转 R
+　min Σ w<sub>i</sub>·‖b<sub>i</sub> − R·r<sub>i</sub>‖²
+　等价形式　max Σ w<sub>i</sub>·b<sub>i</sub>ᵀ·R·r<sub>i</sub>　（迹最大化）</div>
+          <ul>
+            <li><b>TRIAD（三轴姿态确定）</b>：最古老也最直观的做法——用两组非共线向量<b>构造一组正交基</b>，
+              两套基之间的变换就是姿态。本装置的「粗对准」正是它的退化形态：重力给一个方向、磁力计给另一个方向，
+              叉积补出第三个。所以粗对准并不「土」，它是有名字、有最优化背景的标准方法。</li>
+            <li><b>QUEST / Davenport q-方法</b>：Wahba 问题的最优解。用四元数把迹最大化改写成二次型
+              qᵀKq 的最大特征值问题，解 4×4 对称矩阵的主特征向量即得 q——比「构造正交基」更优（能正确加权两个观测的可靠度）。</li>
+            <li><b>与卡尔曼的关系</b>：Wahba 是<b>单帧最优</b>（只用当前观测，不含时间信息），
+              卡尔曼是<b>带时间记忆的最优</b>（把「我怎么知道我现在朝哪」写成先验，再用观测修正）。
+              可以说：Wahba 是卡尔曼在「先验协方差无穷大」时的极限情形。这也解释了为什么粗对准不需要滤波器——
+              它放弃先验，只求一次性解。</li>
+            <li><b>本装置里的对应</b>：粗对准（静止 3 秒后自动触发）用的就是 TRIAD 的思路；
+              「完整 MARG」参考场 b = [0, b<sub>x</sub>, 0, b<sub>z</sub>] 的构造也与 QUEST 里
+              「先取参考方向、再求最优旋转」同源。</li>
+          </ul>
+          <p class="hint">延伸：Markley 与 Crassidis《Fundamentals of Spacecraft Attitude Determination and Control》系统讲了 Wahba/TRIAD/QUEST/MEKF 这一族方法；本装置未实现 QUEST（没有可演示的交互现场——它是一次性求解，没有「曲线」可看），这里只作口径说明。</p>
+
         </section>
 
         <section id="m-fusion" class="math-section">
@@ -3231,9 +3359,16 @@ A = <span class="mtx"><i class="ml"></i><span class="mrows" style="--cols:2"><sp
         </section>
 
         <section id="g-wiring">
-          <h2>接线与安装方向</h2>
+          <h2>接线、安装方向与波特率</h2>
           <ul>
-            <li><b>电气</b>：GY-87（或 MPU-9250 / ICM-42688-P + AK8963）→ I²C 接主控 → USB-UART（CP2102 / CH340 / ST-Link VCP）→ 电脑。本装置默认波特率 <b>921600</b>（8N1），可在代码里改。</li>
+            <li><b>电气</b>：GY-87（或 MPU-9250 / ICM-42688-P + AK8963）→ I²C 接主控 → USB-UART（CP2102 / CH340 / ST-Link VCP）→ 电脑。8N1，无流控。</li>
+            <li><b>波特率</b>：面板里可选 <span class="mono">9600 / 19200 / 38400 / 57600 / 115200 / 230400 / 460800 / 921600 / 1000000 / 1500000 / 2000000</span>，
+              默认 <b>921600</b>。<b>必须与固件里串口初始化的值一致</b>——不一致的典型症状是「连上了但一直等待数据帧」
+              （完全收不到字节）或「帧率很低 + seq 丢帧暴涨」（字节被采样错）。
+              Web Serial 在 <span class="mono">open()</span> 时就固定端口参数，所以下拉在连接期间是锁定的：
+              要换速率先「断开」再改。若某个高波特率该平台/该 USB-UART 芯片不支持，浏览器会直接报错（会显示在状态行）。
+              921600 与 1000000 对 CH340 一类廉价桥接芯片常常不稳，实在调不通就降到 460800 或 115200——
+              本装置对帧率的要求只有「别低于 50 Hz」，115200 足够跑 200 Hz 的 28 字节帧。</li>
             <li><b>安装方向</b>：面板里的「模块 X 朝前 / Y 朝左 …」下拉决定模块丝印轴 → 机体 NED（x 前 / y 右 / z 下）的重排。四种组合覆盖常见的水平安装；换方向时缓冲会被清空，避免半帧带旧方向。</li>
             <li><b>符号约定</b>：加速度计读数 = <b>重力在机体系的投影方向</b>，因此静止时 z 轴读数 ≈ +9.8 m/s²（指向机体的「下」）。这是本装置的约定，与固件组帧时的取号一致；若你的器件输出相反（很多库输出 +9.8 表示「向上」的反作用力），请在固件里取反，不要改本装置的约定。</li>
             <li><b>磁力计</b>：AK8963 需要先写 CNTL1 进入连续测量模式（GY-87 的板载磁力计不随 MPU-9250 的 I²C 直通自动启动），这一步最容易漏。</li>
@@ -3255,6 +3390,14 @@ A = <span class="mtx"><i class="ml"></i><span class="mrows" style="--cols:2"><sp
 
         <section id="g-debug">
           <h2>调试建议</h2>
+          <h3>没有硬件时的第三条路：离线回放</h3>
+          <p>
+            硬件不在手边（或者想用真实数据但不想每次接板子）时，走「导入 IMU 日志回放」：
+            任何一份带时间戳的原始 IMU CSV 都能喂回来跑五种算法，语义与真实串口完全一致。
+            最省事的做法是<b>先用模拟模式跑一段、导出时勾上「原始 IMU 六/九轴」</b>，
+            再把这份文件导回去——回放结果应当与刚才的实时曲线一致（这是校验整条链路的好办法）。
+            想更接近真实器件，可以先用器件预设 + 振动/温漂一类污染跑一遍再导出。
+          </p>
           <ol>
             <li><b>先离线验证帧</b>：用厂商上位机或 <span class="mono">firmware/README.md</span> 里给的参考代码，确认主控确实按 28 字节发帧、CRC 正确。</li>
             <li><b>再看状态行</b>：连接后状态行显示「帧/s · dt · seq 丢帧 · 积压丢弃」。帧率应稳定在固件的设定值附近；dt 应稳定在 1/帧率。</li>
@@ -3330,6 +3473,9 @@ A = <span class="mtx"><i class="ml"></i><span class="mrows" style="--cols:2"><sp
               <tr><td>选端口对话框里没有我的设备</td><td>串口被别的程序占用（SerialWeb / 厂商上位机 / 另一个标签页）。关掉它们；必要时拔插 USB。</td></tr>
               <tr><td>连上了但一直「等待数据帧」</td><td>固件没在发帧，或波特率不匹配（默认 921600）。先用厂商上位机确认有数据。</td></tr>
               <tr><td>状态行显示很大的「seq 丢帧」</td><td>主机侧来不及消费：帧率过高、或页面被切到后台（rAF 停摆）。降低固件帧率，或保持页面在前台。</td></tr>
+              <tr><td>「连上了但一直等待数据帧」</td><td>最常见是<b>波特率与固件不一致</b>（本装置默认 921600）。先在面板里换档重连；其次检查固件是否真的在发帧、TX/RX 是否接反。</td></tr>
+              <tr><td>能收到帧但 seq 丢帧暴涨 / 帧率明显偏低</td><td>波特率过高而桥接芯片（CH340 等）跟不上，字节被采样错。降到 460800 或 115200（115200 足够跑 200 Hz）。</td></tr>
+              <tr><td>想改波特率但下拉是灰的</td><td>Web Serial 在 open() 时固定端口参数，连接期间不能改——先「断开」，下拉会解锁。</td></tr>
               <tr><td>「数据流中断 1.5 s」反复出现</td><td>线缆接触不良、供电不足（USB 口带不动）、或固件里有阻塞式操作。</td></tr>
               <tr><td>帧全部被拒（帧率 0）</td><td>CRC 覆盖范围不对（必须是 data[2..26]）、长度字段不是 24、或字节序写成了大端。拿 <span class="mono">firmware/gy87.h</span> 的组帧函数逐字节对照。</td></tr>
               <tr><td>加速度计 z 是负的 / 姿态整体反了</td><td>符号约定不符：本装置要求加计读数 = 重力投影（静止 z ≈ +9.8）。在固件里取反，不要改装置的约定。</td></tr>
@@ -3339,8 +3485,25 @@ A = <span class="mtx"><i class="ml"></i><span class="mrows" style="--cols:2"><sp
           </table></div>
         </section>
 
+        <section id="t-replay">
+          <h2>三、离线回放导入失败</h2>
+          <p>导入的提示语是尽量可操作写的：它直接告诉你缺什么，而不是只说「格式错误」。</p>
+          <div class="tscroll"><table class="docs-table">
+            <thead><tr><th>提示</th><th>原因与处理</th></tr></thead>
+            <tbody>
+              <tr><td>找不到时间列</td><td>表头里需要有 <span class="mono">t / time / timestamp / tick / t_s / t_ms</span> 之一（识别是整体匹配，不是「包含 ms 就行」）。</td></tr>
+              <tr><td>找不到陀螺仪或加速度计列</td><td>列名要能认出物理量与轴：<span class="mono">gyro_x…/accel_x…/mag_x…</span>，或短名 <span class="mono">gx gy gz / ax ay az / mx my mz</span>。中文表头认不出，请改成这些写法。</td></tr>
+              <tr><td>无表头时只支持 7 列或 10 列</td><td>无表头文件按列位置解释（t, g+a, [m]）。列数不对就加上表头，或导出时勾「原始 IMU」拿标准格式。</td></tr>
+              <tr><td>只解析到 N 帧，太少</td><td>少于 20 帧看不出算法行为。常见原因：文件被截断，或分隔符不是逗号（本装置只认 CSV）。</td></tr>
+              <tr><td>时间列不是递增的</td><td>选错列或日志本身乱序。容忍少量回退（&lt;5%），大面积回退会被拒。</td></tr>
+              <tr><td>导入成功但曲线看起来不对</td><td><b>十有八九是单位</b>：列名带 <span class="mono">rad_s</span> 会按弧度换算、带 <span class="mono">_g</span> 会按 g 换算，其余按 °/s 与 m/s² 处理。打开浏览器控制台能看到识别到的列映射与单位假设；也可先看 IMU 原始波形面板：静止时加计模长应≈9.8、陀螺应≈0。</td></tr>
+              <tr><td>偏航一直漂 / MARG 没用</td><td>日志里没有磁力计列（导入提示会点明）。六轴数据本来就不能定偏航，这是物理限制不是 bug。</td></tr>
+            </tbody>
+          </table></div>
+        </section>
+
         <section id="t-page">
-          <h2>三、页面本身异常</h2>
+          <h2>四、页面本身异常</h2>
           <div class="tscroll"><table class="docs-table">
             <thead><tr><th>症状</th><th>原因与处理</th></tr></thead>
             <tbody>
@@ -3356,7 +3519,7 @@ A = <span class="mtx"><i class="ml"></i><span class="mrows" style="--cols:2"><sp
         </section>
 
         <section id="t-perf">
-          <h2>四、性能与卡顿</h2>
+          <h2>五、性能与卡顿</h2>
           <ul>
             <li><b>帧率读数</b>在页脚右端（fps）。低于 30 fps 时优先检查：是否同时开了三块曲线面板 + 文档层 + 四元数视图播放。</li>
             <li>文档层的四个 Canvas 演示只在对应页运转；离开该页会自动停。</li>
@@ -3643,7 +3806,7 @@ A = <span class="mtx"><i class="ml"></i><span class="mrows" style="--cols:2"><sp
             <li><b>坐标系</b>：世界 NED、机体 FRD、四元数为机体系→世界系；显示坐标 X=北、Y=上、Z=东。</li>
             <li><b>数值</b>：姿态积分用精确指数映射（不是一阶欧拉）；两姿态夹角用相对四元数的 atan2（零角附近分辨率 ~1e-15 而非 acos 的 1e-8）；欧拉角在 ±90° 处按通行约定取 roll := 0。</li>
             <li><b>验证</b>：类型检查 + 86 项数值自检 + 10 项三维场景几何自检 + 12 项 HTML↔TS 契约检查 + 浏览器端到端冒烟测试。所有断言都可在本地复现（见页脚与仓库 README）。</li>
-            <li><b>隐私</b>：无网络请求、无分析脚本、无 Cookie；串口数据只在你本机内存里流转。Service Worker 只缓存本站静态资源。</li>
+            <li><b>隐私</b>：无网络请求、无分析脚本、无 Cookie；串口数据与导入的日志文件只在你本机内存里流转（导入的文件不会被上传，页面也没有任何上传通道）。Service Worker 只缓存本站静态资源。</li>
           </ul>
         </section>
 
@@ -3654,7 +3817,17 @@ A = <span class="mtx"><i class="ml"></i><span class="mrows" style="--cols:2"><sp
             <thead><tr><th>版本 / 轮次</th><th>内容</th></tr></thead>
             <tbody>
               <tr>
-                <td>本轮（教材深化轮）</td>
+                <td>硬件接入与数据闭环轮</td>
+                <td>
+                  <b>波特率可选</b>（9600–2000000，默认 921600，连接期间锁定）；
+                  <b>导出改为先弹选项</b>（姿态角与误差 / + 四元数分量 / + 原始 IMU，实时显示列数）；
+                  <b>新增离线回放</b>——导入任意带时间戳的原始 IMU CSV（本装置导出格式 / 通用表头 / 7·10 列无表头，
+                  支持 rad/s 与 g 自动换算），按录制速率喂给五种算法，语义与真实串口一致（无真值 → 以 Mahony 为基准）；
+                  文档补 Wahba/TRIAD 经典路线、波特率与排障条目。
+                </td>
+              </tr>
+              <tr>
+                <td>教材深化轮</td>
                 <td>
                   新增「万向节锁的算法后果」剧本（互补滤波在锁点被拽偏、四元数算法无伤）与两个穿越剧本；
                   新增「完整 MARG」（磁倾角补偿）可选形态；门控阈值可调 + 滞回恢复窗开关；

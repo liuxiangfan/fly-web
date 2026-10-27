@@ -33,6 +33,7 @@ import { applyMagCalibration, calibrateMag, type MagCalibration } from "./core/m
 import { ErrorTracker } from "./core/stats";
 import { EXPERIMENTS, type ExperimentSpec } from "./ui/experiments";
 import { b64urlDecode, b64urlEncode } from "./ui/b64";
+import { parseImuCsv, type ReplayFrame, type ReplayParseResult } from "./core/replay";
 
 const H = 1 / 500; // 仿真/解算步长
 const LOG_DT = 0.04; // 曲线记录间隔
@@ -133,10 +134,16 @@ function setSimControlsDisabled(disabled: boolean): void {
     ".section-scenario input, .section-scenario select, .section-imu input, .section-imu select",
   );
   for (const el of scope) {
-    if (el.id === "serial-mounting") continue; // 安装方向对真实数据仍然有效
+    // 这几个控件在「无模拟」的模式下依然要有用：
+    //  · serial-mounting：安装方向对真实数据仍然有效
+    //  · replay-speed：回放进行中要能改倍速（否则 1× 只能干等）
+    //  · replay-file：回放中要能再导入另一份日志（按钮是程序化点击它的，
+    //    禁用会让 click() 静默失效——实测踩到过）
+    if (el.id === "serial-mounting" || el.id === "replay-speed" || el.id === "replay-file") continue;
     el.disabled = disabled;
   }
-  for (const id of ["ghost-toggle", "loop-toggle", "init-offset-toggle", "btn-sandbox"]) {
+  // 解算频率只对模拟模式有意义（真实模式跟固件 tick 走），真实模式下禁用免得误导
+  for (const id of ["solve-rate", "ghost-toggle", "loop-toggle", "init-offset-toggle", "btn-sandbox"]) {
     const el = document.getElementById(id) as HTMLInputElement | HTMLButtonElement | null;
     if (el) el.disabled = disabled;
   }
@@ -144,16 +151,22 @@ function setSimControlsDisabled(disabled: boolean): void {
     b.disabled = disabled;
   });
   const note = document.getElementById("real-mode-note");
-  if (note) note.classList.toggle("hidden", !disabled);
+  if (note) {
+    note.textContent = replayActive()
+      ? "离线回放模式：剧本 / 模拟噪声 / 手动目标 / 幻影 / 闭环 / 初始偏差已停用——数据完全来自导入的日志（无真值，误差基准 = Mahony）。"
+      : "真实 IMU 模式：剧本 / 模拟噪声 / 手动目标 / 幻影 / 闭环 / 初始偏差已停用——数据完全来自串口帧。";
+    note.classList.toggle("hidden", !disabled);
+  }
 }
 
 /** 真实/模拟模式切换的连带语义（幻影、误差参照、UI 显隐） */
 function applyDataSourceSemantics(): void {
-  state.real = serialState.running;
+  state.real = serialState.running || replayActive();
   document.body.dataset.imuMode = state.real ? "real" : "sim";
   setSimControlsDisabled(state.real);
   updateMagCalUi();
   $("err-title").textContent = state.real ? "姿态偏差（各算法 vs Mahony 基准）" : "姿态总误差（解算 vs 真实）";
+  updateSourceChip(); // chip 上带「数据源：模拟/真实 IMU/离线回放」，切换时必须刷新
   // 真实模式无真值：幻影与「真实姿态」来源失去意义，强制切到 Mahony 并隐藏幻影选项区
   if (state.real) {
     if (state.source === "truth") {
@@ -290,8 +303,13 @@ interface LogRow {
    *  尤其在万向节锁附近——锁点欧拉三元组不唯一，必须原样记录） */
   quats: Quat[];
   qTrue: Quat;
+  /** 该时刻最近一帧原始 IMU（可选导出；也是「导入回放」能闭环的前提） */
+  imu: ImuSample | null;
 }
 const logRows: LogRow[] = [];
+/** 记录窗口上限与一次裁剪量（导出弹窗会据此提示「更早的行已丢弃」） */
+const LOG_ROW_CAP = 850;
+const LOG_ROW_TRIM = 100;
 // 解卷绕历史：按 数据源×通道 分开记录
 const attPrev = new Array<number | undefined>(18).fill(undefined);
 
@@ -353,9 +371,12 @@ function logRow(): void {
     err: errA,
     quats: ests.map((e) => ({ ...e.q })),
     qTrue: { ...refQ },
+    imu: state.lastImu
+      ? { gyro: [...state.lastImu.gyro], accel: [...state.lastImu.accel], mag: [...state.lastImu.mag] }
+      : null,
   };
   logRows.push(row);
-  if (logRows.length > 850) logRows.splice(0, 100);
+  if (logRows.length > LOG_ROW_CAP) logRows.splice(0, LOG_ROW_TRIM);
   attChart.push(state.simTime, channelValues(row, state.channel));
   // 误差图 9 通道：前 5 = A 组（活参数），后 4 = B 组（快照参数，A/B 关闭时为 NaN 不画）
   const errB = abState.on
@@ -1633,7 +1654,7 @@ function sourceColor(): string {
 }
 function updateSourceChip(): void {
   const chip = $("readout-source");
-  chip.textContent = `模型显示：${sourceLabel()}`;
+  chip.textContent = `模型显示：${sourceLabel()} · 数据源：${dataSourceLabel()}`;
   chip.style.color = sourceColor();
 }
 
@@ -1886,7 +1907,7 @@ function updatePanelSummaries(): void {
     if (el) el.textContent = text;
   };
   const scenarioName = scenarioSelect.selectedOptions[0]?.textContent ?? "—";
-  set("scenario", `${scenarioName}${state.real ? " · 真实 IMU" : ""}`);
+  set("scenario", `${scenarioName}${state.real ? ` · ${dataSourceLabel()}` : ""}`);
   const presets = $<HTMLSelectElement>("imu-preset").selectedOptions[0]?.textContent ?? "";
   const extras = [
     imuParams.gyroRangeDps > 0 ? `量程 ${imuParams.gyroRangeDps}°/s` : "",
@@ -2515,8 +2536,10 @@ function frame(): void {
 
   if (state.playing) {
     if (state.real) {
-      // 真实数据有自己的时钟：按帧到达节奏推进，不再走 500 Hz 固定步长
-      stepSerialPlayback();
+      // 真实数据有自己的时钟：按帧到达节奏推进，不再走 500 Hz 固定步长。
+      // 离线回放走同一条路，只是数据来自文件且节奏由「倍速」缩放。
+      if (replayActive()) stepReplayPlayback(dtAnim);
+      else stepSerialPlayback();
     } else {
       simAcc += dt;
       if (simAcc > 0.25) simAcc = 0.25; // 标签页隐藏后恢复时，最多补 0.25s，避免疯狂快进
@@ -2577,6 +2600,7 @@ function frame(): void {
     errChart.render();
     imuChart.render();
     updateSerialStatus();
+    updateReplayStatus();
     updateHash();
   }
   // 评测表/校准面板按**墙钟** 2 Hz 刷新（旧写法把 dt 累加在 10 Hz UI 块里，
@@ -2714,6 +2738,9 @@ window.addEventListener("keydown", (e) => {
     });
     return;
   }
+  // 导出对话框（原生 <dialog>）打开时让位：Esc 由它自己处理，
+  // 否则同一次 Esc 会既关弹窗又去关文档层或触发别的快捷键。
+  if ((document.getElementById("export-dialog") as HTMLDialogElement | null)?.open) return;
   trapDocsFocus(e);
   if (e.defaultPrevented) return;
   if (e.key === "Escape") {
@@ -3701,7 +3728,7 @@ const DEEP_CHECKS = [
 ];
 const DEEP_SELS = [
   "scenario-select", "source-select", "quat-mode", "quat-pair-select", "imu-preset",
-  "mag-mode", "solve-rate", "imu-gyro-range",
+  "mag-mode", "solve-rate", "imu-gyro-range", "serial-baud", "serial-mounting",
 ];
 let lastHash = "";
 
@@ -3799,16 +3826,43 @@ function toast(text: string, color = "#7ee787"): void {
 }
 
 // ---------- 数据导出：把当前记录导出为 CSV（Excel/Matlab/Python 可直接读） ----------
-/** 导出选项：四元数列（默认关——表宽翻倍，需要做 q 分析的人再开） */
-const csvState = { includeQuat: false };
+/**
+ * 导出流程：点顶栏按钮 → 先弹选项（姿态角与误差 / 再带上四元数分量）→ 确认才下载。
+ * 为什么不做成顶栏常驻复选框：那个复选框只写「含 q」三个字，说不清代价（表宽翻倍）
+ * 与收益（欧拉角无法反算回 q），也没地方显示「本轮已记录多少行」。
+ * 选择记在会话里，连着导几份不用每次重选。
+ */
+let exportIncludeQuat = false;
+/** 是否附加原始 IMU 九列（勾上后这份文件可直接用「导入 IMU 日志回放」喂回装置） */
+let exportIncludeImu = false;
 
-function exportCsv(): void {
+function openExportDialog(): void {
+  const dlg = document.getElementById("export-dialog") as HTMLDialogElement | null;
+  if (!dlg) return;
   if (logRows.length === 0) {
     toast("还没有记录到数据——等一两秒再导出", "#fbbf24");
     return;
   }
+  const meta = document.getElementById("export-meta");
+  if (meta) {
+    const span = logRows.length > 1 ? state.simTime - logRows[0].t : 0;
+    // 记录是滚动窗口（有上限）：长时间运行后最早的行会被丢弃，这一点必须说出来，
+    // 否则用户会以为「导出的行数」= 实际运行时长
+    const capped = logRows.length >= LOG_ROW_CAP ? `（滚动窗口上限 ${LOG_ROW_CAP} 行，更早的已丢弃）` : "";
+    meta.textContent =
+      `已记录 ${logRows.length} 行（25 Hz，约 ${span.toFixed(1)} s）${capped} · ` +
+      `数据源：${dataSourceLabel()}${state.real ? "（基准 = Mahony）" : `（基准 = 真值，剧本 ${scenarioSelect.selectedOptions[0]?.textContent ?? "—"}）`}`;
+  }
+  for (const r of document.querySelectorAll<HTMLInputElement>('input[name="export-scope"]')) {
+    r.checked = (r.value === "quat") === exportIncludeQuat;
+  }
+  ($("export-imu") as HTMLInputElement).checked = exportIncludeImu;
+  updateExportCount();
+  dlg.showModal();
+}
+
+function exportCsv(quatOn: boolean, imuOn: boolean): void {
   const refLabel = state.real ? "mahony_ref" : "truth";
-  const quatOn = csvState.includeQuat;
   const header = [
     "t_s",
     ...[0, 1, 2].map((k) => `${refLabel}_${["roll", "pitch", "yaw"][k]}_deg`),
@@ -3821,6 +3875,8 @@ function exportCsv(): void {
       : []),
     // 参考姿态的四元数列与欧拉角列同源：模拟模式是 truth_*，真实串口模式是 mahony_ref_*
     ...(quatOn ? ["w", "x", "y", "z"].map((k) => `${refLabel}_q${k}`) : []),
+    // 原始 IMU（可选）：列名与「导入 IMU 日志回放」的识别规则一致，导出即可回灌
+    ...(imuOn ? IMU_EXPORT_COLUMNS : []),
   ];
   const lines = [header.join(",")];
   for (const row of logRows) {
@@ -3830,6 +3886,14 @@ function exportCsv(): void {
     if (quatOn) {
       for (const q of row.quats) vals.push(q.w, q.x, q.y, q.z);
       vals.push(row.qTrue.w, row.qTrue.x, row.qTrue.y, row.qTrue.z);
+    }
+    if (imuOn) {
+      if (row.imu) {
+        const g = row.imu.gyro.map((v) => v * DEG);
+        vals.push(...g, ...row.imu.accel, ...row.imu.mag);
+      } else {
+        vals.push(...new Array<number>(IMU_EXPORT_COLUMNS.length).fill(NaN));
+      }
     }
     lines.push(vals.map((v) => (Number.isFinite(v) ? v.toFixed(6) : "")).join(","));
   }
@@ -3865,9 +3929,31 @@ function exportCsv(): void {
   toast(`已导出 ${logRows.length} 行 CSV（含每个算法的参数头部）`);
 }
 
-document.getElementById("btn-export")?.addEventListener("click", exportCsv);
-$("csv-quat").addEventListener("change", () => {
-  csvState.includeQuat = ($("csv-quat") as HTMLInputElement).checked;
+document.getElementById("btn-export")?.addEventListener("click", openExportDialog);
+document.getElementById("export-cancel")?.addEventListener("click", () => {
+  (document.getElementById("export-dialog") as HTMLDialogElement | null)?.close();
+});
+/** 导出弹窗的实时列数：让「多 24 列 / 多 9 列」这种代价在选择前就可见 */
+function updateExportCount(): void {
+  const el = document.getElementById("export-count");
+  if (!el) return;
+  const quat = document.querySelector<HTMLInputElement>('input[name="export-scope"]:checked')?.value === "quat";
+  const imu = ($("export-imu") as HTMLInputElement).checked;
+  const cols = 24 + (quat ? 24 : 0) + (imu ? IMU_EXPORT_COLUMNS.length : 0);
+  el.textContent = `将导出 ${cols} 列${imu ? "（含原始 IMU，可再导入回放）" : ""}`;
+}
+document.querySelectorAll('input[name="export-scope"]').forEach((r) =>
+  r.addEventListener("change", updateExportCount),
+);
+$("export-imu").addEventListener("change", updateExportCount);
+
+document.getElementById("export-confirm")?.addEventListener("click", () => {
+  const picked = document.querySelector<HTMLInputElement>('input[name="export-scope"]:checked');
+  exportIncludeQuat = picked?.value === "quat";
+  const imuOn = ($("export-imu") as HTMLInputElement).checked;
+  exportIncludeImu = imuOn;
+  (document.getElementById("export-dialog") as HTMLDialogElement | null)?.close();
+  exportCsv(exportIncludeQuat, imuOn);
 });
 
 $("btn-share").addEventListener("click", async () => {
@@ -4023,6 +4109,21 @@ declare global {
 // ② 没有姿态真值 → 幻影隐藏、误差曲线改以 Mahony 为参照基准；
 // ③ 帧间隔上限 dt 兜底：收不到数据时估计器不推进（避免用陈旧帧空转）。
 const SERIAL_QUEUE_MAX = 128;
+
+/**
+ * 使用者选定的波特率。**必须在 open() 之前定好**——Web Serial 打开端口时就把参数固定，
+ * 之后改不了（要改只能断开重连）。所以这个下拉在连接期间会被禁用，
+ * 而不是「改了没反应」那样让人猜。
+ * 默认 921600：够快且是 CH340/CP2102 一类 USB-UART 与 STM32 常见的可用档位；
+ * 低速档（9600–57600）留给老固件或 SoftwareSerial 一类的场合。
+ */
+const SERIAL_BAUD_DEFAULT = 921600;
+function serialBaud(): number {
+  const el = document.getElementById("serial-baud") as HTMLSelectElement | null;
+  const v = el ? Number(el.value) : SERIAL_BAUD_DEFAULT;
+  return Number.isFinite(v) && v > 0 ? v : SERIAL_BAUD_DEFAULT;
+}
+
 const serialState = {
   port: null as SerialPortLike | null,
   reader: null as ReadableStreamDefaultReader<Uint8Array> | null,
@@ -4041,12 +4142,27 @@ const serialState = {
   backlogDropped: 0,
   lastSeq: -1,
   lastArrival: 0,
+  /** 本次连接实际使用的波特率（状态栏显示） */
+  baud: SERIAL_BAUD_DEFAULT,
   /** 状态栏用：上次采样时的帧计数与时刻 */
   uiFrames: 0,
   uiAt: 0,
   rate: 0,
   chipUntil: -1,
 };
+
+/**
+ * 波特率下拉的锁定状态：连接期间禁用（Web Serial 在 open() 时固定端口参数，
+ * 之后改文本框是没有意义的），并给出「断开后可改」的提示——比让用户改了半天
+ * 发现没生效要好。真实模式下 setSimControlsDisabled 已经会禁用整段 IMU 控件，
+ * 这里额外管的是「提示文案」与「非真实模式下的误改保护」。
+ */
+function setSerialBaudLocked(locked: boolean): void {
+  const sel = document.getElementById("serial-baud") as HTMLSelectElement | null;
+  const note = document.getElementById("serial-baud-note");
+  if (sel) sel.disabled = locked;
+  if (note) note.textContent = locked ? `已锁定 ${serialState.baud}` : "连接前可改";
+}
 
 function serialStatusChip(): HTMLElement {
   return $("serial-status");
@@ -4088,7 +4204,7 @@ function updateSerialStatus(): void {
   }
   const backlog = serialState.backlogDropped > 0 ? ` · 积压丢弃 ${serialState.backlogDropped}` : "";
   setSerialStatus(
-    `真实 IMU · ${serialState.rate.toFixed(0)} 帧/s · dt ${(serialState.lastDt * 1000).toFixed(1)} ms · ` +
+    `真实 IMU · ${serialState.baud} · ${serialState.rate.toFixed(0)} 帧/s · dt ${(serialState.lastDt * 1000).toFixed(1)} ms · ` +
       `seq 丢帧 ${serialState.dropped}${backlog}`,
   );
 }
@@ -4099,19 +4215,33 @@ async function serialConnect(): Promise<void> {
     return;
   }
   try {
+    const baud = serialBaud();
     serialState.port = await navigator.serial.requestPort();
-    await serialState.port.open({ baudRate: 921600 });
+    await serialState.port.open({ baudRate: baud });
     serialState.running = true;
+    serialState.baud = baud;
+    // 回放与串口是两条互斥的数据通路：主循环里回放优先，若不在这里退出回放，
+    // 串口帧会一直排队堆积（被积压保护丢掉）而界面却还在放日志——看不出所以然。
+    // 放在 open() 成功之后而不是之前：用户在选端口对话框上点取消时不该把回放停掉。
+    if (replayActive()) {
+      replayState.frames = [];
+      replayState.idx = 0;
+      document.getElementById("btn-replay-stop")?.classList.add("hidden");
+      updateReplayStatus();
+      toast("已退出离线回放，切到串口数据");
+    }
     serialState.lastArrival = 0;
     serialState.uiAt = 0;
     serialState.uiFrames = 0;
     serialState.rate = 0;
-    setSerialStatus("真实 IMU 已连接（921600 8N1）——等待数据帧…");
+    setSerialStatus(`真实 IMU 已连接（${baud} 8N1）——等待数据帧…`);
+    setSerialBaudLocked(true);
     serialReadLoop();
   } catch (err) {
     serialState.running = false;
+    setSerialBaudLocked(false);
     const msg = err instanceof Error ? err.message : String(err);
-    setSerialStatus(`连接失败：${msg}（未选端口或端口被占用——SerialWeb 等其它工具需先断开）`, true);
+    setSerialStatus(`连接失败：${msg}（未选端口 / 端口被占用 / 波特率该平台不支持——SerialWeb 等其它工具需先断开）`, true);
   }
 }
 
@@ -4131,6 +4261,7 @@ async function serialDisconnect(): Promise<void> {
   serialState.lastSeq = -1;
   serialState.rate = 0;
   magCalState.collecting = false;
+  setSerialBaudLocked(false);
   setSerialStatus("真实 IMU 已断开——回到模拟模式");
 }
 
@@ -4159,6 +4290,7 @@ async function serialReadLoop(): Promise<void> {
       serialState.port = null;
       serialState.queue.length = 0;
       serialState.lastTickMs = -1;
+      setSerialBaudLocked(false);
       setSerialStatus("真实 IMU 连接中断（设备拔出或重置？）——点击「连接真实 IMU」重连", true);
       applyDataSourceSemantics();
     }
@@ -4218,6 +4350,175 @@ $("serial-mounting").addEventListener("change", () => {
   serialState.lastTickMs = -1;
 });
 
+/* ==========================================================================
+   离线回放：把导入的 IMU 日志按录制速率喂给五种算法
+   --------------------------------------------------------------------------
+   与真实串口共用同一套语义（`state.real = true`）：无真值基准 → 误差曲线以 Mahony 为参照、
+   幻影隐藏、模拟控件停用。区别只在数据来自文件而不是端口，所以没有「断流看门狗」，
+   改成「播完提示」，并且多了倍速与进度。
+   ========================================================================== */
+
+/** 原始 IMU 的导出列名（与 core/replay.ts 的识别规则对齐：导出即可回灌） */
+const IMU_EXPORT_COLUMNS = [
+  "gyro_x_dps", "gyro_y_dps", "gyro_z_dps",
+  "accel_x_ms2", "accel_y_ms2", "accel_z_ms2",
+  "mag_x_ut", "mag_y_ut", "mag_z_ut",
+];
+
+const replayState = {
+  frames: [] as ReplayFrame[],
+  /** 下一帧下标 */
+  idx: 0,
+  /** 已累积的「录制时间」（秒）；乘以倍速后可消费 */
+  acc: 0,
+  speed: 1,
+  fileName: "",
+  /** 播完只提示一次 */
+  announcedEnd: false,
+};
+
+function replayActive(): boolean {
+  return replayState.frames.length > 0;
+}
+
+/** 数据源的可读名字：模拟 / 真实串口 / 离线回放 */
+function dataSourceLabel(): string {
+  if (replayActive()) return "离线回放";
+  return serialState.running ? "真实 IMU" : "模拟";
+}
+
+function replayDuration(): number {
+  const f = replayState.frames;
+  if (f.length < 2) return 0;
+  return (f[f.length - 1].tMs - f[0].tMs) / 1000;
+}
+
+/**
+ * 每 rAF 推进回放：按「录制时间 × 倍速」消费帧，**逐帧用该帧自身的 dt** 更新估计器
+ * （这正是离线回放的意义：算法看到的采样节奏与录制时一致）。
+ */
+function stepReplayPlayback(dtAnim: number): void {
+  const rp = replayState;
+  const n = rp.frames.length;
+  if (!n || rp.idx >= n) return;
+  rp.acc += rp.speed === 0 ? Number.POSITIVE_INFINITY : dtAnim * rp.speed;
+  let prevTick = rp.idx > 0 ? rp.frames[rp.idx - 1].tMs : rp.frames[0].tMs;
+  let processed = 0;
+  const RAD2 = Math.PI / 180;
+  while (rp.idx < n && processed < 4000) {
+    const f = rp.frames[rp.idx];
+    const dt = frameDtSec(prevTick, f.tMs);
+    if (dt > rp.acc) break;
+    rp.acc -= dt;
+    prevTick = f.tMs;
+    rp.idx++;
+    processed++;
+    const sample: ImuSample = {
+      gyro: [f.gyroDps[0] * RAD2, f.gyroDps[1] * RAD2, f.gyroDps[2] * RAD2],
+      accel: [...f.accelMs2],
+      mag: [...f.magUt],
+    };
+    state.lastImu = sample;
+    updateEstimators(sample, dt);
+    state.simTime += dt;
+    stepStillness(sample, dt);
+    collectMagSample(sample.mag);
+    logAcc += dt;
+    if (logAcc >= LOG_DT) {
+      logAcc -= LOG_DT;
+      logRow();
+    }
+  }
+  if (rp.idx >= n && !rp.announcedEnd) {
+    rp.announcedEnd = true;
+    updateReplayStatus();
+    toast(`回放完成：${n} 帧 / ${replayDuration().toFixed(1)} s —— 曲线与评测表保留本轮结果`, "#7ee787");
+  }
+}
+
+/** 回放状态行（2 Hz）：文件名、进度、倍速 */
+function updateReplayStatus(): void {
+  const chip = document.getElementById("replay-status");
+  if (!chip) return;
+  if (!replayActive()) {
+    chip.classList.add("hidden");
+    return;
+  }
+  const rp = replayState;
+  const total = replayDuration();
+  const done = rp.frames[Math.min(Math.max(rp.idx, 1), rp.frames.length) - 1].tMs / 1000 - rp.frames[0].tMs / 1000;
+  chip.classList.toggle("warn", rp.idx >= rp.frames.length);
+  chip.textContent =
+    `${rp.idx >= rp.frames.length ? "回放结束" : "回放中"} · ${rp.fileName} · ` +
+    `${done.toFixed(1)} / ${total.toFixed(1)} s · ${rp.speed === 0 ? "最快" : `${rp.speed}×`} · ` +
+    `${rp.idx}/${rp.frames.length} 帧`;
+  chip.classList.remove("hidden");
+}
+
+/** 进入回放模式：清掉串口状态，切到「无真值」语义 */
+function startReplay(res: ReplayParseResult, fileName: string): void {
+  if (serialState.running) void serialDisconnect();
+  replayState.frames = res.frames;
+  replayState.idx = 0;
+  replayState.acc = 0;
+  replayState.fileName = fileName;
+  replayState.announcedEnd = false;
+  document.getElementById("btn-replay-stop")?.classList.remove("hidden");
+  applyDataSourceSemantics();
+  resetSim(); // 与串口连接同一套流程：数据源切换 = 新的一轮实验，曲线/统计/时钟全部归零
+  toast(
+    `已载入 ${res.frames.length} 帧（${replayDuration().toFixed(1)} s）——开始离线回放` +
+      (res.skipped ? `，跳过 ${res.skipped} 行` : ""),
+  );
+  // 把识别到的列映射与单位/时间轴假设打到控制台：猜错单位不会报错，但会让数据「看起来不对」
+  console.info("IMU 回放已载入：", { 列映射: res.mapping, 推断: res.notes, 跳过行: res.skipped });
+}
+
+function stopReplay(): void {
+  replayState.frames = [];
+  replayState.idx = 0;
+  replayState.acc = 0;
+  replayState.fileName = "";
+  document.getElementById("btn-replay-stop")?.classList.add("hidden");
+  updateReplayStatus();
+  applyDataSourceSemantics();
+  toast("已退出回放，回到模拟模式");
+}
+
+/** 读文件 → 解析 → 进入回放（失败时把原因贴出来） */
+async function importReplayFile(file: File): Promise<void> {
+  let text = "";
+  try {
+    text = await file.text();
+  } catch (err) {
+    toast(`读取文件失败：${err instanceof Error ? err.message : String(err)}`, "#f85149");
+    return;
+  }
+  const res = parseImuCsv(text);
+  if (res.error) {
+    toast(`导入失败（${file.name}）：${res.error}`, "#f85149");
+    console.warn("IMU 回放导入失败：", res.error, res.mapping, res.notes);
+    return;
+  }
+  startReplay(res, file.name);
+}
+
+document.getElementById("btn-replay-import")?.addEventListener("click", () => {
+  document.getElementById("replay-file")?.click();
+});
+document.getElementById("replay-file")?.addEventListener("change", (e) => {
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (file) void importReplayFile(file);
+  input.value = ""; // 允许连续导入同一个文件（否则第二次不触发 change）
+});
+document.getElementById("btn-replay-stop")?.addEventListener("click", () => stopReplay());
+document.getElementById("replay-speed")?.addEventListener("change", () => {
+  const v = Number(($("replay-speed") as HTMLSelectElement).value);
+  replayState.speed = Number.isFinite(v) ? v : 1;
+  updateReplayStatus();
+});
+
 // ---------- 初始化 ----------
 updateSourceChip();
 applyMagEnable(); // 复选框默认勾选但不触发 change：必须显式同步一次 MARG 状态
@@ -4244,6 +4545,25 @@ resetSim(); // 统一时钟/统计/曲线起点（不改变已还原的深链参
   world,
   imuParams,
   solveState,
+  /** 离线回放的调试/自动化入口：直接喂 CSV 文本（绕开文件选择框，便于 E2E 测试） */
+  replay: {
+    import: (text: string, name = "clipboard.csv"): string => {
+      const res = parseImuCsv(text);
+      if (res.error) return `error: ${res.error}`;
+      startReplay(res, name);
+      return `ok:${res.frames.length} 帧 / ${replayDuration().toFixed(2)} s`;
+    },
+    stop: (): void => stopReplay(),
+    get info() {
+      return {
+        active: replayActive(),
+        frames: replayState.frames.length,
+        idx: replayState.idx,
+        speed: replayState.speed,
+        real: state.real,
+      };
+    },
+  },
   get sceneHandles() {
     return sceneHandles;
   },

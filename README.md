@@ -7,7 +7,7 @@
 
 **在线演示**：[fly_web.070616.xyz](https://fly_web.070616.xyz)　（备用：[workers.dev](https://quaternion-attitude-demo.liu06167492.workers.dev)）
 
-每次推送到 `master` 自动构建部署：类型检查 → 86 项自检 → 产物预算 → 24 项浏览器冒烟 → Cloudflare Workers（PR 也会跑同一套验证，只是不部署）。
+每次推送到 `master` 自动构建部署：类型检查 → 88 项自检 → 产物预算 → 26 项浏览器冒烟 → Cloudflare Workers（PR 也会跑同一套验证，只是不部署）。
 
 ---
 
@@ -32,8 +32,15 @@
 饱和会让姿态在剧烈机动下大幅跑偏且「看不见」，刻度/失准是速率相关误差（零偏估计吸收不了），群延迟造成 ω·τ 的姿态滞后。
 
 **真实 IMU 接入** —— Web Serial 直连 GY-87 等器件（28 字节帧协议，固件参考见 [`firmware/`](firmware/README.md)）。
+**波特率可选**（9600–2000000，默认 921600；连接期间锁定，因为 Web Serial 在 `open()` 时固定端口参数）。
 按固件 tick 差自适应积分步长（100–200 Hz，u32 回绕与空洞自动兜底），CRC 校验、seq 丢帧统计、
 积压保护、1.5 s 断流看门狗；无真值基准时误差曲线自动改以 Mahony 为参照、幻影隐藏、模拟控件置灰。
+
+**离线回放（第三条数据源）** —— 导入一份带时间戳的**原始 IMU** CSV，按录制速率喂给五种算法，
+语义与真实串口完全一致（无真值 → 以 Mahony 为基准）。三种格式都认：本装置导出的 CSV
+（导出弹窗勾「原始 IMU」即可拿到，与回放形成闭环）、带表头的通用 CSV（`t / gx… / ax… / mx…`，
+支持 `rad/s` 与 `g` 自动换算）、7 / 10 列无表头。倍速 1×–10× 或「一口气跑完」；
+解析失败给出可操作提示，成功时把识别到的列映射与单位假设打到控制台。
 
 **五种算法同屏对比** —— 纯陀螺仪积分（漂移对照组）、互补滤波、Mahony、Madgwick、
 卡尔曼滤波（误差状态 ESKF，6 维 `[δθ, δb]`，在线估计陀螺仪零偏）。参数 α / Kp / Ki / β / Q / R 均可在线调节。
@@ -158,9 +165,9 @@ npm run preview   # 预览构建产物
 
 ```bash
 npx tsc --noEmit  # 类型检查
-npm run check     # 86 项：数值 64 + 场景几何 10 + HTML 契约 12
+npm run check     # 88 项：数值 66 + 场景几何 10 + HTML 契约 12
 npm run budget    # 产物体积预算（总量/字体/HTML/主包 JS 四项上限）
-npm run smoke     # 24 项真浏览器端到端（需先 build + preview，自动找本机 Edge/Chrome）
+npm run smoke     # 26 项真浏览器端到端（含导出→导入回放闭环；需先 build + preview，自动找本机 Edge/Chrome）
 ```
 
 > `npm run budget` 防的是「一次误 import 让产物多背一兆字体」这类回归——体积不会自己报警。
@@ -193,6 +200,7 @@ npm run icons      # 从 favicon.svg 重新生成 PWA 图标
 │   │   ├── world.ts        #   仿真世界：真值传播 + 姿态跟踪控制器
 │   │   ├── scenarios.ts    #   八种机动剧本
 │   │   ├── serial.ts       #   串口帧解析 + 固件 tick 时钟
+│   │   ├── replay.ts       #   IMU 日志导入（CSV 宽容解析 + 单位/时间轴推断）
 │   │   ├── magcal.ts       #   磁力计球拟合（硬铁 + 对角软铁）
 │   │   ├── stats.ts        #   误差统计（均值 / RMSE / 收敛时刻）
 │   │   ├── gimbal.ts       #   万向节锁运动学 + NED→显示基变换
@@ -210,10 +218,10 @@ npm run icons      # 从 favicon.svg 重新生成 PWA 图标
 │       ├── b64.ts          #   UTF-8 base64url 深链编码
 │       └── mode.ts         #   视图状态与文案
 ├── scripts/
-│   ├── selftest.ts         #   数值自检（64 项）
+│   ├── selftest.ts         #   数值自检（66 项）
 │   ├── scenecheck.ts       #   场景几何自检（10 项）
 │   ├── htmlcheck.ts        #   HTML↔TS 契约自检（12 项）
-│   ├── browser-smoke.mjs   #   真浏览器端到端（24 项）
+│   ├── browser-smoke.mjs   #   真浏览器端到端（26 项）
 │   ├── distbudget.mjs      #   产物体积预算（5 项上限）
 │   ├── shot.mjs            #   开发用截图工具（视口/元素截图 + 页面内脚本）
 │   ├── make-icons.mjs      #   PWA 图标生成
@@ -250,6 +258,7 @@ attitudeDemo.state        // 视图、数据源、通道等 UI 状态
 attitudeDemo.world        // 仿真世界（真值姿态 q、角速度、剧本）
 attitudeDemo.imuParams    // 当前 IMU 误差链参数（含量程/刻度/失准/群延迟）
 attitudeDemo.solveState   // 解算频率与抽帧累加器
+attitudeDemo.replay       // 离线回放：{ import(csvText, name), stop(), info }
 ```
 
 ---

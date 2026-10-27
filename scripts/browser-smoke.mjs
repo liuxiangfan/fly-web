@@ -277,28 +277,100 @@ try {
   check("A/B 快照与 B 组图例", ab.on === "on" && ab.chips === 4 && ab.pressed, `${ab.on} chips=${ab.chips}`);
 
   // CSV 导出：拦截 Blob，检查参数头与数据行
-  const csv = await page.evaluate(async () => {
-    let text = null;
+  // 拦截 blob 下载跑两遍：默认档（姿态角与误差）与「带四元数」档。
+  // 导出前会弹选项对话框（这是用户要求的行为），所以要先点确认按钮。
+  const NL = String.fromCharCode(10);
+  const runExport = async (scope) =>
+    page.evaluate(async (scopeValue) => {
+      let text = null;
+      const orig = URL.createObjectURL;
+      URL.createObjectURL = (b) => {
+        b.text().then((t) => (text = t));
+        return "blob:test";
+      };
+      const origClick = HTMLAnchorElement.prototype.click;
+      HTMLAnchorElement.prototype.click = function () {};
+      document.getElementById("btn-export").click();
+      await new Promise((r) => setTimeout(r, 120));
+      const dlg = document.getElementById("export-dialog");
+      if (!dlg.open) throw new Error("导出弹窗没有打开");
+      const meta = document.getElementById("export-meta")?.textContent ?? "";
+      document.querySelector(`input[name="export-scope"][value="${scopeValue}"]`).checked = true;
+      document.getElementById("export-confirm").click();
+      await new Promise((r) => setTimeout(r, 250));
+      URL.createObjectURL = orig;
+      HTMLAnchorElement.prototype.click = origClick;
+      return { text, meta, closed: !dlg.open };
+    }, scope);
+
+  const base = await runExport("angles");
+  const csv = base.text;
+  const csvLines = csv ? csv.split(NL) : [];
+  const cols = (csvLines.find((l) => l.startsWith("t_s")) ?? "").split(",").filter(Boolean);
+  check(
+    "CSV 导出：弹窗选档 + 默认档 24 列",
+    Boolean(csv) &&
+      csv.includes("algorithm_params") &&
+      csv.includes("err_kalman_deg") &&
+      !csv.includes("_qw") &&
+      cols.length === 24 &&
+      base.closed,
+    csv ? `${csvLines.length} 行 / ${cols.length} 列；弹窗提示「${base.meta.split("·")[0].trim()}」` : "未生成",
+  );
+
+  const withQ = await runExport("quat");
+  const qCols = ((withQ.text ? withQ.text.split(NL) : []).find((l) => l.startsWith("t_s")) ?? "")
+    .split(",")
+    .filter(Boolean);
+  const need = ["pure_qw", "mahony_qz", "kalman_qw", "truth_qw"];
+  check(
+    "CSV 导出：选「带四元数」后 48 列且列名齐全",
+    qCols.length === 48 && need.every((c) => qCols.includes(c)),
+    `${qCols.length} 列，含 ${need.filter((c) => qCols.includes(c)).join("/")}`,
+  );
+
+  // 闭环：导出「带原始 IMU」的 CSV → 用回放入口喂回装置 → 应进入回放模式并自行推进。
+  // 这条用例把「导出」与「导入回放」两端锁在一起——任何一端改了列名就会当场失败。
+  const roundTrip = await page.evaluate(async () => {
+    const NL = String.fromCharCode(10);
+    let csv = null;
     const orig = URL.createObjectURL;
     URL.createObjectURL = (b) => {
-      b.text().then((t) => (text = t));
-      return "blob:test";
+      b.text().then((t) => (csv = t));
+      return "blob:x";
     };
     const origClick = HTMLAnchorElement.prototype.click;
     HTMLAnchorElement.prototype.click = function () {};
     document.getElementById("btn-export").click();
-    await new Promise((r) => setTimeout(r, 250));
+    await new Promise((r) => setTimeout(r, 150));
+    document.getElementById("export-imu").checked = true;
+    document.getElementById("export-confirm").click();
+    await new Promise((r) => setTimeout(r, 400));
     URL.createObjectURL = orig;
     HTMLAnchorElement.prototype.click = origClick;
-    return text;
+    if (!csv) return { err: "导出未产生 CSV" };
+    const header = csv.split(NL).find((l) => l.startsWith("t_s")) ?? "";
+    const imp = window.attitudeDemo.replay.import(csv, "roundtrip.csv");
+    await new Promise((r) => setTimeout(r, 1200));
+    const info = window.attitudeDemo.replay.info;
+    const status = document.getElementById("replay-status").textContent;
+    const mode = document.body.dataset.imuMode;
+    const controlsOff = document.getElementById("scenario-select").disabled;
+    window.attitudeDemo.replay.stop();
+    await new Promise((r) => setTimeout(r, 300));
+    const afterStop = window.attitudeDemo.replay.info;
+    return { header, imp, info, status, mode, controlsOff, afterStop };
   });
   check(
-    "CSV 导出含参数头与完整列",
-    Boolean(csv) &&
-      csv.includes("algorithm_params") &&
-      csv.includes("err_kalman_deg") &&
-      csv.split("\n").length > 10,
-    csv ? `${csv.split("\n").length} 行` : "未生成",
+    "导出→导入闭环：原始 IMU 能回放且退出后回到模拟",
+    Boolean(roundTrip.header?.includes("gyro_x_dps")) &&
+      roundTrip.imp?.startsWith("ok:") &&
+      roundTrip.info?.active === true &&
+      roundTrip.info?.idx > 0 &&
+      roundTrip.mode === "real" &&
+      roundTrip.controlsOff === true &&
+      roundTrip.afterStop?.active === false,
+    `${roundTrip.imp}；回放中 ${roundTrip.info?.idx}/${roundTrip.info?.frames} 帧，模式=${roundTrip.mode}，模拟控件停用=${roundTrip.controlsOff}，退出后 active=${roundTrip.afterStop?.active}`,
   );
 
   // 深链：当前 hash 重载后参数应保持

@@ -58,6 +58,7 @@ import { narrateGimbal } from "../src/ui/mode";
 import { calibrateMag, fitMagSphere, applyMagCalibration } from "../src/core/magcal";
 import { ErrorTracker } from "../src/core/stats";
 import { b64urlDecode, b64urlEncode } from "../src/ui/b64";
+import { parseImuCsv } from "../src/core/replay";
 import { EXPERIMENTS } from "../src/ui/experiments";
 
 const H = 1 / 500;
@@ -1346,6 +1347,86 @@ const dirty: ImuParams = { gyroBiasDps: 1, gyroNoiseDps: 0.2, gyroWalkDps: 0, gy
     "方向门控阈值可调（20° 拒收 / 30° 放行）",
     t20 < 0.5 && t30 > 15,
     `污染方向偏 22°：门限 20° → ${t20.toFixed(2)}°（拒收）；门限 30° → ${t30.toFixed(2)}°（放行、被拽偏）`,
+  );
+}
+
+// 48. IMU 日志导入（core/replay.ts 纯函数）：两种格式、单位换算、时间轴推断
+//     这是「离线回放」的入口，也是唯一一处「用户给的文本」进来的地方——
+//     宽容匹配 + 把推断假设写进 notes 是刻意的：猜错单位不会报错，但会让数据看起来不对。
+{
+  const rows = (header: string, body: string, n = 30, dt = 0.01): string => {
+    const cols = body.split(",");
+    const t0 = Number(cols[0]);
+    const out: string[] = [];
+    for (let i = 0; i < n; i++) out.push([(t0 + i * dt).toFixed(4), ...cols.slice(1)].join(","));
+    return (header ? header + "\n" : "") + out.join("\n");
+  };
+
+  // 本装置导出格式（注释头 + gyro_x_dps / accel_x_ms2 / mag_x_ut）
+  const own = parseImuCsv(
+    "# quaternion-attitude-demo export\n# mode=simulation\n" +
+      "t_s,truth_roll_deg,gyro_x_dps,gyro_y_dps,gyro_z_dps,accel_x_ms2,accel_y_ms2,accel_z_ms2,mag_x_ut,mag_y_ut,mag_z_ut\n" +
+      rows("", "0.000,1.0,0.5,-0.2,0.1,0.1,0.2,9.81,32.8,0.0,37.7"),
+  );
+  const ownOk =
+    !own.error &&
+    own.frames.length === 30 &&
+    Math.abs(own.frames[0].gyroDps[0] - 0.5) < 1e-9 &&
+    Math.abs(own.frames[0].accelMs2[2] - 9.81) < 1e-9 &&
+    own.frames[0].hasMag &&
+    Math.abs(own.frames[0].magUt[0] - 32.8) < 1e-9;
+
+  // 单位自动换算：rad/s → °/s、g → m/s²
+  const units = parseImuCsv(
+    rows("t,gyro_x_rad_s,gyro_y_rad_s,gyro_z_rad_s,accel_x_g,accel_y_g,accel_z_g", "0,0.017453,0,0,0,0,1"),
+  );
+  const unitsOk =
+    !units.error &&
+    Math.abs(units.frames[0].gyroDps[0] - 1) < 1e-3 &&
+    Math.abs(units.frames[0].accelMs2[2] - 9.80665) < 1e-3;
+
+  // 短名列 + 毫秒时间轴（5 ms 采样 → 应报 200 Hz）
+  const shortMs = parseImuCsv(rows("t_ms,gx,gy,gz,ax,ay,az", "0,1,2,3,0,0,9.8", 30, 5));
+  const msOk =
+    !shortMs.error &&
+    Math.abs(shortMs.frames[0].gyroDps[0] - 1) < 1e-9 &&
+    shortMs.notes.some((n) => n.includes("200 Hz"));
+
+  // 无表头：7 列与 10 列都要认
+  const noHead7 = parseImuCsv(rows("", "0,1,2,3,0,0,9.8"));
+  const noHead10 = parseImuCsv(rows("", "0,1,2,3,0,0,9.8,10,20,30"));
+  const noHeadOk =
+    !noHead7.error && !noHead7.frames[0].hasMag && !noHead10.error && noHead10.frames[0].hasMag;
+
+  check(
+    "IMU 日志导入：两种格式 + 单位换算 + 时间轴推断",
+    ownOk && unitsOk && msOk && noHeadOk,
+    `本装置格式 ${own.frames.length} 帧（含磁=${own.frames[0].hasMag}）；rad/s→°/s ${units.frames[0].gyroDps[0].toFixed(3)}；` +
+      `g→m/s² ${units.frames[0].accelMs2[2].toFixed(3)}；毫秒表头判出 ${shortMs.notes.find((n) => n.includes("Hz")) ?? "?"}；` +
+      `无表头 7/10 列磁力计=${noHead10.frames[0].hasMag}`,
+  );
+}
+
+// 49. IMU 日志导入的错误路径：列名认不出、行数太少、无表头列数不对 —— 都必须给出**可操作**的提示
+{
+  const rows = (header: string, body: string, n = 30): string => {
+    const cols = body.split(",");
+    const out: string[] = [];
+    for (let i = 0; i < n; i++) out.push([(i * 0.01).toFixed(3), ...cols.slice(1)].join(","));
+    return (header ? header + "\n" : "") + out.join("\n");
+  };
+  const bad1 = parseImuCsv(rows("time,a1,b2,c3,d4,e5,f6", "0,1,2,3,0,0,9.8"));
+  const bad2 = parseImuCsv(rows("t,gx,gy,gz,ax,ay,az", "0,1,2,3,0,0,9.8", 5));
+  const bad3 = parseImuCsv(rows("", "0,1,2,3,0", 30));
+  const bad4 = parseImuCsv("");
+  check(
+    "IMU 日志导入：错误路径给出可操作提示",
+    Boolean(bad1.error && bad1.error.includes("陀螺仪")) &&
+      Boolean(bad2.error && bad2.error.includes("太少")) &&
+      Boolean(bad3.error && bad3.error.includes("7 列")) &&
+      Boolean(bad4.error),
+    `列名认不出 →「${(bad1.error ?? "").slice(0, 16)}…」；帧数不足 →「${(bad2.error ?? "").slice(0, 10)}…」；` +
+      `列数不对 →「${(bad3.error ?? "").slice(0, 18)}…」`,
   );
 }
 
