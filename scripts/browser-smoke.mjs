@@ -1290,13 +1290,33 @@ try {
   // 真正要守的不是首屏多快，而是「跑久了会不会越跑越卡」。
   // 四个会被不断 push 的容器都必须封顶：记录行、INS 轨迹、串口队列、提示条；
   // 曲线用的是定长 Float64Array 环形缓冲（设计上不增长，这里一并守）。
-  // 判据取「结构量」而不是只看堆大小：堆在无头软渲染下抖动大，容易被误报；
-  // 结构量是确定性的，堆增长只作为并列信息（宽松上限防真正的泄漏）。
+  //
+  // 两处踩过的坑，都写在这里免得下次再犯：
+  //  ① 判据不能要求「仿真时钟推进 8 秒」：仿真步长被 dt ≤ 50 ms 夹住，所以时钟最快也就是
+  //     「每帧 50 ms」，一帧都慢的机器上 12 秒墙钟只换到 2 秒仿真时间（CI 实测）。
+  //     校验「循环还活着」用 +1.5 s 就够，别把它当成性能指标。
+  //  ② 界面上的 fps 读数**不能**当性能指标：它用被夹过的 dt 累加，rawDt > 50 ms 时恒等于 ~20，
+  //     4 fps 的机器上也显示 20 fps。要真实帧率就自己数 rAF。
+  const measureRaf = (ms) =>
+    page.evaluate(
+      (window_ms) =>
+        new Promise((res) => {
+          let n = 0;
+          const t0 = performance.now();
+          const tick = () => {
+            n++;
+            if (performance.now() - t0 < window_ms) requestAnimationFrame(tick);
+            else res(Math.round((n / (performance.now() - t0)) * 1000));
+          };
+          requestAnimationFrame(tick);
+        }),
+      ms,
+    );
   const soakRead = () =>
     page.evaluate(() => ({
       sizes: window.attitudeDemo.sizes(),
       clock: parseFloat((document.getElementById("clock")?.textContent ?? "0").replace(/[^\d.]/g, "")) || 0,
-      fps: parseInt((document.getElementById("fps")?.textContent ?? "0").replace(/[^\d]/g, ""), 10) || 0,
+      fpsReadout: parseInt((document.getElementById("fps")?.textContent ?? "0").replace(/[^\d]/g, ""), 10) || 0,
       heap: performance.memory ? performance.memory.usedJSHeapSize : -1,
       toasts: document.getElementById("toast-layer")?.childElementCount ?? -1,
     }));
@@ -1311,37 +1331,38 @@ try {
   const soak0 = await soakRead();
   await new Promise((r) => setTimeout(r, 12000));
   const soak1 = await soakRead();
+  const realFps = await measureRaf(2000);
   const heapMb = (soak1.heap - soak0.heap) / 1048576;
   const sz = soak1.sizes;
   check(
-    "长跑 15 s：滚动容器全部封顶、时钟推进、堆增长受控",
+    "长跑 15 s：滚动容器全部封顶、时钟仍在推进、堆增长受控",
     sz.logRows <= sz.logRowsCap &&
       sz.insTrailMax <= sz.insTrailCap &&
       sz.serialQueue <= sz.serialQueueCap &&
       sz.charts.every((c) => c.count <= c.cap) &&
       soak1.toasts === 0 &&
-      soak1.clock > soak0.clock + 8 &&
-      soak1.fps >= 8 &&
+      soak1.clock > soak0.clock + 1.5 &&
       (soak1.heap < 0 || heapMb < 24),
     `记录行 ${sz.logRows}/${sz.logRowsCap}，INS 轨迹 ${sz.insTrailMax}/${sz.insTrailCap}，` +
       `串口队列 ${sz.serialQueue}/${sz.serialQueueCap}，曲线 ${sz.charts.map((c) => `${c.count}/${c.cap}`).join(" ")}；` +
-      `t ${soak0.clock.toFixed(1)}→${soak1.clock.toFixed(1)} s，fps ${soak1.fps}，提示条残留 ${soak1.toasts}；` +
-      `堆 ${soak0.heap < 0 ? "不可用" : `${(soak0.heap / 1048576).toFixed(1)}→${(soak1.heap / 1048576).toFixed(1)} MB（Δ${heapMb.toFixed(1)}）`}`,
+      `t ${soak0.clock.toFixed(1)}→${soak1.clock.toFixed(1)} s（仿真步长封顶 50 ms，慢机器上这段本来就走得少）；` +
+      `真实帧率 ${realFps} fps（界面读数 ${soak1.fpsReadout}——它用夹过的 dt 算，rawDt>50ms 时恒约 20，不可当性能指标）；` +
+      `提示条残留 ${soak1.toasts}；堆 ${soak0.heap < 0 ? "不可用" : `${(soak0.heap / 1048576).toFixed(1)}→${(soak1.heap / 1048576).toFixed(1)} MB（Δ${heapMb.toFixed(1)}）`}`,
   );
-  // 上面的 12 s 只证明「结构量在量级上正常」；真正要证明的是**裁剪真的会触发**。
-  // 记录缓冲的裁剪条件是「超过 850 行就丢掉最早的 100 行」，靠自然跑要 34 s 才够。
-  // 这里用离线回放的「最快」档（speed=0，单帧最多消费 4000 个样本）把 40 s 仿真时间
-  // 一口气喂进去：于是「仿真时间推进了 40 s」与「记录行数仍然 ≤ 850」同时成立，
-  // 才真正证明裁剪逻辑在工作——少了 splice 的版本会在这里留下 ~1000 行。
+  // 上面那 12 s 只证明「结构量在量级上正常」；真正要证明的是**裁剪真的会触发**。
+  // 记录缓冲的裁剪条件是「超过 850 行就丢掉最早的 100 行」，靠自然跑要 34 s 才够
+  // （而且慢机器上更慢）。这里用离线回放的「最快」档（speed=0，单帧最多消费 4000 个样本）
+  // 把 40 s 仿真时间一口气喂进去：于是「仿真时间推进了 40 s」与「记录行数仍然 ≤ 850」
+  // 同时成立，才真正证明裁剪在工作——少了 splice 的版本会在这里留下 ~1000 行。
   const trim = await page.evaluate(async () => {
     const HZ = 100;
-    // 表头用装置自己导出的那套列名（replay.ts 认的就是这个写法，gx_dps 这种缩写不在其列）
+    // 表头用装置自己导出的那套列名（replay.ts 认的就是这个写法，gx_dps 这类缩写不在其列）
     const rows = ["t_s,gyro_x_dps,gyro_y_dps,gyro_z_dps,accel_x_ms2,accel_y_ms2,accel_z_ms2"];
     for (let k = 0; k < 40 * HZ; k++) rows.push(`${(k / HZ).toFixed(3)},1.5,0,0,0,0,9.80665`);
     const r = window.attitudeDemo.replay.import(rows.join(String.fromCharCode(10)), "soak.csv");
     document.getElementById("replay-speed").value = "0";
     document.getElementById("replay-speed").dispatchEvent(new Event("change"));
-    await new Promise((res) => setTimeout(res, 2500)); // 让主循环把 4000 帧消费掉
+    await new Promise((res) => setTimeout(res, 3000)); // 让主循环把 4000 帧消费掉
     const after = window.attitudeDemo.sizes();
     const info = window.attitudeDemo.replay.info;
     window.attitudeDemo.replay.stop();
