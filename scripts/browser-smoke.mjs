@@ -303,15 +303,22 @@ try {
   };
 
   await gotoDocPage("filters");
-  await new Promise((r) => setTimeout(r, 700)); // 先确保至少画过一帧
+  // 三次采样：第一次可能恰好在「还没画过第一帧」的窗口里（未绘制的 canvas 读出来是全黑，
+  // 每个采样点都会被算成「有内容」——CI 慢机器上真的遇到过）。判据因此放在**后两次**上：
+  // 「后两次都画过了、且它们的指纹不同」= 演示在动；真冻住了两次都是全黑、指纹相同 → 仍然会失败。
+  await new Promise((r) => setTimeout(r, 700));
   const compA = await canvasStat("fig-comp-demo");
-  const bodeSt = await canvasStat("fig-bode-demo");
-  await new Promise((r) => setTimeout(r, 3000));
+  await new Promise((r) => setTimeout(r, 2500));
   const compB = await canvasStat("fig-comp-demo");
+  const bodeSt = await canvasStat("fig-bode-demo");
+  await new Promise((r) => setTimeout(r, 2500));
+  const compC = await canvasStat("fig-comp-demo");
+  const visiblePage = await page.evaluate(() => document.querySelector(".doc-page:not([hidden])")?.dataset.docPage);
   check(
     "文档演示：互补滤波曲线在实时推进 + 频域图有图形",
-    compA.sig !== compB.sig && painted(compA) && painted(compB) && painted(bodeSt),
-    `曲线 ${compA.ink}/${compA.cells} → ${compB.ink}/${compB.cells}（指纹变化=${compA.sig !== compB.sig}）；频域 ${bodeSt.ink}/${bodeSt.cells}`,
+    compB.sig !== compC.sig && painted(compB) && painted(compC) && painted(bodeSt),
+    "当前文档页 " + visiblePage + "；曲线 " + compA.ink + " → " + compB.ink + " → " + compC.ink + "/" + compC.cells +
+      "（后两次指纹变化=" + (compB.sig !== compC.sig) + "）；频域 " + bodeSt.ink + "/" + bodeSt.cells,
   );
 
   await gotoDocPage("math"); // 顺序 / 校准 / Allan / 一维卡尔曼四个演示都在这一页
