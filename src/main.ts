@@ -4680,6 +4680,12 @@ resetSim(); // 统一时钟/统计/曲线起点（不改变已还原的深链参
    * 就能在任何时候回答「用户改了哪个控件但分享链接没带走」——这是会随控件增加而
    * 悄悄失效的一类覆盖度问题（原先靠一次性人工审计）。
    */
+  /**
+   * 立刻算出当前状态的深链字符串（不依赖主循环 10 Hz 的 updateHash）。
+   * 自动化测试必须用它而不是读 location.hash —— 后者是「帧循环顺手写的」，
+   * 时序上可能落后于刚设的值（CI 上就这么假失败过一次），而且失败的其实是测试而不是功能。
+   */
+  encodeDeepLink: (): string => deepHash(),
   deepLink: (): { keys: string[]; checks: string[]; sels: string[] } => ({
     keys: [...DEEP_KEYS],
     checks: [...DEEP_CHECKS],

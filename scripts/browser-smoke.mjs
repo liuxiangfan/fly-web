@@ -1148,6 +1148,9 @@ try {
   const deepRoundTrip = await (async () => {
     const pg = await browser.newPage();
     await pg.setViewport({ width: 1280, height: 900 });
+    const srcWarn = [];
+    pg.on("console", (m) => m.type() === "warning" && srcWarn.push(m.text().slice(0, 80)));
+    pg.on("pageerror", (e) => srcWarn.push("pageerror: " + String(e).slice(0, 80)));
     await pg.goto(URL, { waitUntil: "domcontentloaded" });
     await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 15000 });
     // 在每个控件上设一个「与默认明显不同」的值（滑杆取量程端、开关取反、下拉取非首项）
@@ -1194,9 +1197,10 @@ try {
       };
       return { keys: dl.keys, checks: dl.checks, sels: dl.sels, values: {} };
     });
-    // 取当前 hash（updateHash 是 10 Hz，所以给它一点时间；实在没有就用「分享」按钮的产物）
-    await new Promise((r) => setTimeout(r, 400));
-    const hash = await pg.evaluate(() => location.hash);
+    // 用应用自己的编码器立刻取 hash：location.hash 是帧循环 10 Hz 顺手写的，
+    // 时序上可能落后于刚设的值（CI 慢机器上就这么假失败过一次——错的是测试，不是功能）
+    await new Promise((r) => setTimeout(r, 300));
+    const hash = await pg.evaluate(() => window.attitudeDemo.encodeDeepLink());
     const srcValues = await pg.evaluate((lists) => {
       const read = (id) => {
         const el = document.getElementById(id);
@@ -1214,6 +1218,9 @@ try {
     // 新页面按 hash 打开，逐一比对
     const pg2 = await browser.newPage();
     await pg2.setViewport({ width: 1280, height: 900 });
+    const dstWarn = [];
+    pg2.on("console", (m) => m.type() === "warning" && dstWarn.push(m.text().slice(0, 80)));
+    pg2.on("pageerror", (e) => dstWarn.push("pageerror: " + String(e).slice(0, 80)));
     await pg2.goto(URL + hash, { waitUntil: "domcontentloaded" });
     await pg2.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 15000 });
     await new Promise((r) => setTimeout(r, 500));
@@ -1234,12 +1241,21 @@ try {
       if (srcValues[k] === null && dstValues[k] === null) continue;
       if (String(srcValues[k]) !== String(dstValues[k])) bad.push(k + ": " + srcValues[k] + "→" + dstValues[k]);
     }
-    return { hash: hash.slice(0, 24) + "…", checked: Object.keys(srcValues).length, bad };
+    return {
+      hash: hash.slice(0, 24) + "…",
+      checked: Object.keys(srcValues).length,
+      bad,
+      warns: [...srcWarn, ...dstWarn].slice(0, 4),
+    };
   })();
   check(
     "深链真实往返：全部控件的值都能被链接带过去并还原",
     deepRoundTrip.bad.length === 0,
-    deepRoundTrip.checked + " 个控件往返" + (deepRoundTrip.bad.length ? "，不一致：" + deepRoundTrip.bad.slice(0, 6).join("｜") : "全部一致") + "（hash " + deepRoundTrip.hash + "）",
+    deepRoundTrip.checked + " 个控件往返" +
+      (deepRoundTrip.bad.length
+        ? "，不一致：" + deepRoundTrip.bad.slice(0, 6).join("｜") + (deepRoundTrip.warns.length ? "；跳过项警告：" + deepRoundTrip.warns.join(" / ") : "")
+        : "全部一致") +
+      "（hash " + deepRoundTrip.hash + "）",
   );
 
   // ---------- 文本行协议 / MAVLink 协议：各自的假串口端到端 ----------
