@@ -52,6 +52,13 @@ const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) 
 
 // 仿真步异常保护：记录一次并暂停，渲染循环与交互不受影响（可切模式后继续）
 let simErrorShown = false;
+/** 仿真异常横幅的 DOM 引用：复位时要把它摘掉，否则那条红字会一直挂在屏幕上（实测踩到） */
+let simErrorChip: HTMLElement | null = null;
+function clearSimError(): void {
+  simErrorShown = false;
+  simErrorChip?.remove();
+  simErrorChip = null;
+}
 function showSimError(err: unknown): void {
   if (simErrorShown) return;
   simErrorShown = true;
@@ -61,6 +68,7 @@ function showSimError(err: unknown): void {
   chip.style.color = "#f85149";
   chip.textContent = `仿真已暂停：${err instanceof Error ? err.message : String(err)}（切换机动模式后点「继续」可恢复）`;
   (document.getElementById("toast-layer") ?? $("readout-overlay")).appendChild(chip);
+  simErrorChip = chip;
 }
 
 // ---------- 仿真状态 ----------
@@ -833,8 +841,11 @@ function applyAccelGate(): void {
   }
 }
 $("gate-toggle").addEventListener("change", applyAccelGate);
-$("gate-deg").addEventListener("input", applyAccelGate);
-$("gate-mag").addEventListener("input", applyAccelGate);
+// 两个阈值走 bindSlider 而不是裸监听 range：bindSlider 会顺带把「数值框 + 步距框」接线，
+// 并在绑定时把当前值写进数值框。原先只挂了 range 的 input 监听 → 右侧那两个数值框
+// **永远是空的、敲进去也毫无反应**（同页其它 29 行都能键入，只有这两行不能）。
+bindSlider("gate-deg", () => applyAccelGate(), (v) => `${v.toFixed(0)}°`);
+bindSlider("gate-mag", () => applyAccelGate(), (v) => `${v.toFixed(0)}%`);
 $("gate-recovery").addEventListener("change", applyAccelGate);
 
 /**
@@ -861,7 +872,10 @@ $("mag-mode").addEventListener("change", applyMagMode);
  */
 const solveState = { hz: 500, acc: 0 };
 $("solve-rate").addEventListener("change", () => {
-  solveState.hz = Number($<HTMLSelectElement>("solve-rate").value);
+  // 下限守卫：hz = 0 会让主循环里的 step = 1/hz = Infinity → 估计器**永远不再更新**
+  // （真值还在动、误差曲线一路涨，界面上却毫无报错，只有下拉框空白）。深链写入非法值时踩到过。
+  const hz = Number($<HTMLSelectElement>("solve-rate").value);
+  solveState.hz = Number.isFinite(hz) && hz >= 1 ? hz : 500;
   solveState.acc = 0;
   resetSim();
 });
@@ -1800,6 +1814,52 @@ function applyView(view: UiView): void {
   }
 }
 
+/* ==========================================================================
+   WebGL 上下文丢失 / 恢复
+   --------------------------------------------------------------------------
+   演示装置是「开着不动也一直跑」的常驻页面：GPU 驱动重置、系统休眠唤醒、开太多标签页
+   被浏览器回收上下文，都会让 canvas 永久黑屏——而页面其它部分照常工作，用户只会觉得
+   「3D 坏了」。three.js 允许我们 preventDefault 阻止默认的「上下文不可恢复」语义，
+   再在 restored 时把视图重新同步一遍即可自愈。
+   ========================================================================== */
+const glRenderer = sceneHandles.renderer;
+if (glRenderer) {
+const glCanvas = glRenderer.domElement;
+let glLostNotice: HTMLElement | null = null;
+glCanvas.addEventListener(
+  "webglcontextlost",
+  (e) => {
+    e.preventDefault(); // 允许后续恢复（不调用它就永远不会触发 contextrestored）
+    if (glLostNotice) return;
+    glLostNotice = document.createElement("div");
+    glLostNotice.className = "ov-chip";
+    glLostNotice.style.color = "#fbbf24";
+    glLostNotice.textContent = "3D 视图的 GPU 上下文被系统回收了（驱动重置/休眠唤醒/标签页太多）——正在等待恢复，恢复后会自动重绘";
+    (document.getElementById("toast-layer") ?? $("readout-overlay")).appendChild(glLostNotice);
+  },
+  false,
+);
+glCanvas.addEventListener(
+  "webglcontextrestored",
+  () => {
+    glLostNotice?.remove();
+    glLostNotice = null;
+    // 重新同步尺寸与取景：场景图对象没变，但 drawing buffer 要按当前尺寸重建，
+    // 视图可见性/相机也要重算一遍（与 setup.ts 里 ResizeObserver 用的是同一套调用）
+    const w = glCanvas.clientWidth;
+    const h = glCanvas.clientHeight;
+    if (w > 0 && h > 0) {
+      sceneHandles.camera.aspect = w / h;
+      sceneHandles.camera.updateProjectionMatrix();
+      glRenderer.setSize(w, h);
+    }
+    applyView(state.view);
+    toast("3D 视图已恢复", "#7ee787");
+  },
+  false,
+);
+}
+
 $("view-seg")
   .querySelectorAll<HTMLButtonElement>(".seg-btn")
   .forEach((btn) => btn.addEventListener("click", () => applyView(btn.dataset.view as UiView)));
@@ -2123,7 +2183,7 @@ function resetSim(): void {
   resetIns(); // 位置积分与轨迹属于「本轮」，一并归零
   state.lastImu = null;
   if (state.real) serialState.queue.length = 0; // 重置后不要把重置前的帧再回放一遍
-  simErrorShown = false;
+  clearSimError(); // 连同那条红字横幅一起摘掉（只复位标志会让它一直挂在屏幕上）
   updateMetricsTable();
 }
 
@@ -3255,14 +3315,21 @@ const DEEP_KEYS = [
   "imu-mag-disturb", "imu-hard-iron", "imu-soft-iron", "mahony-kp", "mahony-ki", "madg-beta", "comp-alpha",
   "kalman-proc", "kalman-obs", "man-roll", "man-pitch", "man-yaw", "quat-t",
   "gate-deg", "gate-mag", "imu-gyro-scale", "imu-gyro-misalign", "imu-delay",
+  // 万向节锁演示的三个环角：分享「俯仰 90° 锁死」那一屏必须带上，否则同学打开是 0°/0°/0°
+  "gim-roll", "gim-pitch", "gim-yaw",
 ];
 const DEEP_CHECKS = [
   "mag-enable", "gate-toggle", "gate-recovery", "ghost-toggle", "telemetry-toggle", "axis-toggle",
   "init-offset-toggle", "ab-toggle", "loop-toggle", "palette-toggle", "ins-toggle",
+  // q/−q 是四元数视图的一个独立子模式；MAVLink 取反开关决定三轴符号——都要跟着链接走
+  "quat-neg-toggle", "serial-invert",
 ];
 const DEEP_SELS = [
   "scenario-select", "source-select", "quat-mode", "quat-pair-select", "imu-preset",
   "mag-mode", "solve-rate", "imu-gyro-range", "serial-baud", "serial-mounting", "ins-scale",
+  // 协议最重要：同样的字节流，二进制/文本/MAVLink 解析结果完全不同，协议没带过去
+  // 就不是「看起来不对」而是直接 0 帧或乱码
+  "serial-protocol",
 ];
 let lastHash = "";
 
@@ -3294,26 +3361,48 @@ function applyDeepLink(): void {
       }
     })();
     const o = JSON.parse(json) as Record<string, unknown>;
+    // 逐键容错：整体只包一个 try/catch 时，**任何**一键抛错都会让后面所有项静默不还原
+    // （实测过：source-select 被写成不存在的值时抛 TypeError，view/panels/charts 全部丢失）。
+    const each = (fn: () => void): void => {
+      try {
+        fn();
+      } catch (err) {
+        console.warn("深链还原跳过一项：", err);
+      }
+    };
     for (const k of DEEP_KEYS) {
       const el = $<HTMLInputElement>(k);
-      if (o[k] !== undefined && el) {
-        el.value = String(o[k]);
+      const v = o[k];
+      if (v === undefined || !el) continue;
+      each(() => {
+        el.value = String(v);
         el.dispatchEvent(new Event("input"));
-      }
+      });
     }
     for (const k of DEEP_CHECKS) {
       const el = $<HTMLInputElement>(k);
-      if (o[k] !== undefined && el) {
+      if (o[k] === undefined || !el) continue;
+      each(() => {
         el.checked = Boolean(o[k]);
         el.dispatchEvent(new Event("change"));
-      }
+      });
     }
     for (const k of DEEP_SELS) {
       const el = $<HTMLSelectElement>(k);
-      if (o[k] !== undefined && el) {
-        el.value = String(o[k]);
+      const v = o[k];
+      if (v === undefined || !el) continue;
+      each(() => {
+        // 白名单：值必须真的存在于选项里，否则 el.value 会被置成 ""。
+        // 对 solve-rate 这种「空值 → 0 Hz → 估计器永久冻结且不报错」的控件，
+        // 静默冻结比报错难查得多；跨版本分享链接与手改 URL 都会踩到。
+        const value = String(v);
+        if (![...el.options].some((op) => op.value === value)) {
+          console.warn("深链里的选项不存在，已跳过：", k, value);
+          return;
+        }
+        el.value = value;
         el.dispatchEvent(new Event("change"));
-      }
+      });
     }
     // 姿态对切换会把插值进度重置为 0；深链里的 t 要重新写一次才算真正还原
     if (o["quat-t"] !== undefined) {
@@ -3693,6 +3782,8 @@ function serialBaud(): number {
 }
 
 const serialState = {
+  /** 连接正在进行中（防重入：见 serialConnect 注释） */
+  connecting: false,
   port: null as SerialPortLike | null,
   reader: null as ReadableStreamDefaultReader<Uint8Array> | null,
   running: false,
@@ -3801,11 +3892,33 @@ function updateSerialStatus(): void {
   );
 }
 
+/**
+ * 连接进行中禁用连接按钮。注意不能无条件恢复：不支持 Web Serial / Web Bluetooth 的浏览器
+ * 启动时就已把这两个按钮永久置灰（见 initCapabilityNotice），这里必须尊重那个状态。
+ */
+function setConnectButtonsBusy(busy: boolean): void {
+  const serialOk = "serial" in navigator && window.isSecureContext;
+  const bleOk = typeof navigator.bluetooth !== "undefined" && window.isSecureContext;
+  const apply = (id: string, ok: boolean): void => {
+    const el = document.getElementById(id) as HTMLButtonElement | null;
+    if (el) el.disabled = busy ? true : !ok;
+  };
+  apply("btn-serial", serialOk);
+  apply("btn-serial-quick", serialOk);
+  apply("btn-ble", bleOk);
+}
+
 async function serialConnect(): Promise<void> {
   if (!("serial" in navigator)) {
     setSerialStatus("此浏览器不支持 Web Serial（需要 Chrome/Edge 且 HTTPS 或 localhost）", true);
     return;
   }
+  // 防重入：连接过程有两个长 await（选端口对话框、open()），期间按钮仍可点。第二次进来会覆盖
+  // serialState.port 并对同一设备再 open()（报 already open）→ 「running 与真实端口脱钩」：
+  // 要么进真实模式却永远没数据，要么真正的 reader 被泄漏、之后必须刷新页面才能重连。
+  if (serialState.running || serialState.connecting) return;
+  serialState.connecting = true;
+  setConnectButtonsBusy(true);
   try {
     const baud = serialBaud();
     serialState.port = await navigator.serial.requestPort();
@@ -3845,6 +3958,9 @@ async function serialConnect(): Promise<void> {
     setSerialBaudLocked(false);
     const msg = err instanceof Error ? err.message : String(err);
     setSerialStatus(`连接失败：${msg}（未选端口 / 端口被占用 / 波特率该平台不支持——SerialWeb 等其它工具需先断开）`, true);
+  } finally {
+    serialState.connecting = false;
+    setConnectButtonsBusy(false);
   }
 }
 
@@ -3870,10 +3986,11 @@ async function serialDisconnect(): Promise<void> {
 
 async function serialReadLoop(): Promise<void> {
   if (!serialState.port?.readable || !serialState.running) return;
-  serialState.reader = serialState.port.readable.getReader();
+  const reader = serialState.port.readable.getReader();
+  serialState.reader = reader;
   try {
     while (serialState.running) {
-      const { value, done } = await serialState.reader.read();
+      const { value, done } = await reader.read();
       if (done) break;
       if (!value) continue;
       if (serialProtocol() === "text") {
@@ -3893,7 +4010,14 @@ async function serialReadLoop(): Promise<void> {
   } catch {
     /* 断线/拔出：落到下面的收尾 */
   } finally {
-    serialState.reader.releaseLock();
+    // 释放**捕获的**那个 reader，而不是 serialState.reader：断开流程会把它置成 null、
+    // 重连时会换成新 reader——那时 releaseLock() 会抛（null.releaseLock / 重复释放），
+    // 变成未处理的 Promise 拒绝并污染控制台。
+    try {
+      reader.releaseLock();
+    } catch {
+      /* 已被 cancel/close 或已替换，忽略 */
+    }
     if (serialState.running) {
       // 异常断开（拔线）：回到 idle 并提示
       serialState.running = false;
@@ -4068,10 +4192,14 @@ function initCapabilityNotice(): void {
 initCapabilityNotice();
 
 $("serial-mounting").addEventListener("change", () => {
-  // 换安装方向：半解析缓冲与已排队帧都可能带着旧方向，一起丢弃并重置 tick 基准
+  // 换安装方向：半解析缓冲与已排队帧都可能带着旧方向，一起丢弃并重置 tick 基准。
+  // 文本协议用的是另一个缓冲（serialState.text），漏掉它会让「切换前残留的半行」与切换后的
+  // 新字节拼成一行、再按**新方向**解析 → 一个错帧；lastSeq 不清则多记一次假丢帧。
   serialState.buffer = new Uint8Array(0);
+  serialState.text = "";
   serialState.queue.length = 0;
   serialState.lastTickMs = -1;
+  serialState.lastSeq = -1;
 });
 
 /* ==========================================================================
@@ -4183,6 +4311,16 @@ function updateReplayStatus(): void {
 /** 进入回放模式：清掉串口状态，切到「无真值」语义 */
 function startReplay(res: ReplayParseResult, fileName: string): void {
   if (serialState.running) void serialDisconnect();
+  // BLE 也要断：三条数据通路（串口 / BLE / 回放）互斥。漏掉 BLE 时，回放期间通知仍在往同一条
+  // 队列里灌帧（状态条显示的还是 BLE 帧率），退出回放的瞬间这批积压帧会被打进估计器。
+  if (bleState.connected) {
+    try {
+      bleState.device?.gatt?.disconnect();
+    } catch {
+      /* 已断开 */
+    }
+    bleCleanup("已断开 BLE，切到离线回放");
+  }
   replayState.frames = res.frames;
   replayState.idx = 0;
   replayState.acc = 0;
@@ -4272,6 +4410,8 @@ interface BleCharacteristicLike {
   startNotifications(): Promise<BleCharacteristicLike>;
   stopNotifications(): Promise<BleCharacteristicLike>;
   addEventListener(type: string, cb: (ev: { target: BleCharacteristicLike }) => void): void;
+  /** 可选：真实实现（EventTarget）都有；假设备可能没有，所以调用处用 ?. 兜底 */
+  removeEventListener?(type: string, cb: (ev: { target: BleCharacteristicLike }) => void): void;
 }
 interface BleServiceLike {
   getCharacteristics(): Promise<BleCharacteristicLike[]>;
@@ -4300,6 +4440,8 @@ declare global {
 }
 
 const bleState = {
+  /** 连接正在进行中（防重入） */
+  connecting: false,
   device: null as BleDeviceLike | null,
   char: null as BleCharacteristicLike | null,
   connected: false,
@@ -4334,13 +4476,27 @@ function syncBleUi(): void {
 /** 订阅某个特征的通知；先退订旧的 */
 async function bleSubscribe(char: BleCharacteristicLike): Promise<void> {
   if (bleState.char && bleState.char !== char) {
+    const prev = bleState.char;
     try {
-      await bleState.char.stopNotifications();
+      await prev.stopNotifications();
     } catch {
       /* 设备可能已断开，忽略 */
     }
+    // 摘掉旧特征上的监听：不摘的话「A→B→A」来回切一次，A 上就多一个监听器，
+    // 同一帧被消费 N 次（帧率虚高、同一 IMU 样本以 dt≈1 ms 反复积分，姿态随之失真）。
+    try {
+      prev.removeEventListener?.("characteristicvaluechanged", onBleNotify);
+    } catch {
+      /* 假设备/老实现可能没有 removeEventListener */
+    }
   }
   bleState.char = char;
+  // 幂等：先摘再挂（同一个特征被重复订阅时不会叠加监听）
+  try {
+    char.removeEventListener?.("characteristicvaluechanged", onBleNotify);
+  } catch {
+    /* 同上 */
+  }
   char.addEventListener("characteristicvaluechanged", onBleNotify);
   await char.startNotifications();
 }
@@ -4367,6 +4523,12 @@ function onBleNotify(ev: { target: BleCharacteristicLike }): void {
 }
 
 function bleCleanup(message: string, warn = false): void {
+  // 摘监听：否则特征对象仍持有回调（断开后复用同一对象时会重复消费）
+  try {
+    bleState.char?.removeEventListener?.("characteristicvaluechanged", onBleNotify);
+  } catch {
+    /* 忽略 */
+  }
   bleState.connected = false;
   bleState.char = null;
   bleState.device = null;
@@ -4375,6 +4537,10 @@ function bleCleanup(message: string, warn = false): void {
   serialState.text = "";
   serialState.queue.length = 0;
   serialState.lastTickMs = -1;
+  serialState.lastSeq = -1;
+  // lastArrival 不清的话：先连过串口（时间戳留在当时）再连 BLE，BLE 又没立刻来通知，
+  // 状态条就会按陈旧时间戳报「数据流中断 X s」，其实刚连上（serialConnect 里是清了的）。
+  serialState.lastArrival = 0;
   const stopBtn = document.getElementById("btn-ble");
   if (stopBtn) stopBtn.textContent = "连接 BLE IMU";
   document.getElementById("ble-char-row")?.classList.add("hidden");
@@ -4393,9 +4559,15 @@ async function bleConnect(): Promise<void> {
     bleStatus("先选或填一个服务 UUID（模块手册里有）", true);
     return;
   }
+  // 防重入（与 serialConnect 同理）：授权框与 GATT 连接期间按钮仍可点。第二次进来若被 catch
+  // 清掉 bleState，而第一次随后才置 connected=true，就会出现「设备物理上还连着、通知还在往队列里
+  // 灌，但代码已经不认它」的僵尸连接——只能刷新页面。
+  if (bleState.connected || bleState.connecting) return;
   // 与串口 / 回放互斥：三条数据通路同时活着只会互相打架
   if (serialState.running) await serialDisconnect();
   if (replayActive()) stopReplay();
+  bleState.connecting = true;
+  setConnectButtonsBusy(true);
   try {
     bleStatus("正在弹出设备选择框…（需要你点一下授权）");
     const device = await bt.requestDevice({ filters: [{ services: [serviceUuid] }] });
@@ -4444,6 +4616,9 @@ async function bleConnect(): Promise<void> {
     // 用户点取消是常态，不该当成错误吓人
     const cancelled = /cancel|chooser|user/i.test(msg);
     bleCleanup(cancelled ? "已取消设备选择" : `BLE 连接失败：${msg}`, !cancelled);
+  } finally {
+    bleState.connecting = false;
+    setConnectButtonsBusy(false);
   }
 }
 
@@ -4500,6 +4675,48 @@ resetSim(); // 统一时钟/统计/曲线起点（不改变已还原的深链参
   world,
   imuParams,
   solveState,
+  /**
+   * 深链的三个清单（自动化验收用）：把「所有 range/checkbox/select」与它们做差集，
+   * 就能在任何时候回答「用户改了哪个控件但分享链接没带走」——这是会随控件增加而
+   * 悄悄失效的一类覆盖度问题（原先靠一次性人工审计）。
+   */
+  deepLink: (): { keys: string[]; checks: string[]; sels: string[] } => ({
+    keys: [...DEEP_KEYS],
+    checks: [...DEEP_CHECKS],
+    sels: [...DEEP_SELS],
+  }),
+  /**
+   * 数据通路的内部状态（自动化验收用）：三条通路是否互斥、半解析缓冲有没有清干净、
+   * 帧计数在「一个通知/一帧数据」下应该只 +1。这些量在 UI 上看不到，但正是
+   * 「切换特征后帧率翻倍」「换安装方向后拼出错帧」这类缺陷的判据。
+   */
+  plumbing: (): {
+    serial: boolean;
+    ble: boolean;
+    replay: boolean;
+    connecting: boolean;
+    bytes: number;
+    text: number;
+    queue: number;
+    frames: number;
+    badLines: number;
+    dropped: number;
+    skipped: number;
+    protocol: string;
+  } => ({
+    serial: serialState.running,
+    ble: bleState.connected,
+    replay: replayActive(),
+    connecting: serialState.connecting || bleState.connecting,
+    bytes: serialState.buffer.length,
+    text: serialState.text.length,
+    queue: serialState.queue.length,
+    frames: serialState.frames,
+    badLines: serialState.badLines,
+    dropped: serialState.dropped,
+    skipped: serialState.skippedMsgs,
+    protocol: serialProtocol(),
+  }),
   /**
    * 长跑稳定性自检出口：四个「会被不断 push」的容器当前长度与容量。
    * 装置是常驻页面（演示时一开几十分钟），所以这些数字必须**封顶**而不是随时间增长。

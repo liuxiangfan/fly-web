@@ -4,7 +4,7 @@
  */
 import { World } from "../src/core/world";
 import { manualTarget, scenarios } from "../src/core/scenarios";
-import { G_ACC, MAG_WORLD_NED, simulateImu, simulateMag, type ImuParams } from "../src/core/imu";
+import { G_ACC, MAG_WORLD_NED, simulateImu, simulateMag, softIronGains, type ImuParams } from "../src/core/imu";
 import { Gauss, mulberry32 } from "../src/core/rng";
 import {
   ATTITUDE_BASE_FIELDS,
@@ -21,6 +21,8 @@ import {
   parseTextLine,
   type Mounting,
 } from "../src/core/serial";
+import { toDisplayVec, sweepPitchDeg } from "../src/core/gimbal";
+import { percentile } from "../src/core/stats";
 import {
   ComplementaryEstimator,
   coarseAlign,
@@ -46,6 +48,7 @@ import {
   qRot,
   qRotInv,
   qSlerp,
+  symmetricEigen3,
   squad,
   squadTangent,
   qToAxisAngle,
@@ -1156,6 +1159,282 @@ const dirty: ImuParams = { gyroBiasDps: 1, gyroNoiseDps: 0.2, gyroWalkDps: 0, gy
     `无软铁：scale 极差 ${spread(c0).toFixed(3)}（≈1，余量来自有限采样）、残差 ${(c0.residual * 100).toFixed(1)}%；` +
       `软铁 0.40：scale 极差 ${spread(c4).toFixed(3)}、残差 ${(c4.residual * 100).toFixed(1)}%（交叉项收不掉）；` +
       `纯对角软铁：标定后残差 ${(cDiag.residual * 100).toFixed(2)}% ← 对角部分收得掉`,
+  );
+}
+
+// 38b. 门控滞回恢复窗（GateRecovery）：机制本身原先**没有任何自检**，
+//      于是「实验库里的门控滞回实验从来不触发恢复窗」这件事一直没人发现
+//      （它的实测拒绝占比只有 0.83，到不了 0.9 的判定线，开与关完全一样）。
+//      这里用同一现场把机制钉住：关→恢复窗 0 次且姿态准；开→反复放行、姿态被污染拉走。
+{
+  const pGate: ImuParams = { ...clean, linAccel: 8, vibration: 0.1, gyroBiasDps: 0.5, magNoise: 0.5 };
+  const runGate = (recovery: boolean): { peak: number; opens: number; steadyRatio: number } => {
+    const w = new World(scenarios.composite);
+    const c = new ComplementaryEstimator();
+    c.reset();
+    // 配置必须在 reset() **之后**写：reset 会把运行态（含门控状态机与 ramp 计时）复位
+    c.gateDeg = 20;
+    c.gateMagPct = 0.35;
+    c.gateRecovery = recovery;
+    c.rampEnabled = false;
+    c.magEnabled = true;
+    let peak = 0;
+    let opens = 0;
+    let inRec = false;
+    let steadyRatio = 0;
+    for (let k = 0; k < 500 * 25; k++) {
+      const s = w.step(H, pGate);
+      c.update(s.gyro, s.accel, s.mag, H);
+      const d = c.telemetry.detail as { gateMode?: number; rejectRatio?: number };
+      if (k * H > 8) steadyRatio = Math.max(steadyRatio, d.rejectRatio ?? 0);
+      if (k * H > 2) peak = Math.max(peak, qAngleBetween(c.q, w.q) * DEG);
+      const rec = d.gateMode === 2;
+      if (rec && !inRec) opens++;
+      inRec = rec;
+    }
+    return { peak, opens, steadyRatio };
+  };
+  const off = runGate(false);
+  const on = runGate(true);
+  check(
+    "门控滞回：关闭=拒绝到底；开启=反复放行并把姿态拉偏（机制可复现）",
+    off.opens === 0 && on.opens >= 2 && on.peak > 3 * off.peak && on.steadyRatio > 0.9,
+    "关→恢复窗 " + off.opens + " 次、峰值 " + off.peak.toFixed(1) + "°；" +
+      "开→恢复窗 " + on.opens + " 次、峰值 " + on.peak.toFixed(1) + "°（窗口拒绝占比 " + on.steadyRatio.toFixed(2) + " > 0.9 才判定）",
+  );
+}
+
+// 38c. 健壮性：畸形/退化输入不得让核心链路崩掉或吐出 NaN
+//      这一组来自一次「对抗性输入扫描」（把 NaN/±Infinity/1e300/零向量/退化数组喂进每个纯函数）。
+//      扫描结论：核心逻辑本身是稳的（没有一处「有限输入 → 非有限输出」），
+//      但当时**没有任何测试守着这条性质**——以后任何一次改动都可能破坏它而无人察觉。
+{
+  const finiteAll = (a: readonly number[]): boolean => a.every((x) => Number.isFinite(x));
+  // ① 退化的磁标定样本：全同点 / 共线 / 点数不足 → 必须拒绝（不能给出看似合理的垃圾参数）
+  const same: readonly V3[] = Array.from({ length: 40 }, () => [10, 10, 10]);
+  const collinear: readonly V3[] = Array.from({ length: 40 }, (_, i) => [i, 0, 0]);
+  const few: readonly V3[] = Array.from({ length: 5 }, (_, i) => [i, i * 2, i * 3]);
+  const degenerateRejected = calibrateMag(same) === null && calibrateMag(collinear) === null && calibrateMag(few) === null;
+  // ② 畸形字节流 / 畸形 CSV：不得抛异常（串口与导入都在主循环路径上，抛一次就是整页停摆）
+  let threw = "";
+  const tryIt = (name: string, fn: () => void): void => {
+    try {
+      fn();
+    } catch (e) {
+      threw += name + "(" + String(e) + ") ";
+    }
+  };
+  tryIt("parseFrame(空)", () => void parseFrame(new Uint8Array(0), "x-front-y-left"));
+  tryIt("parseFrame(半帧)", () => void parseFrame(new Uint8Array([0xaa, 0x55, 24]), "x-front-y-left"));
+  tryIt("parseMavlinkFrame(空)", () => void parseMavlinkFrame(new Uint8Array(0), "x-front-y-left"));
+  tryIt("parseMavlinkFrame(伪造头)", () => void parseMavlinkFrame(new Uint8Array([0xfd, 40, 0, 0, 0, 27, 1]), "x-front-y-left"));
+  tryIt("parseTextLine(NaN 值)", () => void parseTextLine("abc,def,ghi,jkl,mno,pqr", "x-front-y-left", -1));
+  tryIt("parseTextLine(5000 列)", () => void parseTextLine(Array.from({ length: 5000 }, () => "1").join(","), "x-front-y-left", -1));
+  tryIt("frameDtSec(极端)", () => void frameDtSec(0xffffffff, 0));
+  tryIt("parseImuCsv(空)", () => void parseImuCsv(""));
+  tryIt("parseImuCsv(只有表头)", () => void parseImuCsv("t,gx,gy,gz,ax,ay,az"));
+  tryIt("parseImuCsv(NaN 行)", () =>
+    void parseImuCsv(["t,gx,gy,gz,ax,ay,az", "0,NaN,0,0,0,0,9.8", "1,1,1,1,1,1,1"].join(String.fromCharCode(10))),
+  );
+  tryIt("parseImuCsv(时间全相同)", () =>
+    void parseImuCsv(["t,gx,gy,gz,ax,ay,az", "0,0,0,0,0,0,9.8", "0,0,0,0,0,0,9.8", "0,0,0,0,0,0,9.8"].join(String.fromCharCode(10))),
+  );
+  // ③ 有限但极端的仿真参数：输出必须有限（否则 NaN 会顺着积分器污染整个姿态）
+  const g0 = new Gauss(mulberry32(31));
+  const pz: ImuParams = { ...clean };
+  let simNaN = "";
+  for (const key of Object.keys(pz) as Array<keyof ImuParams>) {
+    for (const v of [1e6, 1e300]) {
+      const p = { ...pz, [key]: v };
+      const s0 = simulateImu(qFromEuler(0.1, 0.2, 0.3), [1, 1, 1], 1, p, g0, 1);
+      if (!finiteAll([...s0.gyro, ...s0.accel])) simNaN += key + "=" + v + " ";
+      if (!finiteAll(simulateMag(qId(), 1, p, g0))) simNaN += "mag:" + key + " ";
+    }
+  }
+  // ④ 插值端点与近反相；积分零角速度恒等；dt=0 的惯导；全相位万向节演示
+  const qa = qId();
+  const qb = { w: 0, x: 1, y: 0, z: 0 };
+  const slerpOk =
+    finiteAll(Object.values(qSlerp(qa, qb, 0))) &&
+    finiteAll(Object.values(qSlerp(qa, qb, 1))) &&
+    finiteAll(Object.values(qSlerp(qa, { w: 1e-9, x: 1, y: 0, z: 0 }, 0.5))) &&
+    Math.abs(qSlerp(qa, qb, 1).x - 1) < 1e-9;
+  const qi = qIntegrate(qFromEuler(0.3, 0.2, 0.1), [0, 0, 0], 0.01);
+  const q0 = qFromEuler(0.3, 0.2, 0.1);
+  const integrateOk = Math.abs(qi.w - q0.w) < 1e-15 && Math.abs(qi.x - q0.x) < 1e-15;
+  const ins = new InsIntegrator();
+  ins.step(qId(), [0, 0, G_ACC], 0);
+  ins.step(qId(), [0, 0, G_ACC], 1e-9);
+  const insSnap = ins.snapshot();
+  const insOk = finiteAll([...insSnap.p, ...insSnap.v]);
+  let demoOk = true;
+  for (let t = 0; t <= 16; t += 0.05) {
+    const d = gimbalDemo(t);
+    if (!finiteAll([d.roll, d.pitch, d.yaw])) demoOk = false;
+  }
+  // ⑤ 统计：NaN 样本必须被忽略（否则一行脏数据会把整张评测表变成 NaN）
+  const et = new ErrorTracker({ thresholdDeg: 2, holdSec: 1 });
+  et.reset();
+  et.add(0.1, 1);
+  const before = et.summary().n;
+  et.add(NaN, 2);
+  const statOk = et.summary().n === before && Number.isFinite(et.summary().rmse);
+  check(
+    "健壮性：退化样本被拒 / 畸形输入不抛 / 极端参数不出 NaN",
+    degenerateRejected && threw === "" && simNaN === "" && slerpOk && integrateOk && insOk && demoOk && statOk,
+    "退化磁样本被拒=" + degenerateRejected + "；畸形输入抛异常=" + (threw || "无") +
+      "；极端仿真参数产出 NaN=" + (simNaN || "无") + "；slerp/积分/dt=0/万向节全相位/NaN 样本忽略=" +
+      [slerpOk, integrateOk, insOk, demoOk, statOk].map((x) => (x ? "✓" : "✗")).join(""),
+  );
+}
+
+// 39. 器件级确定性误差（量程饱和 / 刻度 / 安装失准 / 群延迟 / 加计非线性）
+//     这一组原先**完全没有自检**，而手册里四处写着「（自检实测）」——补上之后，
+//     那些数字才真的有出处，这几条链路也才有人守着。
+{
+  const baseP = (over: Partial<ImuParams>): ImuParams => ({ ...clean, ...over });
+  // 用「剧烈机动」剧本跑 15 s（与手册里那组数字同一窗口：饱和误差**随时间增长**，
+  // 5 s 时纯积分才 24°、15 s 到 48°、30 s 到 95°，所以必须写清窗口，否则数字没法复现）
+  const runErr = (p: ImuParams, who: "pure" | "mahony"): { peak: number; maxOmegaDeg: number } => {
+    const world = new World(scenarios.violent);
+    const est =
+      who === "pure"
+        ? new PureGyroEstimator()
+        : new MahonyEstimator();
+    est.reset(world.q);
+    const g = new Gauss(mulberry32(4242));
+    let peak = 0;
+    let maxOmegaDeg = 0;
+    const h = 1 / 500;
+    for (let k = 0; k < 500 * 15; k++) {
+      const s0 = world.step(h, p);
+      maxOmegaDeg = Math.max(maxOmegaDeg, Math.hypot(...s0.gyro) * 57.29578);
+      est.update(s0.gyro, s0.accel, s0.mag, h);
+      const e = qAngleBetween(est.q, world.q) * 57.29578;
+      if (k > 500) peak = Math.max(peak, e); // 跳过启动瞬态
+    }
+    void g;
+    return { peak, maxOmegaDeg };
+  };
+
+  const satPure = runErr(baseP({ gyroRangeDps: 150 }), "pure");
+  const satMahony = runErr(baseP({ gyroRangeDps: 150 }), "mahony");
+  const noSatPure = runErr(baseP({ gyroRangeDps: 0 }), "pure");
+  const scale5 = runErr(baseP({ gyroScaleErr: 0.05 }), "pure");
+  const misalign3 = runErr(baseP({ gyroMisalign: 0.03 }), "pure");
+  const delay25 = runErr(baseP({ gyroBiasDps: 0, gyroNoiseDps: 0, sensorDelayMs: 25 }), "pure");
+  check(
+    "器件级误差：量程饱和（读数削平→姿态大幅跑偏且无从察觉）",
+    satPure.peak > 40 && satMahony.peak > 12 && satMahony.peak < 30 &&
+      noSatPure.peak < 1 && satPure.maxOmegaDeg > 150,
+    "机动峰值角速度 " + satPure.maxOmegaDeg.toFixed(0) + "°/s（> 量程 150 才触发）；15 s 窗口：" +
+      "纯积分峰值误差 " + satPure.peak.toFixed(1) + "°（无饱和时 " + noSatPure.peak.toFixed(1) + "°）；" +
+      "Mahony " + satMahony.peak.toFixed(1) + "°",
+  );
+  check(
+    "器件级误差：刻度失配（速率相关，零偏估计吸收不了）",
+    scale5.peak > 4 && scale5.peak < 20,
+    "刻度 5% → 纯积分峰值误差 " + scale5.peak.toFixed(1) + "°",
+  );
+  check(
+    "器件级误差：安装失准（单轴转动漏进另外两轴）",
+    misalign3.peak > 1 && misalign3.peak < 3 * scale5.peak,
+    "失准 3% → 纯积分峰值误差 " + misalign3.peak.toFixed(1) + "°",
+  );
+  check(
+    "器件级误差：群延迟（姿态滞后 ω·τ）",
+    delay25.peak > 3 && delay25.peak < 15,
+    "延迟 25 ms（零偏噪声归零）→ 纯积分峰值误差 " + delay25.peak.toFixed(1) +
+      "°（理论 ω·τ ≈ 240°/s × 0.025 s = 6°）",
+  );
+  // 加计非线性：k·(|a|/g − 1)² 的二次压缩 → 恰好 1g 处不动、过载处被压低。
+  // 注意 accelFactor 缩放的是**机动线加速度**（linAccel），不是重力，所以「制造过载」要拉 linAccel。
+  const nlMag = (nonlin: number, linAccel: number): number => {
+    const g2 = new Gauss(mulberry32(7));
+    const p = baseP({ linAccel, vibration: 0, accelNonlin: nonlin });
+    const s0 = simulateImu(qFromEuler(0.3, 0.2, 0.1), [0, 0, 0], 0.5, p, g2, 1);
+    return Math.hypot(...s0.accel);
+  };
+  const nlAt1g = nlMag(0.05, 0);
+  const nlClean1g = nlMag(0, 0);
+  const nlOverload = nlMag(0.05, 3);
+  const nlOverloadClean = nlMag(0, 3);
+  check(
+    "器件级误差：加计非线性（1g 处严格不偏、过载处被二次压缩）",
+    Math.abs(nlAt1g - nlClean1g) < 1e-12 && nlOverload < nlOverloadClean && nlOverload < G_ACC,
+    "1g 处非线性开关不改变读数（" + nlAt1g.toFixed(6) + " vs " + nlClean1g.toFixed(6) + " m/s²）；" +
+      "过载处 " + nlOverload.toFixed(3) + " < 无非线性 " + nlOverloadClean.toFixed(3),
+  );
+}
+
+// 40. 纯工具函数：显示基变换、扫过曲线、percentile、特征分解、软铁增益
+//     这些要么零覆盖、要么只被浏览器侧间接用到；都是「改错一个符号没人发现」的那类代码。
+{
+  const d = toDisplayVec([1, 2, 3]);
+  const dOk = d[0] === 1 && d[1] === -3 && d[2] === 2;
+  // 扫过曲线：端点 0、途中到过 ±90、单调段内不回头、越界被夹
+  const sweep = (u: number): number => sweepPitchDeg(u);
+  const pts = Array.from({ length: 101 }, (_, i) => sweep(i / 100));
+  const sweepOk =
+    Math.abs(sweep(0)) < 1e-9 &&
+    Math.abs(sweep(1)) < 1e-9 &&
+    Math.max(...pts) >= 89.9 &&
+    Math.min(...pts) <= -89.9 &&
+    sweep(-3) === sweep(0) &&
+    sweep(9) === sweep(1);
+  const pct = [percentile([1, 2, 3, 4], 0), percentile([1, 2, 3, 4], 1), percentile([1, 2, 3, 4], 0.5), percentile([], 0.5)];
+  const pctOk = pct[0] === 1 && pct[1] === 4 && Math.abs(pct[2] - 2.5) < 1e-12 && Number.isNaN(pct[3]);
+
+  // 特征分解：重建 V·diag(λ)·Vᵀ ≈ M、主轴正交、退化输入不炸
+  const eigCases: number[][] = [
+    [1, 0, 0, 0, 2, 0, 0, 0, 3],
+    [0.02, 0.004, -0.001, 0.004, 0.05, 0.003, -0.001, 0.003, 0.01],
+    [2, 0.5, 0, 0.5, 2, 0, 0, 0, 5],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [1e6, 0, 0, 0, 1, 0, 0, 0, 1e-6],
+  ];
+  let recWorst = 0;
+  let orthWorst = 0;
+  for (const m of eigCases) {
+    const { values, vectors } = symmetricEigen3(m);
+    for (let i = 0; i < 3; i++) {
+      for (let j = 0; j < 3; j++) {
+        let s2 = 0;
+        for (let k = 0; k < 3; k++) s2 += vectors[i * 3 + k] * values[k] * vectors[j * 3 + k];
+        recWorst = Math.max(recWorst, Math.abs(s2 - m[i * 3 + j]) / Math.max(1, Math.abs(m[i * 3 + j])));
+      }
+      for (let j = 0; j < 3; j++) {
+        let s2 = 0;
+        for (let k = 0; k < 3; k++) s2 += vectors[k * 3 + i] * vectors[k * 3 + j];
+        orthWorst = Math.max(orthWorst, Math.abs(s2 - (i === j ? 1 : 0)));
+      }
+    }
+  }
+  const gains = softIronGains(0);
+  const gainsOk = gains.every((g) => Math.abs(g - 1) < 1e-15);
+  // ins 的 reset/snapshot：重置后速度位置归零，snapshot 是拷贝而不是引用
+  const ins2 = new InsIntegrator();
+  ins2.step(qFromEuler(0, 0.1, 0), [0, 0, G_ACC], 0.05);
+  const snap = ins2.snapshot();
+  const movedBefore = Math.hypot(...snap.p) > 0 || Math.hypot(...snap.v) > 0;
+  ins2.reset();
+  const after = ins2.snapshot();
+  const insOk = movedBefore && Math.hypot(...after.p) < 1e-12 && Math.hypot(...after.v) < 1e-12 && after.t === 0;
+  // world.reset：时间归零、姿态回单位、延迟队列清空
+  const w2 = new World(scenarios.violent);
+  w2.step(0.05, clean);
+  w2.step(0.05, clean);
+  w2.reset();
+  const worldOk = w2.t === 0 && Math.abs(w2.q.w - 1) < 1e-12;
+
+  check(
+    "纯工具函数：显示基变换 / 扫过曲线 / percentile / 特征分解 / 软铁增益 / reset",
+    dOk && sweepOk && pctOk && recWorst < 1e-9 && orthWorst < 1e-12 && gainsOk && insOk && worldOk,
+    "toDisplayVec(1,2,3)=(" + d.join(",") + ")；扫过曲线端点 0/0、跨度 [" +
+      Math.min(...pts).toFixed(0) + "°, " + Math.max(...pts).toFixed(0) + "°]；" +
+      "percentile 端值 " + pct[0] + "/" + pct[1] + "、空数组 " + pct[3] + "；" +
+      "特征分解重建误差 " + recWorst.toExponential(1) + "、正交 " + orthWorst.toExponential(1) + "；" +
+      "ins.reset/snapshot 与 world.reset 正常",
   );
 }
 

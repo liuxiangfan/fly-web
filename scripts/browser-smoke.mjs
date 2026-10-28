@@ -513,7 +513,10 @@ try {
         d[27] = crc8(d, 2, 27);
         return d;
       };
-      let notifyCb = null;
+      // 假特征必须**忠实于 EventTarget**：累积监听、支持移除。
+      // 早期版本只存最后一个回调（notifyCb = cb），于是「重复订阅会叠加监听器、
+      // 同一帧被消费多次」这个真实缺陷被假设备掩盖了——比现实更宽容的 mock 会藏 bug。
+      const listeners = [];
       const char = {
         uuid: "0000ffe1-0000-1000-8000-00805f9b34fb",
         properties: { notify: true },
@@ -521,9 +524,16 @@ try {
         startNotifications: async () => char,
         stopNotifications: async () => char,
         addEventListener: (t, cb) => {
-          if (t === "characteristicvaluechanged") notifyCb = cb;
+          if (t === "characteristicvaluechanged") listeners.push(cb);
         },
+        removeEventListener: (t, cb) => {
+          if (t !== "characteristicvaluechanged") return;
+          const i = listeners.indexOf(cb);
+          if (i >= 0) listeners.splice(i, 1);
+        },
+        __listenerCount: () => listeners.length,
       };
+      window.__bleListenerCount = () => listeners.length;
       const device = {
         name: "FAKE-BLE-IMU",
         id: "fake-1",
@@ -556,14 +566,14 @@ try {
           for (let i = 0; i < b.length; i += 20) {
             const part = b.slice(i, i + 20);
             char.value = new DataView(part.buffer, part.byteOffset, part.byteLength);
-            if (notifyCb) notifyCb({ target: char });
+            for (const cb of [...listeners]) cb({ target: char });
           }
           return;
         }
         for (let i = 0; i < f.length; i += 20) {
           const part = f.slice(i, i + 20);
           char.value = new DataView(part.buffer, part.byteOffset, part.byteLength);
-          if (notifyCb) notifyCb({ target: char });
+          for (const cb of [...listeners]) cb({ target: char });
         }
       };
     }, protocol);
@@ -879,6 +889,359 @@ try {
   );
   await page.evaluate(() => document.getElementById("btn-docs-close").click());
 
+  // ---------- 装配层健壮性：数值框接线 / 连接防重入 / 监听器不叠加 / 通路互斥 ----------
+  // 这一组用例来自一次专门找「测试盲区」的审计。下面每一类缺陷的共同点是
+  // **原有断言全部通过**——因为原有断言只验证「正常路径下功能可用」，
+  // 而这四类都发生在正常路径之外，或者被「比现实更宽容的 mock」掩盖了。
+
+  // ① 每个滑杆的数值框都必须真的可键入。
+  //    「方向阈值 / 幅度阈值」那两个框原先没有任何监听、且永远是空的（只有滑杆生效）；
+  //    而 htmlcheck 的「滑块三件套完整」只查 data-num / data-step 是否存在，查不出没接线。
+  const numBoxes = await page.evaluate(async () => {
+    const bad = [];
+    const rows = [...document.querySelectorAll(".slider-row")].filter((r) => r.querySelector("input[data-num]"));
+    for (const row of rows) {
+      const range = row.querySelector('input[type="range"]');
+      const num = row.querySelector("input[data-num]");
+      const label = (row.querySelector("label")?.textContent ?? "?").trim();
+      if (!range || !num) continue;
+      const before = range.value;
+      const wasEmpty = num.value.trim() === "";
+      if (wasEmpty) bad.push(label + "(初始为空)");
+      const min = parseFloat(range.min);
+      const max = parseFloat(range.max);
+      // 目标值取量程另一端（远离当前值，确保能观察到变化）
+      const target = Math.abs(parseFloat(range.value) - min) > Math.abs(parseFloat(range.value) - max) ? min : max;
+      num.value = String(target);
+      num.dispatchEvent(new Event("change", { bubbles: true }));
+      await new Promise((r) => setTimeout(r, 0));
+      if (Math.abs(parseFloat(range.value) - target) > 1e-6) bad.push(label + "→滑杆没跟随");
+      // 还原，避免影响后续用例
+      num.value = before;
+      num.dispatchEvent(new Event("change", { bubbles: true }));
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    return { total: rows.length, bad };
+  });
+  check(
+    "每个滑杆的数值框都已接线（键入即生效、初始就有读数）",
+    numBoxes.total >= 25 && numBoxes.bad.length === 0,
+    numBoxes.total + " 个滑杆数值框" + (numBoxes.bad.length ? "，异常：" + numBoxes.bad.join("、") : "全部可键入"),
+  );
+
+  // ② 串口连接防重入：连点两次不能让「状态标志」与「真实端口」脱钩。
+  //    假端口让 open() 延迟 250 ms —— 正是第二次点击能落进去的窗口。
+  const reentryCase = await (async () => {
+    const pg = await browser.newPage();
+    await pg.setViewport({ width: 1100, height: 800 });
+    const errs = [];
+    pg.on("pageerror", (e) => errs.push(String(e)));
+    await pg.evaluateOnNewDocument(() => {
+      const stream = new ReadableStream({
+        start(c) {
+          let seq = 0;
+          setInterval(() => {
+            const d = new Uint8Array(28);
+            d[0] = 0xaa; d[1] = 0x55; d[2] = 24;
+            d[3] = seq & 0xff; d[5] = (seq * 5) & 0xff;
+            d[9] = 15; d[19] = 0xe4; d[21] = 0x0d; d[25] = 0x14;
+            let crc = 0;
+            for (let i = 2; i < 27; i++) crc ^= d[i];
+            d[27] = crc;
+            seq++;
+            c.enqueue(d);
+          }, 5);
+        },
+      });
+      const port = {
+        open: async () => new Promise((r) => setTimeout(r, 250)),
+        close: async () => undefined,
+        get readable() { return stream; },
+      };
+      window.__requestPortCalls = 0;
+      Object.defineProperty(navigator, "serial", {
+        configurable: true,
+        value: { requestPort: async () => { window.__requestPortCalls++; return port; } },
+      });
+    });
+    await pg.goto(URL, { waitUntil: "domcontentloaded" });
+    await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 15000 });
+    await pg.evaluate(() => {
+      const sec = document.getElementById("sec-imu");
+      if (sec.classList.contains("collapsed")) sec.querySelector(".panel-toggle").click();
+      const btn = document.getElementById("btn-serial");
+      btn.click();
+      btn.click(); // 第二次落在 open() 的 await 窗口里
+    });
+    await new Promise((r) => setTimeout(r, 1500));
+    const res = await pg.evaluate(() => ({
+      calls: window.__requestPortCalls,
+      status: document.getElementById("serial-status")?.textContent ?? "",
+      plumbing: window.attitudeDemo.plumbing(),
+    }));
+    await pg.close();
+    return { ...res, errs };
+  })();
+  check(
+    "串口连接防重入：连点两次只发起一次连接，状态不与真实端口脱钩",
+    reentryCase.calls === 1 &&
+      reentryCase.plumbing.serial === true &&
+      reentryCase.plumbing.connecting === false &&
+      !/失败|中断/.test(reentryCase.status) &&
+      errsEmpty(reentryCase.errs),
+    "requestPort 调用 " + reentryCase.calls + " 次（应 1）；running=" + reentryCase.plumbing.serial +
+      " connecting=" + reentryCase.plumbing.connecting + "；状态「" + reentryCase.status + "」",
+  );
+
+  // ③ BLE 重复订阅不叠加监听：反复重订阅后，一条通知只能产生一帧。
+  //    假特征现在是**忠实的 EventTarget**（累积监听 + 支持移除），所以在缺少
+  //    removeEventListener 的实现上，这里会看到帧数 +N 而断言失败——那正是实测过的
+  //    「切换特征来回一次、帧率翻倍」。
+  const makeFakeBlePage = async (extraWire) => {
+    const pg = await browser.newPage();
+    await pg.setViewport({ width: 1100, height: 800 });
+    const errs = [];
+    pg.on("pageerror", (e) => errs.push(String(e)));
+    await pg.evaluateOnNewDocument(
+      (extra) => {
+        const listeners = [];
+        const char = {
+          uuid: "0000ffe1-0000-1000-8000-00805f9b34fb",
+          properties: { notify: true },
+          value: null,
+          startNotifications: async () => char,
+          stopNotifications: async () => char,
+          addEventListener: (t, cb) => { if (t === "characteristicvaluechanged") listeners.push(cb); },
+          removeEventListener: (t, cb) => {
+            if (t !== "characteristicvaluechanged") return;
+            const i = listeners.indexOf(cb);
+            if (i >= 0) listeners.splice(i, 1);
+          },
+        };
+        const device = {
+          name: "FAKE-BLE", id: "fake-1",
+          gatt: {
+            connected: true,
+            connect: async () => ({ getPrimaryService: async () => ({ getCharacteristics: async () => [char] }) }),
+            disconnect: () => undefined,
+          },
+          addEventListener: () => undefined,
+        };
+        Object.defineProperty(navigator, "bluetooth", { configurable: true, value: { requestDevice: async () => device } });
+        window.__listeners = listeners;
+        window.__emit = (text) => {
+          const b = new TextEncoder().encode(text);
+          char.value = new DataView(b.buffer, b.byteOffset, b.byteLength);
+          for (const cb of [...listeners]) cb({ target: char });
+        };
+        if (extra) new Function(extra)();
+      },
+      extraWire ?? "",
+    );
+    await pg.goto(URL, { waitUntil: "domcontentloaded" });
+    await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 15000 });
+    await pg.evaluate(() => {
+      const sec = document.getElementById("sec-imu");
+      if (sec.classList.contains("collapsed")) sec.querySelector(".panel-toggle").click();
+      const sel = document.getElementById("serial-protocol");
+      sel.value = "text";
+      sel.dispatchEvent(new Event("change", { bubbles: true }));
+      document.getElementById("btn-ble").click();
+    });
+    await pg.waitForFunction(() => window.attitudeDemo.plumbing().ble === true, { timeout: 6000 });
+    return { pg, errs };
+  };
+
+  const bleDouble = await (async () => {
+    const { pg, errs } = await makeFakeBlePage();
+    const res = await pg.evaluate(async () => {
+      const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+      const sel = document.getElementById("ble-char");
+      // 「重选同一个特征」三次：每次都走一遍 bleSubscribe
+      for (let i = 0; i < 3; i++) sel.dispatchEvent(new Event("change", { bubbles: true }));
+      await wait(300);
+      const listeners = window.__listeners.length;
+      const f0 = window.attitudeDemo.plumbing().frames;
+      // 文本协议认 6/9/10 列，7 列会被判成坏行——这里用 10 列（t + 陀螺 3 + 加计 3 + 磁 3）
+      window.__emit("7,1,2,3,4,5,6,7,8,9" + String.fromCharCode(10));
+      await wait(150);
+      return { listeners, delta: window.attitudeDemo.plumbing().frames - f0, badLines: window.attitudeDemo.plumbing().badLines };
+    });
+    await pg.close();
+    return { res, errs };
+  })();
+  check(
+    "BLE 重复订阅不叠加监听：3 次重订阅后一条通知只产生 1 帧",
+    bleDouble.res.listeners === 1 && bleDouble.res.delta === 1 && errsEmpty(bleDouble.errs),
+    "监听器数 " + bleDouble.res.listeners + "（应恒为 1）；一条通知带来的帧数增量 " + bleDouble.res.delta + "（应 1）",
+  );
+
+  // ④ 三条数据通路互斥 + 缓冲清理：导入回放必须断开 BLE；切换安装方向必须清空文本缓冲。
+  const plumbingCase = await (async () => {
+    const { pg, errs } = await makeFakeBlePage();
+    const res = await pg.evaluate(async () => {
+      const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+      window.__emit("1,0,0"); // 半行（无换行）→ 应停留在文本缓冲里
+      await wait(150);
+      const withPartial = window.attitudeDemo.plumbing();
+      const mnt = document.getElementById("serial-mounting");
+      mnt.value = "y-front-x-left";
+      mnt.dispatchEvent(new Event("change", { bubbles: true }));
+      await wait(80);
+      const afterMount = window.attitudeDemo.plumbing();
+      const csv = ["t_s,gyro_x_dps,gyro_y_dps,gyro_z_dps,accel_x_ms2,accel_y_ms2,accel_z_ms2"];
+      for (let k = 0; k < 60; k++) csv.push((k / 100).toFixed(3) + ",0,0,0,0,0,9.80665");
+      window.attitudeDemo.replay.import(csv.join(String.fromCharCode(10)), "plumbing.csv");
+      await wait(250);
+      const afterReplay = window.attitudeDemo.plumbing();
+      window.attitudeDemo.replay.stop();
+      await wait(150);
+      return { withPartial, afterMount, afterReplay, final: window.attitudeDemo.plumbing() };
+    });
+    await pg.close();
+    return { res, errs };
+  })();
+  check(
+    "三条数据通路互斥 + 切换安装方向清空文本缓冲",
+    plumbingCase.res.withPartial.text > 0 &&
+      plumbingCase.res.afterMount.text === 0 &&
+      plumbingCase.res.afterReplay.ble === false &&
+      plumbingCase.res.afterReplay.replay === true &&
+      plumbingCase.res.final.replay === false &&
+      errsEmpty(plumbingCase.errs),
+    "半行缓冲 " + plumbingCase.res.withPartial.text + " → 切换安装方向后 " + plumbingCase.res.afterMount.text + "（应 0）；" +
+      "导入回放后 ble=" + plumbingCase.res.afterReplay.ble + "（应 false）replay=" + plumbingCase.res.afterReplay.replay,
+  );
+
+  // ---------- 深链覆盖度 + 真实往返 ----------
+  // 「分享」把界面状态编码进 URL：漏掉一个控件 = 同学打开看到的现场和你不一样。
+  // 这类覆盖度会**随控件增加而悄悄失效**（原先靠一次性人工审计，所以漏了协议、取反、
+  // q/−q、万向节三个角）。现在改成每次都跑的差集 + 真实往返：
+  //   ① 把所有 range/checkbox/select 与 deepLink 三个清单做差集，只允许存在**明确不分享**的例外；
+  //   ② 在每个控件上设一个有代表性的值 → 取 hash → 新页面按 hash 打开 → 逐一比对。
+  const DEEP_EXEMPT = {
+    // 键 = 控件 id，值 = 为什么不进深链（写清理由，免得后人以为漏了）
+    "replay-speed": "回放倍速：只在本次回放里有效，回放本身不随链接分享",
+    "ble-service": "BLE 服务 UUID：取决于对方手里是哪个模块，分享过去只会连不上",
+    "ble-char": "BLE 通知特征：连接后才被发现，链接里带不了",
+    "magcal-apply": "「应用校准」：标定数据不在链接里，单独带这个开关只会出现「已应用但无标定」",
+  };
+
+  const deepCoverage = await page.evaluate((exemptIds) => {
+    const dl = window.attitudeDemo.deepLink();
+    const known = new Set([...dl.keys, ...dl.checks, ...dl.sels]);
+    const missing = [];
+    for (const el of document.querySelectorAll("input[type=range], input[type=checkbox], select")) {
+      if (!el.id) continue;
+      if (el.closest("#docs-overlay") || el.closest("dialog") || el.closest(".docs-shell")) continue;
+      if (exemptIds.includes(el.id)) continue;
+      if (!known.has(el.id)) missing.push(el.id);
+    }
+    return { missing, total: dl.keys.length + dl.checks.length + dl.sels.length };
+  }, Object.keys(DEEP_EXEMPT));
+  check(
+    "深链覆盖度：所有界面控件都在分享范围内（例外只有 4 个明确不分享的）",
+    deepCoverage.missing.length === 0,
+    deepCoverage.total + " 个键" + (deepCoverage.missing.length ? "；未覆盖：" + deepCoverage.missing.join("、") : "，界面控件全部覆盖"),
+  );
+
+  const deepRoundTrip = await (async () => {
+    const pg = await browser.newPage();
+    await pg.setViewport({ width: 1280, height: 900 });
+    await pg.goto(URL, { waitUntil: "domcontentloaded" });
+    await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 15000 });
+    // 在每个控件上设一个「与默认明显不同」的值（滑杆取量程端、开关取反、下拉取非首项）
+    const source = await pg.evaluate(() => {
+      const dl = window.attitudeDemo.deepLink();
+      const setRange = (el) => {
+        const min = parseFloat(el.min);
+        const max = parseFloat(el.max);
+        const v = Math.abs(parseFloat(el.value) - min) > Math.abs(parseFloat(el.value) - max) ? min : max;
+        el.value = String(v);
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+      };
+      const setSel = (el) => {
+        const opts = [...el.options].filter((o) => o.value !== "");
+        const cur = opts.findIndex((o) => o.value === el.value);
+        const next = opts[(cur + 1) % opts.length];
+        if (!next) return;
+        el.value = next.value;
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+      };
+      for (const k of dl.keys) {
+        const el = document.getElementById(k);
+        if (el && el.type === "range") setRange(el);
+      }
+      for (const k of dl.checks) {
+        const el = document.getElementById(k);
+        if (el) {
+          el.checked = !el.checked;
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+      }
+      for (const k of dl.sels) {
+        const el = document.getElementById(k);
+        if (el && el.tagName === "SELECT") setSel(el);
+      }
+      // 最后把那几个「会重置别的控件」的下拉放回已知值，保证源状态自洽
+      const mnt = document.getElementById("serial-mounting");
+      mnt.value = "y-front-x-left";
+      mnt.dispatchEvent(new Event("change", { bubbles: true }));
+      const read = (id) => {
+        const el = document.getElementById(id);
+        if (!el) return null;
+        return el.type === "checkbox" ? (el.checked ? "1" : "0") : String(el.value);
+      };
+      return { keys: dl.keys, checks: dl.checks, sels: dl.sels, values: {} };
+    });
+    // 取当前 hash（updateHash 是 10 Hz，所以给它一点时间；实在没有就用「分享」按钮的产物）
+    await new Promise((r) => setTimeout(r, 400));
+    const hash = await pg.evaluate(() => location.hash);
+    const srcValues = await pg.evaluate((lists) => {
+      const read = (id) => {
+        const el = document.getElementById(id);
+        if (!el) return null;
+        return el.type === "checkbox" ? (el.checked ? "1" : "0") : String(el.value);
+      };
+      const out = {};
+      for (const id of [...lists.keys, ...lists.checks, ...lists.sels]) out[id] = read(id);
+      out.view = document.body.dataset.view;
+      return out;
+    }, { keys: source.keys, checks: source.checks, sels: source.sels });
+    await pg.close();
+    if (!/^#s=.+/.test(hash)) return { hash, bad: ["未生成 hash"] };
+
+    // 新页面按 hash 打开，逐一比对
+    const pg2 = await browser.newPage();
+    await pg2.setViewport({ width: 1280, height: 900 });
+    await pg2.goto(URL + hash, { waitUntil: "domcontentloaded" });
+    await pg2.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 15000 });
+    await new Promise((r) => setTimeout(r, 500));
+    const dstValues = await pg2.evaluate((lists) => {
+      const read = (id) => {
+        const el = document.getElementById(id);
+        if (!el) return null;
+        return el.type === "checkbox" ? (el.checked ? "1" : "0") : String(el.value);
+      };
+      const out = {};
+      for (const id of [...lists.keys, ...lists.checks, ...lists.sels]) out[id] = read(id);
+      out.view = document.body.dataset.view;
+      return out;
+    }, { keys: source.keys, checks: source.checks, sels: source.sels });
+    await pg2.close();
+    const bad = [];
+    for (const k of Object.keys(srcValues)) {
+      if (srcValues[k] === null && dstValues[k] === null) continue;
+      if (String(srcValues[k]) !== String(dstValues[k])) bad.push(k + ": " + srcValues[k] + "→" + dstValues[k]);
+    }
+    return { hash: hash.slice(0, 24) + "…", checked: Object.keys(srcValues).length, bad };
+  })();
+  check(
+    "深链真实往返：全部控件的值都能被链接带过去并还原",
+    deepRoundTrip.bad.length === 0,
+    deepRoundTrip.checked + " 个控件往返" + (deepRoundTrip.bad.length ? "，不一致：" + deepRoundTrip.bad.slice(0, 6).join("｜") : "全部一致") + "（hash " + deepRoundTrip.hash + "）",
+  );
+
   // ---------- 文本行协议 / MAVLink 协议：各自的假串口端到端 ----------
   // 这两种协议是本轮新增的「硬件接入入口」，必须在真浏览器里跑一遍：
   // 假端口按各自格式发流，断言解析后的读数与值班（unit/mounting）都正确。
@@ -908,6 +1271,17 @@ try {
       () => parseFloat((document.getElementById("clock")?.textContent ?? "").replace("t = ", "")) > 0.8,
       { timeout: 10000 },
     );
+    // 状态条的第一段文字是「已连接——等待数据帧…」，要等 10 Hz 的 UI 刷新把它换成带帧率的那段。
+    // 直接读会在窗口内抓到旧文案（时序竞态，实测在改动前后各命中过一次）——等它出现协议名更稳。
+    await pg
+      .waitForFunction(
+        () => {
+          const t = document.getElementById("serial-status")?.textContent ?? "";
+          return /文本行|MAVLink|帧\/s/.test(t);
+        },
+        { timeout: 4000 },
+      )
+      .catch(() => undefined);
     const info = await pg.evaluate(() => {
       const imu = window.attitudeDemo.state.lastImu;
       return {
