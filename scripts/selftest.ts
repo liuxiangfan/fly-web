@@ -4,7 +4,7 @@
  */
 import { World } from "../src/core/world";
 import { manualTarget, scenarios } from "../src/core/scenarios";
-import { G_ACC, simulateImu, simulateMag, type ImuParams } from "../src/core/imu";
+import { G_ACC, MAG_WORLD_NED, simulateImu, simulateMag, type ImuParams } from "../src/core/imu";
 import { Gauss, mulberry32 } from "../src/core/rng";
 import {
   ATTITUDE_BASE_FIELDS,
@@ -112,8 +112,8 @@ function runStatic(
 }
 
 // 磁参数全零：守护既有噪声序列不变（磁采样不消耗随机数）
-const clean: ImuParams = { gyroBiasDps: 0, gyroNoiseDps: 0, gyroWalkDps: 0, gyroRangeDps: 0, sensorDelayMs: 0,  gyroScaleErr: 0, gyroMisalign: 0,  accelNoise: 0, accelCrossAxis: 0, accelNonlin: 0, linAccel: 0, vibration: 0, magNoise: 0, magQuantUts: 0, hardIron: 0, disturbMag: 0 };
-const dirty: ImuParams = { gyroBiasDps: 1, gyroNoiseDps: 0.2, gyroWalkDps: 0, gyroRangeDps: 0, sensorDelayMs: 0,  gyroScaleErr: 0, gyroMisalign: 0,  accelNoise: 0.15, accelCrossAxis: 0, accelNonlin: 0, linAccel: 0.5, vibration: 0.3, magNoise: 0, magQuantUts: 0, hardIron: 0, disturbMag: 0 };
+const clean: ImuParams = { gyroBiasDps: 0, gyroNoiseDps: 0, gyroWalkDps: 0, gyroRangeDps: 0, sensorDelayMs: 0,  gyroScaleErr: 0, gyroMisalign: 0,  accelNoise: 0, accelCrossAxis: 0, accelNonlin: 0, linAccel: 0, vibration: 0, magNoise: 0, magQuantUts: 0, hardIron: 0, disturbMag: 0, magSoftIron: 0 };
+const dirty: ImuParams = { gyroBiasDps: 1, gyroNoiseDps: 0.2, gyroWalkDps: 0, gyroRangeDps: 0, sensorDelayMs: 0,  gyroScaleErr: 0, gyroMisalign: 0,  accelNoise: 0.15, accelCrossAxis: 0, accelNonlin: 0, linAccel: 0.5, vibration: 0.3, magNoise: 0, magQuantUts: 0, hardIron: 0, disturbMag: 0, magSoftIron: 0 };
 
 // 1. 欧拉角 ↔ 四元数 往返
 {
@@ -508,7 +508,7 @@ const dirty: ImuParams = { gyroBiasDps: 1, gyroNoiseDps: 0.2, gyroWalkDps: 0, gy
 {
   // 静态倾斜 + 偏航 40° 真值，陀螺带 1°/s 零偏（会拖偏 yaw）
   const qTrue = qFromEuler(15 * RAD, 25 * RAD, 40 * RAD);
-  const pWithMag: ImuParams = { ...dirty, magNoise: 0.8, hardIron: 0, disturbMag: 0 };
+  const pWithMag: ImuParams = { ...dirty, magNoise: 0.8, hardIron: 0, disturbMag: 0, magSoftIron: 0 };
 
   const run = (magEnabled: boolean, T: number) => {
     const comp = new ComplementaryEstimator();
@@ -537,7 +537,7 @@ const dirty: ImuParams = { gyroBiasDps: 1, gyroNoiseDps: 0.2, gyroWalkDps: 0, gy
 // 18. MARG Mahony：磁开 → 偏航收敛
 {
   const qTrue = qFromEuler(15 * RAD, 25 * RAD, 40 * RAD);
-  const pWithMag: ImuParams = { ...dirty, magNoise: 0.8, hardIron: 0, disturbMag: 0 };
+  const pWithMag: ImuParams = { ...dirty, magNoise: 0.8, hardIron: 0, disturbMag: 0, magSoftIron: 0 };
   const mahony = new MahonyEstimator();
   mahony.magEnabled = true;
   mahony.kp = 2;
@@ -558,7 +558,7 @@ const dirty: ImuParams = { gyroBiasDps: 1, gyroNoiseDps: 0.2, gyroWalkDps: 0, gy
 // 19. MARG Madgwick（数值梯度）：磁开 → 偏航收敛
 {
   const qTrue = qFromEuler(15 * RAD, 25 * RAD, 40 * RAD);
-  const pWithMag: ImuParams = { ...dirty, magNoise: 0.8, hardIron: 0, disturbMag: 0 };
+  const pWithMag: ImuParams = { ...dirty, magNoise: 0.8, hardIron: 0, disturbMag: 0, magSoftIron: 0 };
   const madg = new MadgwickEstimator();
   madg.magEnabled = true;
   madg.beta = 0.3;
@@ -642,7 +642,7 @@ const dirty: ImuParams = { gyroBiasDps: 1, gyroNoiseDps: 0.2, gyroWalkDps: 0, gy
 // 22. MARG 卡尔曼：磁开 → 偏航收敛（1°/s 零偏下）
 {
   const qTrue = qFromEuler(15 * RAD, 25 * RAD, 40 * RAD);
-  const pWithMag: ImuParams = { ...dirty, magNoise: 0.8, hardIron: 0, disturbMag: 0 };
+  const pWithMag: ImuParams = { ...dirty, magNoise: 0.8, hardIron: 0, disturbMag: 0, magSoftIron: 0 };
   const kal = new KalmanEstimator();
   kal.magEnabled = true;
   const g = new Gauss(mulberry32(33));
@@ -1116,6 +1116,46 @@ const dirty: ImuParams = { gyroBiasDps: 1, gyroNoiseDps: 0.2, gyroWalkDps: 0, gy
         `半径 ${fit!.radius.toFixed(1)} μT（真值 ${Math.hypot(...B).toFixed(1)}）；残差 ${(cal.residual * 100).toFixed(2)}%；` +
         `单轴覆盖被拒=${flatCal === null}`
       : "拟合返回 null",
+  );
+}
+
+// 39. 软铁畸变：装置能造出椭球；对角标定收得掉对角部分、收不掉交叉项（诚实边界，文档引用这组数）
+{
+  const mk = (g: number): ImuParams => ({ ...clean, magSoftIron: g, magNoise: 0.8 });
+  const dance = (p: ImuParams, n = 280): V3[] => {
+    const gg = new Gauss(mulberry32(0xc0ffee));
+    const out: V3[] = [];
+    for (let i = 0; i < n; i++) {
+      const q = qNorm({ w: gg.next(), x: gg.next(), y: gg.next(), z: gg.next() });
+      out.push(simulateMag(q, (i / n) * 23.7, p, gg));
+    }
+    return out;
+  };
+  const c0 = calibrateMag(dance(mk(0)))!;
+  const c4 = calibrateMag(dance(mk(0.4)))!;
+  // 纯对角软铁（只有三轴增益，无交叉项）：这是「能被对角标定收掉」的那一半
+  const S: V3 = [1.34, 0.71, 1.24];
+  const diagOnly: V3[] = (() => {
+    const gg = new Gauss(mulberry32(0xc0ffee));
+    const out: V3[] = [];
+    for (let i = 0; i < 280; i++) {
+      const q = qNorm({ w: gg.next(), x: gg.next(), y: gg.next(), z: gg.next() });
+      const m = qRotInv(q, MAG_WORLD_NED);
+      out.push([S[0] * m[0], S[1] * m[1], S[2] * m[2]]);
+    }
+    return out;
+  })();
+  const cDiag = calibrateMag(diagOnly)!;
+  const spread = (c: { scale: V3 }): number => Math.max(...c.scale) / Math.min(...c.scale);
+  // 阈值留余量并注释来源：无软铁时 scale 极差也有约 2% 的底（Haar 有限采样的半极差涨落，
+  // 不是畸变）；纯对角软铁标定后残差 1.79% 而不是 0，是「球拟合中心 + 半极差缩放」这套
+  // 两步近似自身的底（真机换 3×3 椭球最小二乘能压得更低）。
+  check(
+    "软铁畸变：对角部分可标定、交叉项不可标定",
+    spread(c0) < 1.05 && spread(c4) > 1.3 && c4.residual > 3 * c0.residual && cDiag.residual < 0.03,
+    `无软铁：scale 极差 ${spread(c0).toFixed(3)}（≈1，余量来自有限采样）、残差 ${(c0.residual * 100).toFixed(1)}%；` +
+      `软铁 0.40：scale 极差 ${spread(c4).toFixed(3)}、残差 ${(c4.residual * 100).toFixed(1)}%（交叉项收不掉）；` +
+      `纯对角软铁：标定后残差 ${(cDiag.residual * 100).toFixed(2)}% ← 对角部分收得掉`,
   );
 }
 

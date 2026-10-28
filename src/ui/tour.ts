@@ -95,6 +95,7 @@ export const TOUR_STEPS: TourStep[] = [
       "装置用球拟合做硬铁 + 对角软铁校准。",
     look: "启用磁力计后看<b>偏航曲线</b>：没磁时它一直漂，有磁时被拉回真值——但人为加干扰时它又跑了。",
     exp: "magnetic",
+    doc: { page: "magcal", label: "磁力计校准：为什么必须做、怎么做（含可搬运代码）" },
     sec: 50,
   },
   {

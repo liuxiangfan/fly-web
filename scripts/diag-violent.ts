@@ -11,7 +11,7 @@ import {
 import { DEG, qAngleBetween, qToEuler } from "../src/core/quat";
 
 const H = 1 / 500;
-const params: ImuParams = { gyroBiasDps: 1, gyroNoiseDps: 0.2, gyroWalkDps: 0, gyroRangeDps: 0, sensorDelayMs: 0,  gyroScaleErr: 0, gyroMisalign: 0,  accelNoise: 0.1, accelCrossAxis: 0, accelNonlin: 0, linAccel: 1, vibration: 0.3, magNoise: 0, magQuantUts: 0, hardIron: 0, disturbMag: 0 };
+const params: ImuParams = { gyroBiasDps: 1, gyroNoiseDps: 0.2, gyroWalkDps: 0, gyroRangeDps: 0, sensorDelayMs: 0,  gyroScaleErr: 0, gyroMisalign: 0,  accelNoise: 0.1, accelCrossAxis: 0, accelNonlin: 0, linAccel: 1, vibration: 0.3, magNoise: 0, magQuantUts: 0, hardIron: 0, disturbMag: 0, magSoftIron: 0 };
 
 const world = new World(scenarios.violent);
 const ests = [

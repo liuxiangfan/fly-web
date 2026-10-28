@@ -8,7 +8,7 @@ import { RollingChart } from "./ui/chart";
 import { World } from "./core/world";
 import { scenarios } from "./core/scenarios";
 import type { ImuParams, ImuSample } from "./core/imu";
-import { G_ACC, MAG_WORLD_NED, simulateMag } from "./core/imu";
+import { G_ACC, MAG_WORLD_NED, simulateMag, softIronGains } from "./core/imu";
 import {
   ComplementaryEstimator,
   KalmanEstimator,
@@ -90,6 +90,7 @@ const imuParams: ImuParams = {
   magQuantUts: 0,
   hardIron: 0,
   disturbMag: 0,
+  magSoftIron: 0, // 软铁畸变默认关（开了会让磁球变椭球，标定面板的软铁一半才有东西可校）
 };
 
 // ---------- 磁力计标定（硬铁球心 + 对角软铁缩放） ----------
@@ -760,6 +761,21 @@ bindSlider("imu-lin-accel", (v) => (imuParams.linAccel = v), (v) => `${v.toFixed
 bindSlider("imu-vibration", (v) => (imuParams.vibration = v), (v) => v.toFixed(2));
 bindSlider("imu-mag-noise", (v) => (imuParams.magNoise = v), (v) => `${v.toFixed(1)}μT`);
 bindSlider("imu-mag-disturb", (v) => (imuParams.disturbMag = v), (v) => v.toFixed(2));
+// 软铁畸变：导磁材料（机架、螺丝、屏蔽罩）把磁球压成椭球。读数给三轴增益的极差百分比，
+// 比裸数字更接近「你能看到什么」——对角标定收得掉它，交叉项收不掉（见文档·磁力计校准）。
+bindSlider(
+  "imu-soft-iron",
+  (v) => {
+    imuParams.magSoftIron = v;
+    onImuManual();
+  },
+  (v) => {
+    if (v < 0.005) return "关";
+    const g = softIronGains(v);
+    const maxDev = Math.max(...g.map((x) => Math.abs(x - 1)));
+    return `±${(maxDev * 100).toFixed(0)}%`;
+  },
+);
 // 硬铁偏移：机身金属/扬声器磁铁造成的恒定偏移（旧版只存在于 ImuParams，没有 UI 入口）
 bindSlider(
   "imu-hard-iron",
@@ -2749,6 +2765,7 @@ const DOC_MODULE_OF: Record<string, string> = {
   "f-kalman-detail": "filters",
   labs: "labs",
   guide: "guide",
+  magcal: "guide", // 磁力计校准在「硬件与固件」模块下（真机接入流程的一部分）
   trouble: "trouble",
   glossary: "glossary",
   refs: "refs",
@@ -3149,6 +3166,27 @@ for (const container of [docPagesEl, chapterToc]) {
   });
 }
 
+/**
+ * 应用界面里的「见文档·…」链接（a[data-doc-open]）。
+ * 为什么需要单独一条通路：文档内的锚点跳转是委托在 docPagesEl / chapterToc 上的，
+ * 而面板里的链接不在那个容器里，事件不会冒泡过去——实测「点了完全没反应」。
+ * 这里显式打开文档层并切页；href 保留，htmlcheck 的锚点契约因此仍会校验目标是否存在。
+ */
+document.addEventListener("click", (e) => {
+  const a = (e.target as HTMLElement)?.closest<HTMLAnchorElement>("a[data-doc-open]");
+  if (!a) return;
+  e.preventDefault();
+  const page = a.dataset.docOpen!;
+  const anchorId = a.hash ? a.hash.slice(1) : "";
+  setDocsOpen(true);
+  showDocPage(page);
+  if (anchorId) {
+    const el = document.getElementById(anchorId);
+    // 切页后章节位置要等布局稳定；直接滚会按旧布局算
+    if (el) requestAnimationFrame(() => jumpToHash(el));
+  }
+});
+
 // 左栏模块按钮：点击即切换到该模块
 for (const btn of docModuleBtns) {
   btn.addEventListener("click", () => showDocPage(btn.dataset.doc!));
@@ -3214,7 +3252,7 @@ const tour = mountTour({
 const DEEP_KEYS = [
   "imu-gyro-bias", "imu-gyro-noise", "imu-gyro-walk", "imu-accel-noise", "imu-cross-axis",
   "imu-accel-nonlin", "imu-lin-accel", "imu-vibration", "imu-mag-noise", "imu-mag-quant",
-  "imu-mag-disturb", "imu-hard-iron", "mahony-kp", "mahony-ki", "madg-beta", "comp-alpha",
+  "imu-mag-disturb", "imu-hard-iron", "imu-soft-iron", "mahony-kp", "mahony-ki", "madg-beta", "comp-alpha",
   "kalman-proc", "kalman-obs", "man-roll", "man-pitch", "man-yaw", "quat-t",
   "gate-deg", "gate-mag", "imu-gyro-scale", "imu-gyro-misalign", "imu-delay",
 ];

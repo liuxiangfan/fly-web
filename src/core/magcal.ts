@@ -132,33 +132,49 @@ export function fitMagSphere(samples: readonly V3[]): MagFitDiagnostics | null {
 /**
  * 由样本点直接给出标定参数：球心 → 硬铁；各轴半极差 → 软铁对角缩放。
  * 返回 null 表示样本不足/覆盖度不够/数值退化。
+ *
+ * 两个读数（field / residual）的定义值得说清，因为它们最容易写成「看着像那么回事」：
+ *  · 软铁缩放是**相对**修正：scale_i = 参考量 / 第 i 轴半极差。参考量取三轴半极差的均值，
+ *    于是三轴公共的尺度因子自动约掉——这正是我们想要的，因为我们只知道「三轴应该等宽」，
+ *    并不知道当地地磁总场强是多少（那要靠查地磁模型）。
+ *  · 但半极差本身是被截断的统计量：Haar 均匀采样的单轴分量在 [−F, F] 上均匀，
+ *    取 2%/98% 分位后量程只剩 96%（实测：半径 50 μT 的理想球，三轴半极差均值 47.5）。
+ *    若拿它当「场强」直接报出来，会低报 5%；若拿它当残差基准，理想点云也会显示约 5% 残差
+ *    （实测 5.31%）——那个数字与数据质量无关，纯属坐标选得不好。
+ *  · 所以这里统一改成**自洽的定义**：先把点云标定成球，再在这批标定后的点上取
+ *    field = 模长均值（= 标定球半径，实测理想球 50.00 ✓）、
+ *    residual = 模长的**相对**标准差（无量纲，与公共尺度无关）。
+ *    残差因此读作「这批点落在同一个球面上的紧密程度」，理想无噪球面 0.37%，与截断无关。
  */
 export function calibrateMag(samples: readonly V3[]): MagCalibration | null {
   const fit = fitMagSphere(samples);
   if (!fit) return null;
-  const field = (fit.halfRanges[0] + fit.halfRanges[1] + fit.halfRanges[2]) / 3;
-  if (!(field > 0)) return null;
+  const ref = (fit.halfRanges[0] + fit.halfRanges[1] + fit.halfRanges[2]) / 3;
+  if (!(ref > 0)) return null;
   const scale: V3 = [
-    Math.min(5, Math.max(0.2, field / fit.halfRanges[0])),
-    Math.min(5, Math.max(0.2, field / fit.halfRanges[1])),
-    Math.min(5, Math.max(0.2, field / fit.halfRanges[2])),
+    Math.min(5, Math.max(0.2, ref / fit.halfRanges[0])),
+    Math.min(5, Math.max(0.2, ref / fit.halfRanges[1])),
+    Math.min(5, Math.max(0.2, ref / fit.halfRanges[2])),
   ];
-  // 标定后的相对残差（理想球面 + 噪声 → 很小；点云没铺满 → 偏大）
-  let acc = 0;
+  // 标定后的模长统计：均值 = 场强（标定球半径），相对标准差 = 残差（球面有多圆）
+  let sum = 0;
+  let sumSq = 0;
   for (const p of samples) {
-    const c: V3 = [
+    const r = Math.hypot(
       (p[0] - fit.offset[0]) * scale[0],
       (p[1] - fit.offset[1]) * scale[1],
       (p[2] - fit.offset[2]) * scale[2],
-    ];
-    const e = Math.hypot(c[0], c[1], c[2]) - field;
-    acc += e * e;
+    );
+    sum += r;
+    sumSq += r * r;
   }
+  const field = sum / samples.length;
+  const variance = Math.max(0, sumSq / samples.length - field * field);
   return {
     offset: fit.offset,
     scale,
     field,
-    residual: Math.sqrt(acc / samples.length) / field,
+    residual: field > 0 ? Math.sqrt(variance) / field : NaN,
     count: samples.length,
   };
 }

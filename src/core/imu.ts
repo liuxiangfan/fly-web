@@ -37,6 +37,11 @@ export interface ImuParams {
   hardIron: number;
   /** 交变磁干扰强度 0..1（叠加在 x/y 分量的低频正弦，模拟电机通电磁场） */
   disturbMag: number;
+  /** 软铁畸变强度 0..0.4：作用一个 3×3 矩阵 S = I + g·SOFT_IRON_M，模拟机身铁磁材料导磁
+   *  把磁球压成椭球。矩阵**同时含对角增益与交叉项**——对角增益随便哪个球拟合都能收掉，
+   *  交叉项（椭球轴不与机体轴对齐）则是对角标定吸收不掉的那一半，这正是「完整做法要
+   *  3×3 椭球拟合」的现场证据。0 = 矩阵严格退化为单位阵（不消耗随机数） */
+  magSoftIron: number;
   /** 传感器群延迟（ms，0..30）：整帧采样延后交给算法。
    *  真实 MEMS 的传输 + 抗混叠滤波会带来群延迟；机动中它让姿态**滞后** ω·τ，
    *  在控制回路里吃掉相位裕度（增益加到某个值就振）。0 = 关闭 */
@@ -66,6 +71,22 @@ const HARD_IRON_DIR: V3 = (() => {
   const n = Math.hypot(0.3, -0.2, 0.8);
   return [0.3 / n, -0.2 / n, 0.8 / n];
 })();
+
+/**
+ * 软铁畸变矩阵（确定性常量，不消耗随机数）：S = I + g·M。
+ * 对角项给三轴不同的增益（椭球三轴伸缩），交叉项让椭球轴偏开机体轴——
+ * 后者是对角软铁标定收不掉的部分。
+ */
+export const SOFT_IRON_M: readonly V3[] = [
+  [0.85, 0.30, -0.16],
+  [0.26, -0.72, 0.22],
+  [-0.14, 0.34, 0.6],
+];
+
+/** 软铁矩阵对角增益（标定读数的可读换算：±13% 之类） */
+export function softIronGains(g: number): V3 {
+  return SOFT_IRON_M.map((row, i) => 1 + g * row[i]) as unknown as V3;
+}
 
 const BIAS_DIR: V3 = (() => {
   const n = Math.hypot(1, -0.7, 0.5);
@@ -161,26 +182,40 @@ export function simulateImu(
 
 /**
  * 磁力计链路（独立函数，便于噪声序列守护测试）：
- * 世界磁场 → 机体系投影 → 硬铁偏移 + 交变干扰 + 高斯噪声 + 可选量化。
- * p 全零（magNoise=0, hardIron=0, disturbMag=0, magQuantUts=0）时返回无噪声的理想投影。
+ * 世界磁场 → 机体系投影 → **软铁矩阵** → + 硬铁偏移 + 交变干扰 + 高斯噪声 + 可选量化。
+ * 即 m_meas = S·B_body + b + d + n（软铁乘在真实场之前，与真机一致：导磁材料扭曲的是磁场本身）。
+ * p 全零（magNoise=0, hardIron=0, disturbMag=0, magQuantUts=0, magSoftIron=0）时返回
+ * 无噪声的理想投影，且与旧版逐位一致（g=0 时 S 严格等于单位阵）。
  */
 export function simulateMag(
   q: Quat,
   t: number,
-  p: Pick<ImuParams, "magNoise" | "hardIron" | "disturbMag" | "magQuantUts">,
+  p: Pick<ImuParams, "magNoise" | "hardIron" | "disturbMag" | "magQuantUts" | "magSoftIron">,
   gauss: Gauss,
 ): V3 {
   const mBody = qRotInv(q, MAG_WORLD_NED);
-  const magOn = p.magNoise > 0 || p.hardIron > 0 || p.disturbMag > 0 || p.magQuantUts > 0;
+  const magOn =
+    p.magNoise > 0 || p.hardIron > 0 || p.disturbMag > 0 || p.magQuantUts > 0 || p.magSoftIron > 0;
   if (!magOn) return mBody; // 理想磁力计：不消耗随机数（守护既有噪声序列）
+
+  // 软铁：S = I + g·M。g=0 时逐项等于 mBody（乘法退化为 1×，浮点上一模一样）
+  let s0 = mBody[0];
+  let s1 = mBody[1];
+  let s2 = mBody[2];
+  if (p.magSoftIron > 0) {
+    const g = p.magSoftIron;
+    s0 = (1 + g * SOFT_IRON_M[0][0]) * mBody[0] + g * SOFT_IRON_M[0][1] * mBody[1] + g * SOFT_IRON_M[0][2] * mBody[2];
+    s1 = g * SOFT_IRON_M[1][0] * mBody[0] + (1 + g * SOFT_IRON_M[1][1]) * mBody[1] + g * SOFT_IRON_M[1][2] * mBody[2];
+    s2 = g * SOFT_IRON_M[2][0] * mBody[0] + g * SOFT_IRON_M[2][1] * mBody[1] + (1 + g * SOFT_IRON_M[2][2]) * mBody[2];
+  }
 
   const hi = p.hardIron * 8; // 硬铁偏移量级：最多 ±8 μT
   const di = p.disturbMag * 25; // 交变干扰量级：最多 ±25 μT
   const quant = (v: number): number =>
     p.magQuantUts > 0 ? Math.round(v / p.magQuantUts) * p.magQuantUts : v; // 确定性取整（AK8963 = 0.6 μT/LSB）
   return [
-    quant(mBody[0] + hi * HARD_IRON_DIR[0] + di * Math.sin(2 * Math.PI * 2.1 * t + 0.7) + gauss.next() * p.magNoise),
-    quant(mBody[1] + hi * HARD_IRON_DIR[1] + di * Math.sin(2 * Math.PI * 1.7 * t + 2.2) + gauss.next() * p.magNoise),
-    quant(mBody[2] + hi * HARD_IRON_DIR[2] + gauss.next() * p.magNoise),
+    quant(s0 + hi * HARD_IRON_DIR[0] + di * Math.sin(2 * Math.PI * 2.1 * t + 0.7) + gauss.next() * p.magNoise),
+    quant(s1 + hi * HARD_IRON_DIR[1] + di * Math.sin(2 * Math.PI * 1.7 * t + 2.2) + gauss.next() * p.magNoise),
+    quant(s2 + hi * HARD_IRON_DIR[2] + gauss.next() * p.magNoise),
   ];
 }

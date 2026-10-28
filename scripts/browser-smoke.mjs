@@ -854,6 +854,31 @@ try {
       `走完自动收起=${tourCase.done}、开始入口恢复=${tourCase.restored}；✕ 可退出=${tourCase.closed}`,
   );
 
+  // ⑥ 应用界面里的「见文档·…」链接（a[data-doc-open]）：从面板直接跳进文档对应页。
+  //    这条路径曾经是坏的——文档内的锚点跳转委托在 docPagesEl / chapterToc 上，
+  //    而面板里的链接不在那个容器里，事件不会冒泡过去，点了完全没反应（改字体时实测抓到）。
+  const docJump = await page.evaluate(async () => {
+    document.getElementById("sec-imu").classList.remove("collapsed");
+    const a = document.querySelector("a[data-doc-open]");
+    if (!a) return { found: false };
+    const wanted = a.dataset.docOpen;
+    a.click();
+    await new Promise((r) => setTimeout(r, 400));
+    return {
+      found: true,
+      wanted,
+      docsOpen: !document.getElementById("docs-overlay").hidden,
+      visiblePage: document.querySelector(".doc-page:not([hidden])")?.dataset.docPage,
+      activeModule: document.querySelector(".module-link.active")?.dataset.doc,
+    };
+  });
+  check(
+    "面板里的「见文档」链接能打开文档层并切到目标页",
+    docJump.found && docJump.docsOpen && docJump.visiblePage === docJump.wanted && docJump.activeModule === "guide",
+    `链接→${docJump.wanted}；文档层打开=${docJump.docsOpen}；当前页=${docJump.visiblePage}；左栏高亮=${docJump.activeModule}`,
+  );
+  await page.evaluate(() => document.getElementById("btn-docs-close").click());
+
   // ---------- 文本行协议 / MAVLink 协议：各自的假串口端到端 ----------
   // 这两种协议是本轮新增的「硬件接入入口」，必须在真浏览器里跑一遍：
   // 假端口按各自格式发流，断言解析后的读数与值班（unit/mounting）都正确。
@@ -1261,9 +1286,13 @@ try {
       scan(document.getElementById("viewport"));
     }
     document.getElementById("btn-docs").click();
-    for (const p of ["manual", "math"]) {
+    // 文档有 14 个分页，全部扫一遍（每页切换后等 150 ms 让布局稳定）。
+    // 只扫一两页是不够的：新增页面（磁力计校准页的 .code 代码块）与只出现在某页的
+    // 记号都会漏掉——「全站达 AA」这句话必须真的覆盖全站。
+    const pages = [...document.querySelectorAll(".doc-page")].map((p) => p.dataset.docPage);
+    for (const p of pages) {
       document.querySelectorAll(`.module-link[data-doc="${p}"]`).forEach((b) => b.click());
-      await new Promise((r) => setTimeout(r, 260));
+      await new Promise((r) => setTimeout(r, 150));
       scan(document.getElementById("docs-overlay"));
     }
     document.getElementById("btn-docs-close").click();
