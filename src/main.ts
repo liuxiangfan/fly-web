@@ -34,6 +34,7 @@ import { ErrorTracker } from "./core/stats";
 import { EXPERIMENTS, type ExperimentSpec } from "./ui/experiments";
 import { b64urlDecode, b64urlEncode } from "./ui/b64";
 import { parseImuCsv, type ReplayFrame, type ReplayParseResult } from "./core/replay";
+import { InsIntegrator } from "./core/ins";
 
 const H = 1 / 500; // 仿真/解算步长
 const LOG_DT = 0.04; // 曲线记录间隔
@@ -377,6 +378,7 @@ function logRow(): void {
   };
   logRows.push(row);
   if (logRows.length > LOG_ROW_CAP) logRows.splice(0, LOG_ROW_TRIM);
+  logInsTrail();
   attChart.push(state.simTime, channelValues(row, state.channel));
   // 误差图 9 通道：前 5 = A 组（活参数），后 4 = B 组（快照参数，A/B 关闭时为 NaN 不画）
   const errB = abState.on
@@ -2013,6 +2015,7 @@ function resetSim(): void {
   imuChart.clear();
   attPrev.fill(undefined);
   logRows.length = 0;
+  resetIns(); // 位置积分与轨迹属于「本轮」，一并归零
   state.lastImu = null;
   if (state.real) serialState.queue.length = 0; // 重置后不要把重置前的帧再回放一遍
   simErrorShown = false;
@@ -2417,6 +2420,8 @@ function updateEstimators(sample: ImuSample, dt: number): void {
   const mag = magForEstimation(sample.mag);
   for (const e of ests) e.update(sample.gyro, sample.accel, mag, dt);
   if (abState.on) for (const c of abState.clones) c.update(sample.gyro, sample.accel, mag, dt);
+  // 位置积分与姿态同帧：喂的是各算法自己的姿态估计 + 同一份实测加计读数
+  stepIns(sample, dt);
 }
 
 /** 模拟世界推进（固定步长 H）；估计器按「解算频率」抽帧更新 */
@@ -2601,6 +2606,7 @@ function frame(): void {
     imuChart.render();
     updateSerialStatus();
     updateReplayStatus();
+    drawIns();
     updateHash();
   }
   // 评测表/校准面板按**墙钟** 2 Hz 刷新（旧写法把 dt 累加在 10 Hz UI 块里，
@@ -2612,6 +2618,7 @@ function frame(): void {
     updatePanelSummaries();
     updateChartSummaries();
     updateChartTables();
+    updateInsReadout();
   }
 }
 
@@ -3724,11 +3731,11 @@ const DEEP_KEYS = [
 ];
 const DEEP_CHECKS = [
   "mag-enable", "gate-toggle", "gate-recovery", "ghost-toggle", "telemetry-toggle", "axis-toggle",
-  "init-offset-toggle", "ab-toggle", "loop-toggle", "palette-toggle",
+  "init-offset-toggle", "ab-toggle", "loop-toggle", "palette-toggle", "ins-toggle",
 ];
 const DEEP_SELS = [
   "scenario-select", "source-select", "quat-mode", "quat-pair-select", "imu-preset",
-  "mag-mode", "solve-rate", "imu-gyro-range", "serial-baud", "serial-mounting",
+  "mag-mode", "solve-rate", "imu-gyro-range", "serial-baud", "serial-mounting", "ins-scale",
 ];
 let lastHash = "";
 
@@ -3914,6 +3921,8 @@ function exportCsv(quatOn: boolean, imuOn: boolean): void {
       gateMagPct: $<HTMLInputElement>("gate-mag").valueAsNumber / 100,
       gateRecovery: ($("gate-recovery") as HTMLInputElement).checked,
       solveRateHz: solveState.hz,
+      insEnabled: insState.on,
+      insScale: insState.scale,
     })}`,
     `# imu_params=${JSON.stringify(imuParams)}`,
     `# note: reference = ${state.real ? "Mahony (real mode has no ground truth)" : "ground truth (simulation)"}`,
@@ -4089,6 +4098,192 @@ function drawAllan(): void {
   odHaloText(ctx, "τ（平均时长）", W - R - 60, H - 8, "#64748c");
 }
 
+/* ==========================================================================
+   惯性导航：姿态 → 速度 → 位置（误差按三次方增长）
+   --------------------------------------------------------------------------
+   每种算法一条独立的积分器，喂的是**它自己的姿态估计**与同一份实测加速度计读数，
+   于是「姿态错多少」直接翻译成「位置漂多远」。本装置不模拟平动，真值位置恒在原点，
+   所以图上任何偏移都是解算误差与观测污染造成的。
+
+   教学结论（自检与文档都引用这组数）：陀螺零偏 1°/s、30 s 后——
+   纯陀螺积分漂 ~700 m、互补 66 m、Mahony 44 m、Madgwick 5.5 m、卡尔曼 1.6 m。
+   同一个姿态误差，在位置上被放大了三个数量级。
+   ========================================================================== */
+
+/** 每条估计器通道一个位置积分器（与 ests 顺序一致） */
+const insList = new Map<Estimator["id"], InsIntegrator>();
+for (const e of ests) insList.set(e.id, new InsIntegrator());
+
+/** 俯视图轨迹（按 25 Hz 记录，与曲线同源）：每条算法一串北-东坐标 */
+const insTrails = new Map<Estimator["id"], number[]>();
+
+const insState = { on: true, scale: "auto" as string, range: 10 };
+
+function resetIns(): void {
+  for (const ins of insList.values()) ins.reset();
+  for (const t of insTrails.values()) t.length = 0;
+}
+
+/** 每次估计器更新后推进一步（由 updateEstimators 调用，保证与姿态同帧） */
+function stepIns(sample: ImuSample, dt: number): void {
+  if (!insState.on) return;
+  for (const e of ests) insList.get(e.id)?.step(e.q, sample.accel, dt);
+}
+
+/** 25 Hz 记录一个轨迹点（与 logRow 同源，曲线与俯视图的采样节奏一致） */
+function logInsTrail(): void {
+  if (!insState.on) return;
+  for (const e of ests) {
+    const ins = insList.get(e.id);
+    if (!ins) continue;
+    let t = insTrails.get(e.id);
+    if (!t) {
+      t = [];
+      insTrails.set(e.id, t);
+    }
+    t.push(ins.p[0], ins.p[1]);
+    if (t.length > 2 * 900) t.splice(0, t.length - 2 * 900); // 约 36 s 轨迹
+  }
+}
+
+/** 米数的可读格式（跨越 0.01 m – 10 km） */
+function fmtMeters(v: number): string {
+  const a = Math.abs(v);
+  if (a >= 10000) return `${(v / 1000).toFixed(0)} km`;
+  if (a >= 1000) return `${(v / 1000).toFixed(1)} km`;
+  if (a >= 100) return `${v.toFixed(0)} m`;
+  if (a >= 10) return `${v.toFixed(1)} m`;
+  if (a >= 1) return `${v.toFixed(2)} m`;
+  return `${v.toFixed(3)} m`;
+}
+
+/**
+ * 位置漂移俯视图（北-东平面）。
+ * 自动量程跟随最大漂移——小漂移的算法会缩成原点附近一点，这恰恰是要传达的信息：
+ * 「纯积分跑出屏幕时，卡尔曼几乎还在原点」。想看清早期演化就把量程固定小一点。
+ */
+function drawIns(): void {
+  const c = document.getElementById("ins-canvas") as HTMLCanvasElement | null;
+  if (!c) return;
+  const ctx = c.getContext("2d");
+  if (!ctx) return;
+  const { w: W, h: H } = fitInsetCanvas(c, 1.1, 320);
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = "#0a1020";
+  ctx.fillRect(0, 0, W, H);
+
+  const cx = W / 2;
+  const cy = H / 2;
+  const maxPix = Math.min(W, H) / 2 - 22;
+
+  // 量程：auto = 最大水平漂移（留余量、给下限），否则用固定档
+  let maxDrift = 0;
+  const rows = ests.map((e) => ({ e, ins: insList.get(e.id)! }));
+  for (const { ins } of rows) maxDrift = Math.max(maxDrift, ins.horizontalDrift());
+  const range = insState.scale === "auto" ? Math.max(maxDrift * 1.15, 1) : Number(insState.scale);
+  insState.range = range;
+  const k = maxPix / range; // m → px
+
+  // 刻度环 + 米数标签
+  ctx.font = '10px "Fira Code", Consolas, monospace';
+  ctx.strokeStyle = "#1f2c46";
+  ctx.lineWidth = 1;
+  ctx.fillStyle = "#5b6b86";
+  ctx.textAlign = "center";
+  for (const frac of [1 / 3, 2 / 3, 1]) {
+    const r = maxPix * frac;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.fillText(fmtMeters(range * frac), cx, cy - r + 11); // 环顶：避开横轴与轨迹簇
+  }
+  // 北/东轴
+  ctx.strokeStyle = "#243453";
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - maxPix);
+  ctx.lineTo(cx, cy + maxPix);
+  ctx.moveTo(cx - maxPix, cy);
+  ctx.lineTo(cx + maxPix, cy);
+  ctx.stroke();
+  ctx.fillStyle = "#7b8aa3";
+  ctx.textAlign = "left";
+  ctx.fillText("北", cx + 5, cy - maxPix + 12);
+  ctx.textAlign = "right";
+  ctx.fillText("东", cx + maxPix - 5, cy - 6);
+
+  // 轨迹 + 当前位置（显示坐标：上 = 北，右 = 东）
+  for (const { e, ins } of rows) {
+    const t = insTrails.get(e.id);
+    ctx.strokeStyle = e.color;
+    ctx.lineWidth = 1.4;
+    ctx.globalAlpha = 0.75;
+    if (t && t.length >= 4) {
+      ctx.beginPath();
+      for (let i = 0; i < t.length; i += 2) {
+        const x = cx + t[i + 1] * k;
+        const y = cy - t[i] * k;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+    const px = cx + ins.p[1] * k;
+    const py = cy - ins.p[0] * k;
+    ctx.fillStyle = e.color;
+    ctx.beginPath();
+    ctx.arc(px, py, 3.4, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  // 原点（真值位置）画在最上层
+  ctx.fillStyle = "#e6edf3";
+  ctx.beginPath();
+  ctx.arc(cx, cy, 2.4, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.textAlign = "left";
+  ctx.fillStyle = "#7b8aa3";
+  ctx.fillText(`量程 ±${fmtMeters(range)}`, 6, 13);
+}
+
+/** 位置漂移读数表 + 面板摘要（2 Hz） */
+function updateInsReadout(): void {
+  const el = document.getElementById("ins-readout");
+  const sum = document.getElementById("sum-ins");
+  if (!insState.on) {
+    if (el) el.innerHTML = `<div class="ir-head">位置积分已关闭</div>`;
+    if (sum) sum.textContent = "已关闭";
+    return;
+  }
+  const rows = ests.map((e) => ({ e, ins: insList.get(e.id)! }));
+  if (el) {
+    el.innerHTML =
+      `<div class="ir-head">算法</div><div class="ir-head ir-num">水平漂移</div><div class="ir-head ir-num">垂直漂移</div>` +
+      rows
+        .map(
+          ({ e, ins }) =>
+            `<div class="ir-name"><span class="ir-dot" style="background:${e.color}"></span><span>${e.label}</span></div>` +
+            `<div class="ir-num">${fmtMeters(ins.horizontalDrift())}</div>` +
+            `<div class="ir-num">${fmtMeters(ins.p[2])}</div>`,
+        )
+        .join("");
+  }
+  if (sum) {
+    const worst = [...rows].sort((a, b) => b.ins.horizontalDrift() - a.ins.horizontalDrift())[0];
+    sum.textContent = worst ? `最大漂移 ${fmtMeters(worst.ins.horizontalDrift())}（${worst.e.label}）` : "姿态 → 速度 → 位置";
+  }
+}
+
+$("ins-toggle").addEventListener("change", () => {
+  insState.on = ($("ins-toggle") as HTMLInputElement).checked;
+  resetIns();
+  updateInsReadout();
+  drawIns();
+});
+$("ins-scale").addEventListener("change", () => {
+  insState.scale = $<HTMLSelectElement>("ins-scale").value;
+  drawIns();
+});
 // ---------- 真实 IMU（Web Serial，帧协议见 firmware/gy87.h） ----------
 // Web Serial API 的最小类型面（DOM lib 未收录；只声明我们用到的部分）
 interface SerialPortLike {

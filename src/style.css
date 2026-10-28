@@ -1351,6 +1351,21 @@ body[data-imu-mode="real"] .section-experiments .hint::before {
   color: #0e7fa8;
   font-variant-numeric: tabular-nums;
 }
+/* 窄屏：文档演示的控制条改为上下排布，滑杆自适应宽度。
+   原先 .dc-item 是 nowrap + 固定 168px 滑杆 + 92px 读数，在 390px 下整条会溢出被裁掉
+   （实测 figure 的 scrollWidth 393 > 350）。 */
+@media (max-width: 640px) {
+  .doc-ctrl { flex-direction: column; align-items: stretch; gap: 7px; padding: 7px 8px; }
+  /* 允许标签换行：原先 .dc-item 是 nowrap，其 min-content（标签 + 滑杆 + 读数）在 390px 下
+     比容器宽 8px，整条控制条会被裁掉一点点 */
+  .dc-item { justify-content: space-between; white-space: normal; }
+  .dc-item input[type="range"] { min-width: 90px; }
+  .dc-item input[type="range"] { width: auto; flex: 1 1 auto; min-width: 0; }
+  .dc-val { min-width: 5.5em; text-align: right; }
+  /* 公式块里的 CSS 矩阵在窄屏会略宽于内容列（实测 352 > 314），
+     允许公式块内部横向滚动，而不是让右括号被裁掉 */
+  .formula { overflow-x: auto; }
+}
 
 /* ---- 图表的等价文本出口（画布对读屏不可读，给一个折叠表格） ---- */
 /* 折叠块必须一并收起：否则画布藏了、表格的 summary 行还占着二十几像素，
@@ -1443,6 +1458,30 @@ body[data-imu-mode="real"] .section-experiments .hint::before {
   gap: 9px;
 }
 .serial-baud-note { font-size: 11px; align-self: center; }
+
+/* ---- 惯性导航：位置漂移俯视图 + 读数表 ---- */
+#panel canvas#ins-canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin: 2px 0 8px;
+  border-radius: 6px;
+  background: #0a1020;
+  border: 1px solid var(--border);
+}
+.ins-readout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 2px 8px;
+  font-size: 11px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.ins-readout .ir-head { color: var(--text-faint); font-size: 10px; letter-spacing: 0.04em; }
+.ins-readout .ir-name { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.ins-readout .ir-name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ins-readout .ir-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.ins-readout .ir-num { text-align: right; }
 
 /* ==========================================================================
    响应式

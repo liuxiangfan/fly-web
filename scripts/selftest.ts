@@ -59,6 +59,7 @@ import { calibrateMag, fitMagSphere, applyMagCalibration } from "../src/core/mag
 import { ErrorTracker } from "../src/core/stats";
 import { b64urlDecode, b64urlEncode } from "../src/ui/b64";
 import { parseImuCsv } from "../src/core/replay";
+import { InsIntegrator, driftLaw, G_NED } from "../src/core/ins";
 import { EXPERIMENTS } from "../src/ui/experiments";
 
 const H = 1 / 500;
@@ -1427,6 +1428,57 @@ const dirty: ImuParams = { gyroBiasDps: 1, gyroNoiseDps: 0.2, gyroWalkDps: 0, gy
       Boolean(bad4.error),
     `列名认不出 →「${(bad1.error ?? "").slice(0, 16)}…」；帧数不足 →「${(bad2.error ?? "").slice(0, 10)}…」；` +
       `列数不对 →「${(bad3.error ?? "").slice(0, 18)}…」`,
+  );
+}
+
+// 50. 捷联力学编排（core/ins.ts）：理想输入必须零漂移，且误差增长律与解析式一致
+//     这是「姿态解算精度为什么值钱」的量化基础——位置对陀螺零偏是三次方增长，
+//     所以这条链路必须先在数值上站得住，UI 上的轨迹才有意义。
+{
+  // ① 完美姿态 + 理想读数 → 位置必须纹丝不动（否则后续所有结论都不可信）
+  const ideal = new InsIntegrator();
+  const accelLevel: V3 = [0, 0, G_NED];
+  for (let i = 0; i < Math.round(20 / H); i++) ideal.step(qId(), accelLevel, H);
+  const zeroDrift = ideal.horizontalDrift() + Math.abs(ideal.p[2]);
+
+  // ② 恒定倾角误差：a = g·sinθ，v = a·t，d = ½·a·t²（用真值姿态族解析对照）
+  const theta = 1 * RAD;
+  const tilt = new InsIntegrator();
+  const qTilt = qFromEuler(0, theta, 0); // 俯仰轴上的恒定误差
+  const tEnd = 30;
+  for (let i = 0; i < Math.round(tEnd / H); i++) tilt.step(qTilt, accelLevel, H);
+  const aTheory = G_NED * Math.sin(theta);
+  const vTheory = aTheory * tEnd;
+  const dTheory = 0.5 * aTheory * tEnd * tEnd;
+  const aGot = Math.hypot(tilt.aNed[0], tilt.aNed[1]);
+  const vGot = Math.hypot(tilt.v[0], tilt.v[1]);
+  const dGot = tilt.horizontalDrift();
+  const constErr = Math.max(
+    Math.abs(aGot - aTheory) / aTheory,
+    Math.abs(vGot - vTheory) / vTheory,
+    Math.abs(dGot - dTheory) / dTheory,
+  );
+
+  check(
+    "捷联力学编排：理想输入零漂移 + 恒定倾角误差的解析一致",
+    zeroDrift < 1e-9 && constErr < 2e-3,
+    `理想 20 s 漂移 ${zeroDrift.toExponential(1)} m；恒定 1° 倾角误差：` +
+      `a ${aGot.toFixed(4)}（理论 ${aTheory.toFixed(4)} m/s²）、d ${dGot.toFixed(2)}（理论 ${dTheory.toFixed(2)} m），最大相对偏差 ${(constErr * 100).toFixed(2)}%`,
+  );
+
+  // ③ 倾角误差按 θ̇ 线性增长（陀螺零偏未被修正的极限）→ 位置应服从 ⅙·g·θ̇·t³
+  const thetaDot = 1 * RAD; // 1°/s
+  const ramp = new InsIntegrator();
+  for (let i = 0; i < Math.round(20 / H); i++) {
+    const t = i * H;
+    ramp.step(qFromEuler(thetaDot * t, 0, 0), accelLevel, H);
+  }
+  const law = driftLaw(thetaDot, 20);
+  const ratio = ramp.horizontalDrift() / law.distance;
+  check(
+    "位置漂移服从 t³ 律（⅙·g·θ̇·t³）",
+    ratio > 0.97 && ratio < 1.03,
+    `倾角误差 1°/s 增长、20 s 后：实测 ${ramp.horizontalDrift().toFixed(1)} m / 理论 ${law.distance.toFixed(1)} m（比值 ${ratio.toFixed(3)}）`,
   );
 }
 

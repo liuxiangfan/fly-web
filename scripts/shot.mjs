@@ -93,9 +93,27 @@ await new Promise((r) => setTimeout(r, Number(args.wait ?? 600)));
 
 const path = join(shots, `${name}.png`);
 if (args.el) {
-  const el = await page.$(args.el);
-  if (!el) throw new Error(`找不到元素 ${args.el}`);
-  await el.screenshot({ path });
+  // 不用 elementHandle.screenshot()：它内部自己滚动，而元素位于「面板这类嵌套滚动容器」里时
+  // 截图区域的坐标会与滚动结果错位（实测截到别的区块）。这里自己滚动、等布局稳定、
+  // 再按最终的 getBoundingClientRect 裁剪。
+  const exists = await page.evaluate((sel) => Boolean(document.querySelector(sel)), args.el);
+  if (!exists) throw new Error(`找不到元素 ${args.el}`);
+  await page.evaluate((sel) => {
+    document.querySelector(sel).scrollIntoView({ block: "center", inline: "nearest" });
+  }, args.el);
+  await new Promise((r) => setTimeout(r, 250));
+  const box = await page.evaluate((sel) => {
+    const r = document.querySelector(sel).getBoundingClientRect();
+    return { x: r.x, y: r.y, width: r.width, height: r.height };
+  }, args.el);
+  const clip = {
+    x: Math.max(0, Math.round(box.x)),
+    y: Math.max(0, Math.round(box.y)),
+    width: Math.min(Math.round(box.width), width - Math.max(0, Math.round(box.x))),
+    height: Math.min(Math.round(box.height), height - Math.max(0, Math.round(box.y))),
+  };
+  if (clip.width < 4 || clip.height < 4) throw new Error(`元素 ${args.el} 不在可视区域（clip=${JSON.stringify(clip)}）`);
+  await page.screenshot({ path, clip });
 } else {
   await page.screenshot({ path, fullPage: Boolean(args.full) });
 }

@@ -125,6 +125,58 @@ check(
     : `${rangesWithoutLabel.length} 个滑块缺少标签容器`,
 );
 
+// ---------- 3b. 手册条目只能在文档页里 ----------
+// `.ctl` 是「控制项手册」的专用排版（.k1/.k2/.k3 三段式 + .ctl-name/.ctl-range）。
+// 它若被误插进右侧面板，页面上会出现一段风格不对但语法合法的正文——现有检查全都抓不到。
+// 这条契约专治那类「插错位置」的编辑事故（本轮真踩过：一条手册条目插进了面板的 sub-group 前）。
+const ctlDivs = els.filter((el) => el.tagName === "div" && (attr(el, "class") ?? "").split(/\s+/).includes("ctl"));
+const ctlOutsideDocs = ctlDivs.filter((el) => {
+  let p = (el as { parentNode?: Node }).parentNode;
+  while (p) {
+    const cls = attr(p as Element, "class") ?? "";
+    if (cls.split(/\s+/).includes("doc-page")) return false; // 在某个文档分页里 ✓
+    p = (p as { parentNode?: Node }).parentNode;
+  }
+  return true;
+});
+check(
+  "手册条目（.ctl）只在文档页内",
+  ctlOutsideDocs.length === 0,
+  ctlOutsideDocs.length === 0
+    ? `全部 ${ctlDivs.length} 条手册条目都在 .doc-page 里`
+    : `有 ${ctlOutsideDocs.length} 条跑到了文档页外（前几条：${ctlOutsideDocs
+        .slice(0, 3)
+        .map((e) => (e as { sourceCodeLocation?: { startLine?: number } }).sourceCodeLocation?.startLine ?? "?")
+        .join(", ")} 行）`,
+);
+
+// ---------- 3c. 文档容器的直接子元素只能是文档分页 ----------
+// 往文档里插内容时最容易犯的错：插到了某个 </article> 之后（成了游离的兄弟元素）。
+// HTML 解析器会宽容地接受它，页面看起来「有那段文字」，但它不属于任何分页——
+// 切页时不显示、本页目录也不收录。这里把「.doc-pages 的直接孩子必须是 .doc-page」定成契约。
+const docPagesEl = els.find(
+  (el) => el.tagName === "div" && (attr(el, "class") ?? "").split(/\s+/).includes("doc-pages"),
+);
+/** 只看直接子元素（elements() 是递归的，用它会把所有后代都算进来） */
+const childEls = (node: Element | undefined): Element[] =>
+  !node ? [] : (node.childNodes as Node[]).filter((n): n is Element => Boolean((n as Element).tagName));
+const docPageKids = childEls(docPagesEl);
+const strayChildren = docPageKids.filter(
+  (el) => !(attr(el, "class") ?? "").split(/\s+/).includes("doc-page"),
+);
+check(
+  "文档容器只包含文档分页（无游离元素）",
+  Boolean(docPagesEl) && strayChildren.length === 0,
+  docPagesEl
+    ? strayChildren.length === 0
+      ? `.doc-pages 下 ${docPageKids.length} 个直接子元素全是 .doc-page`
+      : `发现 ${strayChildren.length} 个游离元素：${strayChildren
+          .slice(0, 3)
+          .map((e) => `${e.tagName}${attr(e, "id") ? "#" + attr(e, "id") : ""}`)
+          .join(", ")}`
+    : "找不到 .doc-pages 容器",
+);
+
 // ---------- 4. canvas 可访问性 ----------
 const canvases = els.filter((el) => el.tagName === "canvas");
 const badCanvas = canvases.filter((el) => !attr(el, "aria-label"));
