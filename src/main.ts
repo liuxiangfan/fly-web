@@ -26,15 +26,22 @@ import { Gauss, mulberry32 } from "./core/rng";
 import {
   frameDtSec,
   parseFrame,
+  parseMavlinkFrame,
+  parseTextLine,
   type Mounting,
   type SerialImuFrame,
+  type SerialProtocol,
 } from "./core/serial";
 import { applyMagCalibration, calibrateMag, type MagCalibration } from "./core/magcal";
 import { ErrorTracker } from "./core/stats";
 import { EXPERIMENTS, type ExperimentSpec } from "./ui/experiments";
+import { CHALLENGES, type ChallengeSpec } from "./ui/challenges";
+import { fitInsetCanvas } from "./ui/canvas-util";
+import { drawInsMap } from "./ui/ins-view";
 import { b64urlDecode, b64urlEncode } from "./ui/b64";
 import { parseImuCsv, type ReplayFrame, type ReplayParseResult } from "./core/replay";
 import { InsIntegrator } from "./core/ins";
+import { allanDeviation, synthesizeGyroAngle } from "./core/allan";
 
 const H = 1 / 500; // 仿真/解算步长
 const LOG_DT = 0.04; // 曲线记录间隔
@@ -149,6 +156,9 @@ function setSimControlsDisabled(disabled: boolean): void {
     if (el) el.disabled = disabled;
   }
   document.querySelectorAll<HTMLButtonElement>("#experiment-list button").forEach((b) => {
+    b.disabled = disabled;
+  });
+  document.querySelectorAll<HTMLButtonElement>("#challenge-list button").forEach((b) => {
     b.disabled = disabled;
   });
   const note = document.getElementById("real-mode-note");
@@ -1197,37 +1207,6 @@ function updateProjTurn(q: Quat): void {
 }
 
 /**
- * 画布尺寸同步（所有 inset 演示共用）：按元素当前 CSS 宽度 × DPR 写回 bitmap，
- * 并把 2D 上下文预缩放，使**所有绘制代码都可以直接用 CSS 像素坐标**。
- *
- * 为什么必须有它：canvas 的绘制表面由 width/height **属性**决定，与 CSS 尺寸无关。
- * 只写 `width:100%` 的 CSS 会让位图固定在内联属性尺寸上（本项目 #proj-section 曾是 520×120），
- * 于是在窄容器里横向溢出、被栏边裁掉。这里每帧调用一次，只在尺寸真变时才重设位图
- * （避免每帧清空 bitmap 造成闪烁）。
- *
- * @param aspect    目标宽高比（w / h）
- * @param fallbackW 容器不可见（clientWidth = 0）时的兜底 CSS 宽度
- */
-function fitInsetCanvas(
-  c: HTMLCanvasElement,
-  aspect: number,
-  fallbackW = 320,
-): { w: number; h: number } {
-  const cssW = Math.max(120, Math.round(c.clientWidth || fallbackW));
-  const cssH = Math.round(cssW / aspect);
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  const bw = Math.round(cssW * dpr);
-  const bh = Math.round(cssH * dpr);
-  if (c.width !== bw || c.height !== bh) {
-    c.width = bw;
-    c.height = bh;
-  }
-  const ctx = c.getContext("2d");
-  if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  return { w: cssW, h: cssH };
-}
-
-/**
  * S³ 剖面 inset：把 q 画进「包含 +1 与 q 的大圆平面」——立体投影的「抬升」视角。
  *
  * 为什么不用固定的 w–i 平面：固定的两个坐标轴只在 q 的向量部分平行于 i 时才好看，
@@ -1415,6 +1394,113 @@ function buildExperimentList(): void {
 }
 buildExperimentList();
 $("btn-sandbox").addEventListener("click", () => enterSandbox());
+
+// ---------- 参数整定挑战（评分读的是「本轮评测」同一个 ErrorTracker） ----------
+/** 把提示文本里的换行转成 <br />（写成函数是因为在 shell 里拼正则转义容易被吞） */
+function nlToBr(text: string): string {
+  return text.split(String.fromCharCode(10)).join("<br />");
+}
+
+/** 每道题的进度：装载时刻 + 是否已通过（会话内有效，重置仿真不清零） */
+const challengeState = new Map<string, { startedAt: number; passed: boolean }>();
+
+/** 评分需要足够样本，否则「刚点开始就结算」也能过 */
+const CHALLENGE_MIN_SAMPLES = 375; // 25 Hz × 15 s
+
+function challengeEstIndex(id: string): number {
+  return ests.findIndex((e) => e.id === id);
+}
+
+/** 一键装载现场（复用实验库那套 setter 与基线复位，保证可复现） */
+function startChallenge(c: ChallengeSpec): void {
+  if (state.real) {
+    toast("真实 IMU / 回放模式下挑战停用——那时没有真值，评分口径不成立", "#f85149");
+    return;
+  }
+  resetExperimentBaseline();
+  for (const [id, v] of Object.entries(c.selects ?? {})) setSelectValue(id, v);
+  for (const [id, v] of Object.entries(c.sliders ?? {})) setSliderValue(id, v);
+  for (const [id, v] of Object.entries(c.checks ?? {})) setCheckValue(id, v);
+  resetSim();
+  challengeState.set(c.id, { startedAt: state.simTime, passed: challengeState.get(c.id)?.passed ?? false });
+  const note = document.getElementById("challenge-note");
+  if (note) {
+    note.classList.remove("hidden");
+    note.innerHTML =
+      `<b>${c.name}</b> · ${c.goal}<br />` +
+      `<span class="dim">现场：</span>${c.scene}<br />` +
+      `<span class="dim">提示：</span>${nlToBr(c.hint)}<br />` +
+      `<span class="dim">跑够 15 秒后点「结算」。</span>`;
+  }
+  toast(`挑战已装载：${c.name} —— 调参数，跑够 15 秒后结算`);
+}
+
+/** 结算：读该算法的 RMSE，与阈值比较 */
+function settleChallenge(c: ChallengeSpec): void {
+  const idx = challengeEstIndex(c.grade.est);
+  const sum = metricsA[idx]?.summary();
+  const label = ests[idx]?.label ?? c.grade.est;
+  if (state.real) {
+    toast("真实模式没有真值基准，挑战评分不适用", "#f85149");
+    return;
+  }
+  if (!sum || sum.n < CHALLENGE_MIN_SAMPLES) {
+    toast(`样本不够（${sum?.n ?? 0} / ${CHALLENGE_MIN_SAMPLES}）——让仿真跑够 15 秒再结算`, "#fbbf24");
+    return;
+  }
+  const passed = sum.rmse <= c.grade.limit;
+  const rec = challengeState.get(c.id) ?? { startedAt: 0, passed: false };
+  challengeState.set(c.id, { ...rec, passed: rec.passed || passed });
+  const note = document.getElementById("challenge-note");
+  if (note) {
+    note.classList.remove("hidden");
+    note.innerHTML =
+      `<b>${c.name}</b> 结算：${label} RMSE <span class="mono">${sum.rmse.toFixed(2)}°</span> / 阈值 ` +
+      `<span class="mono">${c.grade.limit.toFixed(2)}°</span> ` +
+      (passed ? `<b style="color:#7ee787">通过 ✅</b>` : `<b style="color:#fbbf24">未达标</b>（差 ${(sum.rmse - c.grade.limit).toFixed(2)}°）`) +
+      `<br /><span class="dim">提示：</span>${nlToBr(c.hint)}`;
+  }
+  updateChallengeUi();
+  toast(passed ? `通过：${c.name}（RMSE ${sum.rmse.toFixed(2)}°）` : `未达标：RMSE ${sum.rmse.toFixed(2)}° > ${c.grade.limit}°`, passed ? "#7ee787" : "#fbbf24");
+}
+
+function updateChallengeUi(): void {
+  const passed = CHALLENGES.filter((c) => challengeState.get(c.id)?.passed).length;
+  const sum = document.getElementById("sum-challenge");
+  if (sum) sum.textContent = `${passed} / ${CHALLENGES.length} 通过`;
+  // 每道题旁边实时显示当前 RMSE，省得来回看评测表
+  for (const c of CHALLENGES) {
+    const el = document.getElementById(`ch-live-${c.id}`);
+    if (!el) continue;
+    const s = metricsA[challengeEstIndex(c.grade.est)]?.summary();
+    el.textContent = s && s.n > 0 ? `现在 ${s.rmse.toFixed(2)}° / 目标 ${c.grade.limit}°` : "尚未采集样本";
+    el.classList.toggle("ok", Boolean(s && s.n >= CHALLENGE_MIN_SAMPLES && s.rmse <= c.grade.limit));
+  }
+}
+
+function buildChallengeList(): void {
+  const host = document.getElementById("challenge-list");
+  if (!host) return;
+  host.innerHTML = CHALLENGES.map(
+    (c) =>
+      `<div class="ch-item" data-ch="${c.id}">` +
+      `<div class="ch-head"><b>${c.name}</b><span class="ch-live mono" id="ch-live-${c.id}">尚未采集样本</span></div>` +
+      `<div class="ch-goal">${c.goal}</div>` +
+      `<div class="ch-scene dim">${c.scene}</div>` +
+      `<div class="row btn-row"><button type="button" class="btn" data-act="start" data-ch="${c.id}">开始</button>` +
+      `<button type="button" class="btn primary" data-act="settle" data-ch="${c.id}">结算</button></div>` +
+      `</div>`,
+  ).join("");
+}
+buildChallengeList();
+document.getElementById("challenge-list")?.addEventListener("click", (e) => {
+  const btn = (e.target as HTMLElement).closest<HTMLButtonElement>("button[data-ch]");
+  if (!btn) return;
+  const c = CHALLENGES.find((x) => x.id === btn.dataset.ch);
+  if (!c) return;
+  if (btn.dataset.act === "start") startChallenge(c);
+  else settleChallenge(c);
+});
 
 // ---------- 磁力计校准面板 ----------
 /** 用当前模拟磁模型生成覆盖全姿态的样本（含硬铁/干扰/噪声/量化） */
@@ -2378,6 +2464,24 @@ function updateTelemetry(): void {
   $("tel-detail").innerHTML = detailRows(est);
   const ae = t.detail.alignErrorDeg;
   $("tel-alignerr").textContent = Number.isFinite(ae) ? `${ae.toFixed(2)}°` : "—";
+
+  // 误差分解：逐轴欧拉分量之差 + 总角距。总角距用 qAngleBetween（与曲线/评测同源），
+  // 逐轴差则回答「偏差主要在哪根轴上」——这两个数字回答的是不同问题，所以都给。
+  // 偏航差包裹到 ±180°（否则跨 ±180° 时会显示 ±360 的假大值）。
+  const refQ = state.real ? (ests[2] as MahonyEstimator).q : world.q;
+  $("tel-err-ref").textContent = state.real ? "Mahony 基准" : "真值";
+  const eEst = qToEuler(est.q);
+  const eRef = qToEuler(refQ);
+  const wrap180 = (d: number): number => {
+    let x = ((d + 180) % 360 + 360) % 360 - 180;
+    if (Object.is(x, -180)) x = 180;
+    return x;
+  };
+  const degDiff = (a: number, b: number): number => wrap180((a - b) * DEG);
+  $("tel-err-roll").textContent = `${fmtSigned(degDiff(eEst.roll, eRef.roll), 2)}°`;
+  $("tel-err-pitch").textContent = `${fmtSigned(degDiff(eEst.pitch, eRef.pitch), 2)}°`;
+  $("tel-err-yaw").textContent = `${fmtSigned(degDiff(eEst.yaw, eRef.yaw), 2)}°`;
+  $("tel-err-total").textContent = `${(qAngleBetween(est.q, refQ) * DEG).toFixed(2)}°`;
 }
 
 // ---------- 主循环 ----------
@@ -2619,6 +2723,7 @@ function frame(): void {
     updateChartSummaries();
     updateChartTables();
     updateInsReadout();
+    updateChallengeUi();
   }
 }
 
@@ -2799,6 +2904,50 @@ window.addEventListener("keydown", (e) => {
       break;
   }
 });
+
+/* ==========================================================================
+   公式块一键复制
+   --------------------------------------------------------------------------
+   文档里的公式是 Unicode 纯文本（.formula 就是 pre-wrap 的文本块），所以「复制」很有意义：
+   读者可以把推导直接粘进笔记 / Matlab / Python 当注释。用 Clipboard API，
+   失败时（非安全上下文或用户拒绝权限）降级为「选中这段文本」让读者自己 Ctrl+C。
+   ========================================================================== */
+const NL2 = String.fromCharCode(10) + String.fromCharCode(10);
+const NL3 = NL2 + String.fromCharCode(10);
+
+function initFormulaCopy(): void {
+  const blocks = [...document.querySelectorAll<HTMLElement>(".doc-page .formula")];
+  for (const block of blocks) {
+    if (block.querySelector(".formula-copy")) continue;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "formula-copy";
+    btn.textContent = "复制";
+    btn.title = "复制这段公式（Unicode 文本）";
+    btn.addEventListener("click", () => {
+      const text = (block.innerText || block.textContent || "")
+        .replace(new RegExp(NL3, "g"), NL2)
+        .trim();
+      const done = (label: string): void => {
+        btn.textContent = label;
+        setTimeout(() => (btn.textContent = "复制"), 1200);
+      };
+      navigator.clipboard?.writeText(text).then(
+        () => done("已复制"),
+        () => {
+          const range = document.createRange();
+          range.selectNodeContents(block);
+          const sel = window.getSelection();
+          sel?.removeAllRanges();
+          sel?.addRange(range);
+          done("已选中");
+        },
+      );
+    });
+    block.appendChild(btn);
+  }
+}
+initFormulaCopy();
 
 /** 统一的文档内锚点跳转：目标在当前页 → 平滑滚动；在别的页 → 先切页再滚 */
 function jumpToHash(target: HTMLElement): void {
@@ -3996,33 +4145,17 @@ const ALLAN_FS = 50; // Hz（合成用低采样率：Allan 方差只关心 τ �
 const ALLAN_N = 1 << 15; // 32768 样本 ≈ 655 s
 
 function allanCompute(): { taus: number[]; sigmas: number[] } {
-  const N_DENSITY = 0.01; // °/s/√Hz（MPU-9250 手册值）
-  const K_WALK = 0.0035; // °/s/√s（速率随机游走系数）
-  const sigSample = N_DENSITY * Math.sqrt(ALLAN_FS / 2); // 每样本白噪声 σ（°/s）
-  const dt = 1 / ALLAN_FS;
-  const g = new Gauss(mulberry32(2026));
-  const theta = new Float64Array(ALLAN_N); // 积分角（°）
-  let walk = 0;
-  for (let i = 1; i < ALLAN_N; i++) {
-    walk += K_WALK * Math.sqrt(dt) * g.next();
-    theta[i] = theta[i - 1] + (walk + sigSample * g.next()) * dt;
-  }
-  const taus: number[] = [];
-  const sigmas: number[] = [];
-  for (let k = 0; k <= 18; k++) {
-    const m = Math.round(Math.pow(2, k / 2)); // 半对数间隔
-    if (m < 1 || 2 * m >= ALLAN_N) continue;
-    let acc = 0;
-    const cnt = ALLAN_N - 2 * m;
-    for (let i = 0; i < cnt; i++) {
-      const d = theta[i + 2 * m] - 2 * theta[i + m] + theta[i];
-      acc += d * d;
-    }
-    const tau = m * dt;
-    taus.push(tau);
-    sigmas.push(Math.sqrt(acc / (2 * cnt)) / tau);
-  }
-  return { taus, sigmas };
+  // 合成一段已知 N/K 的陀螺静态数据，再用 core/allan.ts 算 σ(τ)——
+  // 数值部分（合成 + 非重叠 Allan + 斜率拟合）都在那个纯模块里，也有自检覆盖，
+  // 这里只负责把数据源定成「MPU-9250 手册值」并交给它。
+  const { theta, dt } = synthesizeGyroAngle({
+    n: ALLAN_N,
+    fs: ALLAN_FS,
+    arw: 0.01, // °/s/√Hz（MPU-9250 噪声密度手册值）
+    rrw: 0.0035, // °/s/√s（速率随机游走）
+    rand: mulberry32(2026),
+  });
+  return allanDeviation(theta, dt);
 }
 
 function drawAllan(): void {
@@ -4157,93 +4290,33 @@ function fmtMeters(v: number): string {
   return `${v.toFixed(3)} m`;
 }
 
-/**
- * 位置漂移俯视图（北-东平面）。
- * 自动量程跟随最大漂移——小漂移的算法会缩成原点附近一点，这恰恰是要传达的信息：
- * 「纯积分跑出屏幕时，卡尔曼几乎还在原点」。想看清早期演化就把量程固定小一点。
- */
+/** 收集各通道的当前位置与轨迹，交给 ui/ins-view.ts 绘制（本函数只负责取数） */
 function drawIns(): void {
-  const c = document.getElementById("ins-canvas") as HTMLCanvasElement | null;
-  if (!c) return;
-  const ctx = c.getContext("2d");
-  if (!ctx) return;
-  const { w: W, h: H } = fitInsetCanvas(c, 1.1, 320);
-  ctx.clearRect(0, 0, W, H);
-  ctx.fillStyle = "#0a1020";
-  ctx.fillRect(0, 0, W, H);
-
-  const cx = W / 2;
-  const cy = H / 2;
-  const maxPix = Math.min(W, H) / 2 - 22;
-
-  // 量程：auto = 最大水平漂移（留余量、给下限），否则用固定档
-  let maxDrift = 0;
-  const rows = ests.map((e) => ({ e, ins: insList.get(e.id)! }));
-  for (const { ins } of rows) maxDrift = Math.max(maxDrift, ins.horizontalDrift());
-  const range = insState.scale === "auto" ? Math.max(maxDrift * 1.15, 1) : Number(insState.scale);
-  insState.range = range;
-  const k = maxPix / range; // m → px
-
-  // 刻度环 + 米数标签
-  ctx.font = '10px "Fira Code", Consolas, monospace';
-  ctx.strokeStyle = "#1f2c46";
-  ctx.lineWidth = 1;
-  ctx.fillStyle = "#5b6b86";
-  ctx.textAlign = "center";
-  for (const frac of [1 / 3, 2 / 3, 1]) {
-    const r = maxPix * frac;
-    ctx.beginPath();
-    ctx.arc(cx, cy, r, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.fillText(fmtMeters(range * frac), cx, cy - r + 11); // 环顶：避开横轴与轨迹簇
-  }
-  // 北/东轴
-  ctx.strokeStyle = "#243453";
-  ctx.beginPath();
-  ctx.moveTo(cx, cy - maxPix);
-  ctx.lineTo(cx, cy + maxPix);
-  ctx.moveTo(cx - maxPix, cy);
-  ctx.lineTo(cx + maxPix, cy);
-  ctx.stroke();
-  ctx.fillStyle = "#7b8aa3";
-  ctx.textAlign = "left";
-  ctx.fillText("北", cx + 5, cy - maxPix + 12);
-  ctx.textAlign = "right";
-  ctx.fillText("东", cx + maxPix - 5, cy - 6);
-
-  // 轨迹 + 当前位置（显示坐标：上 = 北，右 = 东）
-  for (const { e, ins } of rows) {
-    const t = insTrails.get(e.id);
-    ctx.strokeStyle = e.color;
-    ctx.lineWidth = 1.4;
-    ctx.globalAlpha = 0.75;
-    if (t && t.length >= 4) {
-      ctx.beginPath();
-      for (let i = 0; i < t.length; i += 2) {
-        const x = cx + t[i + 1] * k;
-        const y = cy - t[i] * k;
-        if (i === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-      }
-      ctx.stroke();
+  const canvas = document.getElementById("ins-canvas") as HTMLCanvasElement | null;
+  if (!canvas) return;
+  if (!insState.on) {
+    // 关闭时清空画面，避免留下一张误导性的旧图
+    const ctx = canvas.getContext("2d");
+    if (ctx) {
+      const { w, h } = fitInsetCanvas(canvas, 1.1, 320);
+      ctx.clearRect(0, 0, w, h);
+      ctx.fillStyle = "#0a1020";
+      ctx.fillRect(0, 0, w, h);
+      ctx.fillStyle = "#5b6b86";
+      ctx.font = '12px "Fira Code", Consolas, monospace';
+      ctx.textAlign = "center";
+      ctx.fillText("位置积分已关闭", w / 2, h / 2);
     }
-    ctx.globalAlpha = 1;
-    const px = cx + ins.p[1] * k;
-    const py = cy - ins.p[0] * k;
-    ctx.fillStyle = e.color;
-    ctx.beginPath();
-    ctx.arc(px, py, 3.4, 0, Math.PI * 2);
-    ctx.fill();
+    return;
   }
-  // 原点（真值位置）画在最上层
-  ctx.fillStyle = "#e6edf3";
-  ctx.beginPath();
-  ctx.arc(cx, cy, 2.4, 0, Math.PI * 2);
-  ctx.fill();
-
-  ctx.textAlign = "left";
-  ctx.fillStyle = "#7b8aa3";
-  ctx.fillText(`量程 ±${fmtMeters(range)}`, 6, 13);
+  insState.range = drawInsMap(
+    canvas,
+    ests.map((e) => {
+      const ins = insList.get(e.id)!;
+      return { label: e.label, color: e.color, north: ins.p[0], east: ins.p[1], trail: insTrails.get(e.id) ?? [] };
+    }),
+    insState.scale,
+  );
 }
 
 /** 位置漂移读数表 + 面板摘要（2 Hz） */
@@ -4313,6 +4386,24 @@ const SERIAL_QUEUE_MAX = 128;
  * 低速档（9600–57600）留给老固件或 SoftwareSerial 一类的场合。
  */
 const SERIAL_BAUD_DEFAULT = 921600;
+
+/** 当前选定的串口协议（连接前可选，连接后锁定） */
+function serialProtocol(): SerialProtocol {
+  const el = document.getElementById("serial-protocol") as HTMLSelectElement | null;
+  const v = el?.value ?? "binary";
+  return v === "text" || v === "mavlink" ? v : "binary";
+}
+/** MAVLink 的取反开关（RAW_IMU 的符号取决于飞控里 IMU 的安装朝向，必须可切换） */
+function serialInvert(): boolean {
+  return (document.getElementById("serial-invert") as HTMLInputElement | null)?.checked ?? false;
+}
+/** 取反开关只在 MAVLink 协议下露出 */
+function syncProtocolUi(): void {
+  const row = document.getElementById("serial-invert-row");
+  row?.classList.toggle("hidden", serialProtocol() !== "mavlink");
+}
+document.getElementById("serial-protocol")?.addEventListener("change", syncProtocolUi);
+syncProtocolUi();
 function serialBaud(): number {
   const el = document.getElementById("serial-baud") as HTMLSelectElement | null;
   const v = el ? Number(el.value) : SERIAL_BAUD_DEFAULT;
@@ -4335,6 +4426,13 @@ const serialState = {
   dropped: 0,
   /** 主机侧队列溢出丢弃累计（页面挂起/卡顿） */
   backlogDropped: 0,
+  /** 文本行协议的字符串缓冲（二进制/MAVLink 走 bytes 缓冲） */
+  text: "",
+  /** MAVLink：跳过的非 RAW_IMU 消息数（飞控的心跳/姿态等占大多数） */
+  skippedMsgs: 0,
+  /** 文本协议：坏行计数与最后一次原因（状态行提示用） */
+  badLines: 0,
+  lastBadReason: "" as string,
   lastSeq: -1,
   lastArrival: 0,
   /** 本次连接实际使用的波特率（状态栏显示） */
@@ -4357,6 +4455,11 @@ function setSerialBaudLocked(locked: boolean): void {
   const note = document.getElementById("serial-baud-note");
   if (sel) sel.disabled = locked;
   if (note) note.textContent = locked ? `已锁定 ${serialState.baud}` : "连接前可改";
+  // 协议同理：连接期间不能换（换了要重新建缓冲与解码器）
+  const proto = document.getElementById("serial-protocol") as HTMLSelectElement | null;
+  if (proto) proto.disabled = locked;
+  const inv = document.getElementById("serial-invert") as HTMLInputElement | null;
+  if (inv) inv.disabled = locked;
 }
 
 function serialStatusChip(): HTMLElement {
@@ -4397,10 +4500,20 @@ function updateSerialStatus(): void {
     );
     return;
   }
+  const proto = serialProtocol();
+  const protoText = proto === "binary" ? "" : proto === "text" ? "文本行 · " : "MAVLink · ";
   const backlog = serialState.backlogDropped > 0 ? ` · 积压丢弃 ${serialState.backlogDropped}` : "";
+  // 文本协议报坏行与原因、MAVLink 报跳过的消息——这两类「不是丢帧」的情况要说清，
+  // 否则用户看到帧率不对只会去怀疑线缆
+  const extra =
+    proto === "text" && serialState.badLines > 0
+      ? ` · 坏行 ${serialState.badLines}（${serialState.lastBadReason}）`
+      : proto === "mavlink" && serialState.skippedMsgs > 0
+        ? ` · 跳过其它消息 ${serialState.skippedMsgs}`
+        : "";
   setSerialStatus(
-    `真实 IMU · ${serialState.baud} · ${serialState.rate.toFixed(0)} 帧/s · dt ${(serialState.lastDt * 1000).toFixed(1)} ms · ` +
-      `seq 丢帧 ${serialState.dropped}${backlog}`,
+    `真实 IMU · ${protoText}${serialState.baud} · ${serialState.rate.toFixed(0)} 帧/s · dt ${(serialState.lastDt * 1000).toFixed(1)} ms · ` +
+      `seq 丢帧 ${serialState.dropped}${backlog}${extra}`,
   );
 }
 
@@ -4468,12 +4581,19 @@ async function serialReadLoop(): Promise<void> {
       const { value, done } = await serialState.reader.read();
       if (done) break;
       if (!value) continue;
-      // 拼缓冲（上限防溢出：一帧 28B，1KB 足够容纳任何合理突发）
-      const merged = new Uint8Array(serialState.buffer.length + value.length);
-      merged.set(serialState.buffer);
-      merged.set(value, serialState.buffer.length);
-      serialState.buffer = merged.length > 1024 ? merged.subarray(merged.length - 1024) : merged;
-      serialDrainBuffer();
+      if (serialProtocol() === "text") {
+        // 文本协议：解码成字符串，按行切
+        serialState.text += textDecoder.decode(value, { stream: true });
+        if (serialState.text.length > 8192) serialState.text = serialState.text.slice(-8192); // 防粘成一行时炸内存
+        serialDrainBuffer();
+      } else {
+        // 二进制 / MAVLink：拼字节缓冲（上限防溢出：一帧 28B（MAVLink 最长 ~280B），4KB 足够）
+        const merged = new Uint8Array(serialState.buffer.length + value.length);
+        merged.set(serialState.buffer);
+        merged.set(value, serialState.buffer.length);
+        serialState.buffer = merged.length > 4096 ? merged.subarray(merged.length - 4096) : merged;
+        serialDrainBuffer();
+      }
     }
   } catch {
     /* 断线/拔出：落到下面的收尾 */
@@ -4492,8 +4612,72 @@ async function serialReadLoop(): Promise<void> {
   }
 }
 
-/** 把缓冲里所有完整帧弹出到回放队列，并更新统计 */
+const textDecoder = new TextDecoder();
+/** 换行符（写成常量是因为在 shell 里拼 
+ 转义容易被吞） */
+const NEWLINE = String.fromCharCode(10);
+
+/**
+ * 按所选协议把缓冲里的完整帧弹出到回放队列。
+ * 三种协议的共同下游是 serialState.queue（回放引擎与真实模式语义都不关心来源）。
+ */
 function serialDrainBuffer(): void {
+  const proto = serialProtocol();
+  if (proto === "text") serialDrainText();
+  else if (proto === "mavlink") serialDrainMavlink();
+  else serialDrainBinary();
+}
+
+/** 统一入队 + 统计（三种协议共用；seq 用本机计数，见下方说明） */
+function serialPushFrame(frame: SerialImuFrame): void {
+  // 用本机自增 seq 而不是线上的 seq：文本协议没有序号，MAVLink 的 seq 是「所有消息」共用的
+  // 计数器（我们跳过了心跳/姿态等），直接拿来算丢帧会得出假的大数字。
+  frame.seq = serialState.frames & 0xffff;
+  serialState.lastSeq = frame.seq;
+  serialState.frames++;
+  serialState.lastArrival = performance.now();
+  serialState.queue.push(frame);
+  if (serialState.queue.length > SERIAL_QUEUE_MAX) {
+    serialState.queue.shift();
+    serialState.backlogDropped++;
+  }
+}
+
+/** 文本行协议：按 
+ 切行，逐行解析（表头/注释行忽略一次） */
+function serialDrainText(): void {
+  const mounting = ($("serial-mounting") as HTMLSelectElement).value as Mounting;
+  for (;;) {
+    const nl = serialState.text.indexOf(NEWLINE);
+    if (nl < 0) return;
+    const line = serialState.text.slice(0, nl);
+    serialState.text = serialState.text.slice(nl + 1);
+    const res = parseTextLine(line, mounting, serialState.lastTickMs < 0 ? 0 : serialState.lastTickMs);
+    if (!res.frame) {
+      if (res.reason && !res.header) {
+        serialState.badLines = (serialState.badLines ?? 0) + 1;
+        serialState.lastBadReason = res.reason;
+      }
+      continue;
+    }
+    serialPushFrame(res.frame);
+  }
+}
+
+/** MAVLink v2：解 RAW_IMU，跳过其它消息 */
+function serialDrainMavlink(): void {
+  const mounting = ($("serial-mounting") as HTMLSelectElement).value as Mounting;
+  for (;;) {
+    const res = parseMavlinkFrame(serialState.buffer, mounting, serialInvert());
+    if (res.consumed > 0) serialState.buffer = serialState.buffer.subarray(res.consumed);
+    if (res.frame) serialPushFrame(res.frame);
+    else if (res.reason && res.reason.startsWith("跳过消息")) serialState.skippedMsgs++;
+    if (res.consumed === 0) return;
+  }
+}
+
+/** 本装置二进制帧（28 字节） */
+function serialDrainBinary(): void {
   const mounting = ($("serial-mounting") as HTMLSelectElement).value as Mounting;
   for (;;) {
     const { frame, consumed } = parseFrame(serialState.buffer, mounting);

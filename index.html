@@ -175,6 +175,22 @@
           </select>
         </div>
         <div class="row serial-row">
+          <label for="serial-protocol">协议</label>
+          <select id="serial-protocol" title="主控发什么格式，这里就选什么">
+            <option value="binary" selected>本装置二进制帧（28 字节）</option>
+            <option value="text">文本行（每行 6 / 9 / 10 个数）</option>
+            <option value="mavlink">MAVLink v2 · RAW_IMU</option>
+          </select>
+        </div>
+        <p class="hint" id="serial-protocol-note">
+          二进制帧 = 仓库 firmware/ 里的参考协议（带宽小、时间戳准，需自己组帧）。
+          文本行 = 主控直接 <span class="mono">Serial.print(gx); print(','); …</span> 即可，列序 <span class="mono">gx,gy,gz,ax,ay,az[,mx,my,mz]</span>（°/s、m/s²、μT），行首可再加一列时间戳（秒）。
+          MAVLink = 直连 PX4 / ArduPilot 之类飞控，取 <span class="mono">RAW_IMU</span>（id 27）原始读数。
+        </p>
+        <div class="row check-row hidden" id="serial-invert-row">
+          <label><input type="checkbox" id="serial-invert" /> 三路读数取反（MAVLink：静止时加计 z 为负的飞控）</label>
+        </div>
+        <div class="row serial-row">
           <label for="serial-baud">波特率</label>
           <select id="serial-baud" title="必须与固件里串口初始化的波特率一致；连接后不可改（要改先断开）">
             <option value="9600">9600</option>
@@ -477,6 +493,13 @@
         <div class="tel-block mono" id="tel-align">
           <div class="tel-line"><span class="dim">重力对齐差</span><span id="tel-alignerr">—</span></div>
         </div>
+        <div class="tel-block mono" id="tel-error">
+          <div class="tel-label">误差分解（vs <span id="tel-err-ref">真值</span>）</div>
+          <div class="tel-line"><span class="dim">横滚 φ</span><span id="tel-err-roll">—</span></div>
+          <div class="tel-line"><span class="dim">俯仰 θ</span><span id="tel-err-pitch">—</span></div>
+          <div class="tel-line"><span class="dim">偏航 ψ</span><span id="tel-err-yaw">—</span></div>
+          <div class="tel-line"><span class="dim">总角距</span><span id="tel-err-total">—</span></div>
+        </div>
         <p class="hint">
           3D 视图中：白箭头 = 算法预测的「下」，品红箭头 = 加速度计实测的「下」。
           收敛时两箭头重合；选纯陀螺仪积分可见白箭头缓慢转偏而品红不动——这就是漂移。
@@ -496,6 +519,19 @@
           </table>
         </div>
         <p class="hint" id="metrics-meta">本轮 0 个样本（25 Hz）· 收敛 = 连续 1 s 总误差 &lt; 2°</p>
+      </div>
+      </section>
+
+      <section class="panel-section section-secondary section-challenge collapsed" data-section="challenge" id="sec-challenge">
+        <h2 class="panel-head"><button type="button" class="panel-toggle" aria-expanded="false" aria-controls="body-challenge"><span class="ph-title">参数整定挑战</span><span class="ph-summary" id="sum-challenge">0 / 3 通过</span><span class="ph-chev" aria-hidden="true"></span></button></h2>
+        <div class="panel-body" id="body-challenge">
+        <div id="challenge-list"></div>
+        <div class="challenge-note hidden" id="challenge-note"></div>
+        <p class="hint">
+          三道有唯一答案的小任务：点「开始」装载现场，自己调参数跑够 15 秒，再点「结算」——
+          评分读的是「本轮评测」里同一个 RMSE，不是自我感觉。目标与提示写在每道题里。
+          真实 IMU / 离线回放模式下停用（那时没有真值，评分口径不成立）。
+        </p>
       </div>
       </section>
 
@@ -827,7 +863,10 @@
             <li><b>导出 CSV</b>——点击后弹出选项：导出「姿态角与误差」（24 列）还是「姿态角 + 四元数分量」（48 列），
               确认后把本轮全部记录（25 Hz、含算法参数头部注释）下载为 CSV，可直接拖进 Excel/Python/MATLAB。
               详见下方「导出 CSV（点击后先弹选项）」条目。</li>
-            <li><b>文档</b>——打开本页（Esc 或「返回演示」关闭）。</li>
+            <li><b>文档</b>——打开本页（Esc 或「返回演示」关闭）。文档内还有三个便利：
+              <span class="mono">Ctrl/⌘+K</span> 全文搜索（13 个分页 / 60+ 章节）；每个公式块右上角悬停出现「复制」
+              （公式是 Unicode 纯文本，可直接粘进笔记或脚本）；浏览器打印 / 存 PDF 时只输出当前文档页
+              （应用外壳不进纸面，链接会带上完整地址，适合发讲义）。</li>
           </ul>
           <p>3D 区域：拖拽旋转视角、滚轮缩放。所有改动即时生效，无需保存。</p>
 
@@ -885,6 +924,48 @@
             <p><span class="k k1">是什么</span>对每种算法统计本轮运行的误差：当前值、均值、RMSE、峰值、收敛时刻（连续 1 s 总误差 &lt; 2°）。</p>
             <p><span class="k k2">起什么作用</span>曲线回答「刚才发生了什么」，统计回答「这一轮谁更准、抖多大、多久收敛」。RMSE 对大误差更敏感；收敛时刻把「初始对准多快」变成可比较的数字。A/B 开启时 B 组也单独统计。</p>
             <p><span class="k k3">改了会怎样</span>绿色高亮是本轮 RMSE 最优（真实模式下 Mahony 是基准，不参与评选）。重置即清零。样本 25 Hz、只统计从上次重置以来的数据。</p>
+          </div>
+
+          <div class="ctl">
+            <div class="ctl-name">串口协议：二进制帧 / 文本行 / MAVLink <span class="ctl-range">下拉选择</span></div>
+            <p><span class="k k1">是什么</span>决定装置按哪种格式读串口（详见「硬件与固件」模块的对照表）。
+              <b>二进制帧</b> 28 字节（默认，需自己组帧）；<b>文本行</b>每行 6/9/10 个数，主控
+              <span class="mono">Serial.print</span> 就能发；<b>MAVLink</b> 直连 PX4/ArduPilot，取
+              <span class="mono">RAW_IMU</span> 原始读数。</p>
+            <p><span class="k k2">起什么作用</span>把「必须刷自定义固件」这道门槛拆掉：手上有什么就用什么——
+              没有二进制组帧代码就用文本行，有飞控就直接选 MAVLink。三种协议的下游完全一致
+              （同一条帧队列、同一套无真值语义），所以切换协议不影响任何算法的行为。</p>
+            <p><span class="k k3">改了会怎样</span>选错的表现是「连上了但一直 0 帧」。连上后该下拉会被锁定
+              （换协议要重建缓冲与解码器）。MAVLink 下会出现「取反」开关：RAW_IMU 的符号取决于飞控里 IMU 的安装朝向，
+              静止时加计 z 为负就勾上。状态行会分别报「坏行 N（原因）」与「跳过其它消息 N」——
+              这两个数不是丢帧，不用去查线。</p>
+          </div>
+
+          <div class="ctl">
+            <div class="ctl-name">参数整定挑战 <span class="ctl-range">3 道题 · 开始 / 结算</span></div>
+            <p><span class="k k1">是什么</span>三道有唯一可验证答案的小任务，每题给一套现场（一键装载）与一个 RMSE 目标：
+              ① 2°/s 零偏下把 Mahony 压到 1.65° 以内；② 强振动下把 Madgwick 压到 3.0° 以内；
+              ③ 硬铁+交变干扰下把卡尔曼压到 4.5° 以内。</p>
+            <p><span class="k k2">起什么作用</span>装置把参数摊开，但「调到多少算好」没人告诉你。
+              评分读的是「本轮评测」里同一个 <span class="mono">ErrorTracker</span>——所以「通过」不是自我感觉良好，
+              而是 RMSE 真的落到阈值以下。并且要求跑够 15 秒（375 个样本）才允许结算，防止刚点开始就交卷。
+              每题都带一条「想清楚而不是试出来」的提示（例如挑战一：只把 Kp 拉大反而更差——实测 1.86° → 1.64° 仍不达标）。</p>
+            <p><span class="k k3">改了会怎样</span>「开始」会复位到统一基线再装载（与实验库同一套 setter，可复现）；
+              每道题旁边实时显示当前 RMSE 与目标；面板标题显示「N / 3 通过」。阈值是先量后定的
+              （默认参数 1.86° 过不了、调好 1.47° 能过，两侧各留约 11% 余量以吸收随机种子带来的涨落）。
+              真实 IMU / 离线回放模式下停用——那时没有真值，评分口径不成立。</p>
+          </div>
+
+          <div class="ctl">
+            <div class="ctl-name">误差分解（玻璃盒内） <span class="ctl-range">面板读数</span></div>
+            <p><span class="k k1">是什么</span>当前显示源（所选算法）相对基准的<b>逐轴欧拉分量差</b>
+              （横滚 φ / 俯仰 θ / 偏航 ψ）加上<b>总角距</b>。</p>
+            <p><span class="k k2">起什么作用</span>「总误差 3°」不告诉你是哪个轴错了，而这两个问题的处理方式完全不同：
+              倾角误差会被加速度计拉回但会污染位置（见「从姿态到位置」），偏航误差则完全靠磁力计（IMU 模式下不可观）。
+              读数与曲线/评测表同源：总角距用的就是 <span class="mono">qAngleBetween</span>，
+              逐轴差在偏航上做了 ±180° 包裹（否则跨 ±180° 会显示 ±360 的假大值）。</p>
+            <p><span class="k k3">改了会怎样</span>基准随数据源变：模拟模式是真值，真实串口 / 离线回放模式是 Mahony
+              （标签会跟着改）。所以这个块也是判断「数据源到底在用什么基准」的现场入口。</p>
           </div>
 
           <div class="ctl">
@@ -3460,6 +3541,80 @@ A = <span class="mtx"><i class="ml"></i><span class="mrows" style="--cols:2"><sp
           <p class="plain">如果你不想写固件，也可以只用模拟模式——全部教学主线（五种算法、误差链、门控、万向节锁、四元数视图）都不依赖真实硬件。</p>
         </section>
 
+        <section id="g-protocol">
+          <h2>三种协议怎么选</h2>
+          <p>
+            面板上的「协议」下拉决定装置怎么读你发来的字节流。<b>选错的表现是「连上了但一直是 0 帧」</b>，
+            所以先对表再连：
+          </p>
+          <div class="tscroll"><table class="docs-table">
+            <thead><tr><th>协议</th><th>主控要做的事</th><th>适用场景</th><th>代价</th></tr></thead>
+            <tbody>
+              <tr>
+                <td><b>本装置二进制帧</b>（默认）</td>
+                <td>按下面的 28 字节表组帧 + CRC8</td>
+                <td>自己写固件、想要最稳的带宽与最准的时间戳</td>
+                <td>需要几十行组帧代码（<span class="mono">firmware/gy87.h</span> 有参考）</td>
+              </tr>
+              <tr>
+                <td><b>文本行</b></td>
+                <td>直接 <span class="mono">Serial.print(gx); print(','); …</span> 打印一行数</td>
+                <td>Arduino / ESP32 / 树莓派：不想写二进制组帧，能打印就能接</td>
+                <td>带宽大（一条 60–80 字节）、时间戳精度取决于你打不打</td>
+              </tr>
+              <tr>
+                <td><b>MAVLink v2 · RAW_IMU</b></td>
+                <td>什么都不用做——飞控本来就在发</td>
+                <td>手上有 PX4 / ArduPilot 飞控，想直接看它的原始 IMU</td>
+                <td>只解 RAW_IMU（id 27）；符号约定取决于飞控安装方向，可能要勾「取反」</td>
+              </tr>
+            </tbody>
+          </table></div>
+          <p class="hint">
+            三种协议的下游完全一致：都进同一条帧队列、同一套「无真值」语义（误差基准 = Mahony、幻影隐藏、模拟控件停用）。
+            状态行会显示当前协议与各自的异常计数（文本模式报「坏行 N（原因）」、MAVLink 报「跳过其它消息 N」）——
+            这两个数不等于丢帧，别去怀疑线缆。
+          </p>
+        </section>
+
+        <section id="g-text">
+          <h2>文本行协议：格式与几条规则</h2>
+          <div class="formula">每行一条采样，列数三选一：
+　6 列　gx, gy, gz, ax, ay, az
+　9 列　再加 mx, my, mz
+　10 列 最前面加一列时间戳（秒）：t, gx, …, mz
+
+分隔符：逗号 / 空格 / Tab / 分号都行
+单位：°/s、m/s²、μT（与二进制协议一致，<b>不做自动换算</b>）
+注释：# 或 // 开头的行忽略；第一行非数字行当表头忽略</div>
+          <p>
+            时间戳建议给：给了就按它算积分步长（比主机到达时刻准得多），不给则按名义间隔累加（默认 5 ms）。
+            <b>单位故意不做自动换算</b>——离线导入（CSV 回放）面对的是别人的文件、才需要猜单位；
+            在线协议是你自己在发，猜错反而会掩盖配置错误。
+          </p>
+        </section>
+
+        <section id="g-mavlink">
+          <h2>MAVLink：只解 RAW_IMU，以及那个「取反」开关</h2>
+          <p>
+            连上飞控后装置会跳过所有非 <span class="mono">RAW_IMU</span>（消息 id = <b>27</b>，注意不是 9）的消息，
+            只取 9 轴原始读数。单位按 MAVLink 规范换算：加速度 <span class="mono">mG</span>、角速度 <span class="mono">mrad/s</span>、
+            磁场 <span class="mono">mGauss</span> —— 装置内部再转成 m/s²、°/s、μT。
+          </p>
+          <p>
+            <b>CRC 是怎么信的</b>：MAVLink 对每条消息都用一个「盐」值（crc_extra）参与校验，写错就一帧都收不到。
+            装置里的这个常量不是抄来的，而是<b>用 MAVLink 的算法现场推导</b>：把「消息名 + 各基础字段的类型名与字段名」
+            喂给 CRC-16/MCRF4XX，取高低字节异或。算法本身用两个公开已知的常量反验过（HEARTBEAT → 50、ATTITUDE → 39），
+            据此得到 RAW_IMU → 144；自检里会重新推导一遍并断言，改字段表就会当场失败。
+          </p>
+          <p>
+            <b>「取反」开关为什么必要</b>：RAW_IMU 输出的是器件<b>原始</b>读数，它的符号取决于飞控里 IMU 的安装朝向——
+            MAVLink 并不规定这件事。本装置要求「静止时加速度计读数指向机体『下』、z 为正」，
+            如果你的飞控静止时 z 是负的，就勾上取反。判定方法完全可观察：连上后看「IMU 原始波形」面板，
+            静止时加计模长应当≈9.8、且 z 分量为正。
+          </p>
+        </section>
+
         <section id="g-frame">
           <h2>帧协议（28 字节，小端）</h2>
           <div class="tscroll"><table class="docs-table">
@@ -3609,6 +3764,12 @@ A = <span class="mtx"><i class="ml"></i><span class="mrows" style="--cols:2"><sp
               <tr><td>选端口对话框里没有我的设备</td><td>串口被别的程序占用（SerialWeb / 厂商上位机 / 另一个标签页）。关掉它们；必要时拔插 USB。</td></tr>
               <tr><td>连上了但一直「等待数据帧」</td><td>固件没在发帧，或波特率不匹配（默认 921600）。先用厂商上位机确认有数据。</td></tr>
               <tr><td>状态行显示很大的「seq 丢帧」</td><td>主机侧来不及消费：帧率过高、或页面被切到后台（rAF 停摆）。降低固件帧率，或保持页面在前台。</td></tr>
+              <tr><td>「协议」选哪个？</td><td>看主控在发什么：自己组的 28 字节帧 → 二进制；只打印一行数 → 文本行；PX4/ArduPilot 飞控 → MAVLink。选错的统一症状就是「连上了但 0 帧」。</td></tr>
+              <tr><td>文本行模式：状态行报「坏行 N」</td><td>列数不是 6/9/10、或分隔符不认识（只认逗号/空格/Tab/分号）、或有无法解析的字符。工具提示里会直接写原因。</td></tr>
+              <tr><td>文本行模式：帧率只有设定值的几分之一</td><td>波特率不够（文本一条 60–80 字节，比二进制大一倍多）。115200 大约够 100–150 Hz。</td></tr>
+              <tr><td>MAVLink：连上但 0 帧，状态行一直「跳过其它消息 N」</td><td>说明帧头与长度对上了（否则会报 CRC 失败），但飞控没有在发 RAW_IMU。PX4 默认只发 ATTITUDE 等；打开 <span class="mono">RAW_IMU</span> 的流（MAV_CMD_SET_MESSAGE_INTERVAL / SRx_RAW_IMU 参数）或降低流速率。</td></tr>
+              <tr><td>MAVLink：报「CRC 校验失败」</td><td>帧头巧合或线路误码。持续报说明根本不是 MAVLink 流——换回文本或二进制。</td></tr>
+              <tr><td>MAVLink：姿态整体反了 / 静止时加计 z 为负</td><td>RAW_IMU 是器件原始读数，符号随飞控里 IMU 的安装朝向。勾上「三路读数取反」。</td></tr>
               <tr><td>「连上了但一直等待数据帧」</td><td>最常见是<b>波特率与固件不一致</b>（本装置默认 921600）。先在面板里换档重连；其次检查固件是否真的在发帧、TX/RX 是否接反。</td></tr>
               <tr><td>能收到帧但 seq 丢帧暴涨 / 帧率明显偏低</td><td>波特率过高而桥接芯片（CH340 等）跟不上，字节被采样错。降到 460800 或 115200（115200 足够跑 200 Hz）。</td></tr>
               <tr><td>想改波特率但下拉是灰的</td><td>Web Serial 在 open() 时固定端口参数，连接期间不能改——先「断开」，下拉会解锁。</td></tr>
@@ -3740,6 +3901,11 @@ A = <span class="mtx"><i class="ml"></i><span class="mrows" style="--cols:2"><sp
               <tr><td>垂直通道不稳定</td><td>高度上重力与比力几乎相消，误差正反馈发散；真实系统必须用气压计/GNSS 高度约束</td><td>同上</td></tr>
               <tr><td>ZUPT（零速修正）</td><td>检测到静止就把速度伪观测置零，把死推算漂移限制在每步几厘米；行人导航与地面车辆的标配</td><td>同上</td></tr>
               <tr><td>GNSS/INS 松组合 · 紧组合</td><td>松：把 GNSS 的位置/速度解作为观测量喂进惯导卡尔曼；紧：把原始伪距/多普勒直接送进同一个滤波器，卫星少时更稳</td><td>同上</td></tr>
+              <tr><td>Raw IMU / 原始读数</td><td>未经飞控任何解算的器件直出（本装置的三种协议取的都是这个，而不是飞控自己算好的姿态）</td><td>硬件与固件 · 三种协议</td></tr>
+              <tr><td class="mono">RAW_IMU (27)</td><td>MAVLink 里的 9 轴原始读数消息（注意 id 是 27，26 是 SCALED_IMU）；单位 mG / mrad·s⁻¹ / mGauss</td><td>硬件与固件 · MAVLink</td></tr>
+              <tr><td class="mono">crc_extra</td><td>MAVLink 每条消息参与校验的「盐」值，由消息名与字段定义推导；写错则一帧都收不到（本装置用算法推导并自检锁定）</td><td>硬件与固件 · MAVLink</td></tr>
+              <tr><td>文本行协议</td><td>每行 6/9/10 个数（陀螺+加计[+磁力计][+时间戳]），让「能打印就能接」；单位不自动换算</td><td>硬件与固件 · 文本行</td></tr>
+              <tr><td>RMSE / 整定</td><td>均方根误差——「整定挑战」的评分口径，与曲线同源；阈值先量后定，两侧留余量吸收随机种子涨落</td><td>控制项手册 · 参数整定挑战</td></tr>
             </tbody>
           </table></div>
         </section>
@@ -3957,6 +4123,19 @@ A = <span class="mtx"><i class="ml"></i><span class="mrows" style="--cols:2"><sp
           <div class="tscroll"><table class="docs-table">
             <thead><tr><th>版本 / 轮次</th><th>内容</th></tr></thead>
             <tbody>
+              <tr>
+                <td>硬件接入拓宽 + 互动加固轮</td>
+                <td>
+                  <b>串口协议三选一</b>：二进制帧（原有）/ <b>文本行</b>（主控 <span class="mono">Serial.print</span> 即可，
+                  6/9/10 列、支持多种分隔符与时间戳列）/ <b>MAVLink v2 · RAW_IMU</b>（直连 PX4/ArduPilot，
+                  带取反开关处理安装朝向）；三者的 crc/单位/符号口径都在文档里写明。
+                  <b>参数整定挑战</b>：三道有唯一答案的小任务，评分读「本轮评测」同一个 RMSE，样本不足不允许交卷。
+                  <b>误差分解</b>：玻璃盒里显示逐轴误差与总角距，回答「偏差主要在哪根轴上」。
+                  <b>文档可用性</b>：公式块一键复制（Unicode 文本）、打印 / 存 PDF 只输出当前文档页。
+                  工程侧抽出 <span class="mono">ui/canvas-util.ts</span>、<span class="mono">ui/ins-view.ts</span>、
+                  <span class="mono">core/allan.ts</span> 三个模块（Allan 例程由此获得自检覆盖）。
+                </td>
+              </tr>
               <tr>
                 <td>惯性导航轮</td>
                 <td>

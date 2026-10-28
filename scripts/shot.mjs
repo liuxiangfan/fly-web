@@ -15,6 +15,7 @@
  *   --do     在截图前于页面内求值的 JS 表达式（可为 async 函数体，可用 await）
  *   --wait   截图前额外等待毫秒数（默认 600）
  *   --full   截整页（默认只截视口）
+ *   --print  以「打印媒体」渲染后再截图（验收 @media print 用）
  *   --el     只截某个选择器命中的元素
  */
 import puppeteer from "puppeteer-core";
@@ -74,6 +75,8 @@ await page.waitForFunction(
   () => parseFloat((document.getElementById("clock")?.textContent ?? "").replace("t = ", "")) > 1.5,
   { timeout: 15000 },
 ).catch(() => console.warn("警告：仿真时钟未推进（可能 rAF 停摆）"));
+
+if (args.print) await page.emulateMediaType("print");
 
 if (args.do || args.dofile) {
   const src = args.dofile ? readFileSync(args.dofile, "utf8") : String(args.do);

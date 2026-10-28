@@ -7,10 +7,18 @@ import { manualTarget, scenarios } from "../src/core/scenarios";
 import { G_ACC, simulateImu, simulateMag, type ImuParams } from "../src/core/imu";
 import { Gauss, mulberry32 } from "../src/core/rng";
 import {
+  ATTITUDE_BASE_FIELDS,
   FRAME_LEN,
+  HEARTBEAT_BASE_FIELDS,
+  MAVLINK_CRC_EXTRA_RAW_IMU,
+  RAW_IMU_BASE_FIELDS,
   buildFrame,
+  buildMavlinkRawImu,
+  computeCrcExtra,
   frameDtSec,
   parseFrame,
+  parseMavlinkFrame,
+  parseTextLine,
   type Mounting,
 } from "../src/core/serial";
 import {
@@ -59,6 +67,7 @@ import { calibrateMag, fitMagSphere, applyMagCalibration } from "../src/core/mag
 import { ErrorTracker } from "../src/core/stats";
 import { b64urlDecode, b64urlEncode } from "../src/ui/b64";
 import { parseImuCsv } from "../src/core/replay";
+import { allanDeviation, allanSlope, synthesizeGyroAngle } from "../src/core/allan";
 import { InsIntegrator, driftLaw, G_NED } from "../src/core/ins";
 import { EXPERIMENTS } from "../src/ui/experiments";
 
@@ -1479,6 +1488,135 @@ const dirty: ImuParams = { gyroBiasDps: 1, gyroNoiseDps: 0.2, gyroWalkDps: 0, gy
     "位置漂移服从 t³ 律（⅙·g·θ̇·t³）",
     ratio > 0.97 && ratio < 1.03,
     `倾角误差 1°/s 增长、20 s 后：实测 ${ramp.horizontalDrift().toFixed(1)} m / 理论 ${law.distance.toFixed(1)} m（比值 ${ratio.toFixed(3)}）`,
+  );
+}
+
+// 51. 串口文本行协议：三种列数、多种分隔符、表头/注释/坏行的处理
+//     这是「不写二进制固件也能接进来」的入口——主控只要 Serial.print 一行数即可。
+{
+  const M: Mounting = "x-front-y-right"; // 该 mounting 为重排恒等，便于读原始数值
+  const f6 = parseTextLine("1.5,-2.5,0.3,0.1,0.2,9.81", M, 1000, 5);
+  const f9 = parseTextLine("1.5 -2.5 0.3 0.1 0.2 9.81 30 0 40", M, 1000, 5);
+  const f10 = parseTextLine("2.5\t1.5\t-2.5\t0.3\t0.1\t0.2\t9.81\t30\t0\t40", M, 1000, 5);
+  const header = parseTextLine("gx,gy,gz,ax,ay,az", M, 1000, 5);
+  const comment = parseTextLine("# t,gx,gy", M, 1000, 5);
+  const badCols = parseTextLine("1.5,-2.5,0.3", M, 1000, 5);
+  const badNum = parseTextLine("1.5,abc,0.3,0.1,0.2,9.81", M, 1000, 5);
+  const near = (a: number, b: number, eps = 1e-9): boolean => Math.abs(a - b) < eps;
+  const g6 = f6.frame?.gyroDps ?? [NaN, NaN, NaN];
+  const a6 = f6.frame?.accelMs2 ?? [NaN, NaN, NaN];
+  const m9 = f9.frame?.magUt ?? [NaN, NaN, NaN];
+  const t6 = f6.frame?.tickMs ?? NaN;
+  const t10 = f10.frame?.tickMs ?? NaN;
+  check(
+    "串口文本行协议：6/9/10 列 + 分隔符 + 表头坏行",
+    Boolean(f6.frame) &&
+      near(g6[0], 1.5) &&
+      near(a6[2], 9.81) &&
+      f6.frame?.seq === 0 &&
+      near(t6, 1005) && // 无时间戳 → 按名义间隔累加
+      Boolean(f9.frame) &&
+      near(m9[0], 30) &&
+      Boolean(f10.frame) &&
+      near(t10, 2500) && // 有时间戳（秒）→ 用它
+      header.header === true &&
+      comment.frame === null &&
+      Boolean(badCols.reason) &&
+      header.frame === null &&
+      badNum.frame === null,
+    `6 列 accel_z=${a6[2]}；9 列 mag_x=${m9[0]}；10 列 tick=${t10}；` +
+      `表头=${header.header}；注释=${comment.frame === null}；坏列数原因「${badCols.reason?.slice(0, 12)}…」`,
+  );
+}
+
+// 52. MAVLink v2 · RAW_IMU：crc_extra 现场反验 + 往返 + 取反 + 坏帧重同步
+//     crc_extra 不是抄来的常量——这里用 MAVLink 的算法重新推导，
+//     并用两个官方已知常量（HEARTBEAT=50、ATTITUDE=39）验证算法本身，据此确认 RAW_IMU=144。
+{
+  const hb = computeCrcExtra("HEARTBEAT", HEARTBEAT_BASE_FIELDS);
+  const at = computeCrcExtra("ATTITUDE", ATTITUDE_BASE_FIELDS);
+  const ri = computeCrcExtra("RAW_IMU", RAW_IMU_BASE_FIELDS);
+  const M: Mounting = "x-front-y-right";
+  const frame = buildMavlinkRawImu(7, 1234567890n, [0.1, 0.2, 9.80665], [1.5, -2.5, 0.3], [30, 0, 40]);
+  const back = parseMavlinkFrame(frame, M);
+  const inverted = parseMavlinkFrame(frame, M, true);
+  const corrupt = Uint8Array.from(frame);
+  corrupt[corrupt.length - 1] ^= 0xff;
+  const badCrc = parseMavlinkFrame(corrupt, M);
+  const otherMsg = Uint8Array.from(frame);
+  otherMsg[7] = 30; // 冒充 ATTITUDE
+  const skipped = parseMavlinkFrame(otherMsg, M);
+  const partial = parseMavlinkFrame(frame.subarray(0, 20), M);
+  // 脏字节重同步：前面塞 5 字节垃圾。
+  // 解析器一次调用只跳一段（「先丢掉帧头前的垃圾，下次再解析」），与主循环的 while 消费一致，
+  // 所以这里也循环消费到 consumed===0 再断言——第一次调用应恰好丢弃这 5 个字节。
+  const dirty = new Uint8Array(5 + frame.length).fill(0x11);
+  dirty.set(frame, 5);
+  const firstSkip = parseMavlinkFrame(dirty, M).consumed;
+  let buf = dirty;
+  let frames2 = 0;
+  for (let guard = 0; guard < 10 && buf.length > 0; guard++) {
+    const r = parseMavlinkFrame(buf, M);
+    if (r.frame) frames2++;
+    if (r.consumed === 0) break;
+    buf = buf.subarray(r.consumed);
+  }
+  const g = back.frame?.gyroDps ?? [NaN, NaN, NaN];
+  const a = back.frame?.accelMs2 ?? [NaN, NaN, NaN];
+  const m = back.frame?.magUt ?? [NaN, NaN, NaN];
+  void frame.length;
+  check(
+    "MAVLink RAW_IMU：crc_extra 反验 + 往返 + 取反 + 坏帧处理",
+    hb === 50 &&
+      at === 39 &&
+      ri === MAVLINK_CRC_EXTRA_RAW_IMU &&
+      Boolean(back.frame) &&
+      Math.abs(g[0] - 1.5) < 0.06 && // int16 的 mrad/s 分辨率 ≈ 0.057 °/s
+      Math.abs(a[2] - 9.80665) < 5e-4 &&
+      Math.abs(m[0] - 30) < 1e-9 &&
+      Math.abs((inverted.frame?.accelMs2[2] ?? 0) + 9.80665) < 5e-4 &&
+      badCrc.reason === "CRC 校验失败" &&
+      badCrc.consumed === 1 &&
+      (skipped.reason ?? "").startsWith("跳过消息") &&
+      partial.consumed === 0 &&
+      firstSkip === 5 &&
+      frames2 === 1,
+    `crc_extra 反验 HEARTBEAT=${hb}/ATTITUDE=${at}/RAW_IMU=${ri}（官方 50/39）；` +
+      `往返 gyro_x=${g[0].toFixed(3)} accel_z=${a[2].toFixed(4)} mag_x=${m[0].toFixed(1)}；` +
+      `取反=${inverted.frame?.accelMs2[2].toFixed(4)}；坏 CRC→${badCrc.reason}(consumed=${badCrc.consumed})；` +
+      `非 RAW_IMU→「${skipped.reason}」；半帧 consumed=${partial.consumed}；脏字节流首次丢弃 ${firstSkip} 字节、循环消费后解出 ${frames2} 帧`,
+  );
+}
+
+// 53. Allan 方差（core/allan.ts）：用已知 N/K 合成序列，曲线要回到那三个系数的量级
+//     这是把「零偏稳定性」从数据手册数字变成可验证曲线的关键例程：
+//     白噪声区斜率应 ≈ −½、随机游走区斜率应 ≈ +½，且 σ(1 s) 应与 ARW 系数同量级。
+{
+  const fs = 50;
+  const n = 1 << 15;
+  const white = synthesizeGyroAngle({ n, fs, arw: 0.01, rrw: 0, rand: mulberry32(7) });
+  const aWhite = allanDeviation(white.theta, white.dt);
+  // 纯白噪声：σ(τ) = N·√(τ_avg 归一) —— 经验判据是 σ(1s) 与 N 同量级、斜率 ≈ −½
+  const slopeW = allanSlope(aWhite.taus, aWhite.sigmas, 1, 20);
+  const sigma1 = aWhite.sigmas[aWhite.taus.findIndex((t) => t >= 1)];
+
+  const walk = synthesizeGyroAngle({ n, fs, arw: 0, rrw: 0.02, rand: mulberry32(11) });
+  const aWalk = allanDeviation(walk.theta, walk.dt);
+  const slopeR = allanSlope(aWalk.taus, aWalk.sigmas, 2, 10);
+  // 纯随机游走：σ(τ) = K·√(τ/3)（经典系数），用 τ=5 s 处反推 K 看量级。
+  // 注意自动 τ 列表最大到 2^9·dt ≈ 10 s（受序列长度限制），所以取 5 s 而不是 20 s。
+  const idx5 = aWalk.taus.findIndex((t) => t >= 5);
+  const s5 = aWalk.sigmas[idx5];
+  const kEst = s5 / Math.sqrt(5 / 3);
+
+  check(
+    "Allan 方差：白噪声 −½ 斜率、随机游走 +½ 斜率与系数还原",
+    Math.abs(slopeW + 0.5) < 0.12 &&
+      Math.abs(slopeR - 0.5) < 0.12 &&
+      sigma1 > 0.004 && sigma1 < 0.03 && // N=0.01 的量级
+      Math.abs(kEst / 0.02 - 1) < 0.35, // K=0.02 的量级（单次实现有统计涨落）
+    `白噪声段斜率 ${slopeW.toFixed(3)}（理论 −0.5）、σ(1s)=${sigma1.toFixed(4)}（N=0.01）；` +
+      `随机游走段斜率 ${slopeR.toFixed(3)}（理论 +0.5）、由 σ(5s) 反推 K=${kEst.toFixed(4)}（真值 0.02）`,
   );
 }
 

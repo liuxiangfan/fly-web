@@ -31,6 +31,7 @@ const shots = join(process.cwd(), "screenshots");
 if (!existsSync(shots)) mkdirSync(shots);
 let failures = 0;
 let passes = 0;
+const errsEmpty = (errs) => errs.length === 0;
 const check = (name, cond, detail) => {
   console.log(`[${cond ? "PASS" : "FAIL"}] ${name} — ${detail}`);
   cond ? passes++ : failures++;
@@ -387,6 +388,308 @@ try {
       roundTrip.afterStop?.active === false,
     `导出前已记录 ${roundTrip.rows} 行；${roundTrip.imp}；回放中 ${roundTrip.info?.idx}/${roundTrip.info?.frames} 帧，` +
       `模式=${roundTrip.mode}，模拟控件停用=${roundTrip.controlsOff}，退出后 active=${roundTrip.afterStop?.active}`,
+  );
+
+  // ---------- 本轮新增：惯性导航 / 整定挑战 / 公式复制 / 打印样式 ----------
+  // 这几个都是「画出来的东西」或「结构性行为」，光靠 tsc/自检覆盖不到，所以在真浏览器里点名验收。
+  const extras = await page.evaluate(async () => {
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const out = {};
+    // ① 惯性导航面板：画布要有内容（不是一张空图），读数表要有行
+    const insSec = document.getElementById("sec-ins");
+    if (insSec?.classList.contains("collapsed")) insSec.querySelector(".panel-toggle").click();
+    document.getElementById("imu-gyro-bias").value = "2";
+    document.getElementById("imu-gyro-bias").dispatchEvent(new Event("input", { bubbles: true }));
+    await sleep(2500);
+    const insCanvas = document.getElementById("ins-canvas");
+    const g = insCanvas.getContext("2d");
+    const px = g.getImageData(0, 0, insCanvas.width, insCanvas.height).data;
+    let painted = 0;
+    for (let i = 0; i < px.length; i += 4) {
+      if (px[i] > 40 || px[i + 1] > 40 || px[i + 2] > 60) painted++;
+    }
+    out.insCanvas = { w: insCanvas.width, paintedPixels: painted };
+    out.insReadoutRows = document.querySelectorAll("#ins-readout .ir-name").length;
+    out.insSummary = document.getElementById("sum-ins").textContent ?? "";
+
+    // ② 整定挑战：三题在位、装载会改参数、样本不足时结算应拒绝
+    const chSec = document.getElementById("sec-challenge");
+    if (chSec?.classList.contains("collapsed")) chSec.querySelector(".panel-toggle").click();
+    await sleep(200);
+    out.challengeItems = document.querySelectorAll("#challenge-list .ch-item").length;
+    document.querySelector('#challenge-list button[data-act="start"][data-ch="vibration-tune"]').click();
+    await sleep(300);
+    out.challengeLoaded = {
+      beta: document.getElementById("madg-beta").value,
+      scenario: document.getElementById("scenario-select").value,
+      source: document.getElementById("source-select").value,
+    };
+    // 等「已装载」那条 toast 自然消失（2.4s）再结算，否则读到的还是它的文案
+    await sleep(2600);
+    document.querySelector('#challenge-list button[data-act="settle"][data-ch="vibration-tune"]').click();
+    await sleep(250);
+    // 「样本不够」是 toast 提示（不是面板里的 note），所以读 toast 层
+    out.settleTooEarly = document.getElementById("toast-layer")?.innerText ?? "";
+
+    // ③ 公式复制：每块公式都有按钮，且点击后有反馈（剪贴板可能被拒，允许「已选中」）
+    out.formulaCopyButtons = document.querySelectorAll(".formula-copy").length;
+    const btn = document.querySelector(".doc-page .formula .formula-copy");
+    document.getElementById("btn-docs").click();
+    await sleep(400);
+    btn.click();
+    await sleep(300);
+    out.formulaCopyFeedback = btn.textContent;
+    document.getElementById("btn-docs-close").click();
+    await sleep(300);
+    return out;
+  });
+  check(
+    "惯性导航面板：画布有内容 + 读数表 + 摘要",
+    extras.insCanvas.paintedPixels > 200 &&
+      extras.insCanvas.w > 100 &&
+      extras.insReadoutRows === 5 &&
+      /漂移/.test(extras.insSummary),
+    `画布 ${extras.insCanvas.w}px 宽、${extras.insCanvas.paintedPixels} 个非背景像素；读数 ${extras.insReadoutRows} 行；摘要「${extras.insSummary}」`,
+  );
+  check(
+    "参数整定挑战：三题在位 + 装载生效 + 样本不足拒绝结算",
+    extras.challengeItems === 3 &&
+      extras.challengeLoaded.beta === "0.1" &&
+      extras.challengeLoaded.scenario === "hover" &&
+      extras.challengeLoaded.source === "madg" &&
+      extras.settleTooEarly.includes("样本不够"),
+    `${extras.challengeItems} 题；装载后 β=${extras.challengeLoaded.beta} / 剧本=${extras.challengeLoaded.scenario} / 来源=${extras.challengeLoaded.source}；` +
+      `样本不足时结算提示「${extras.settleTooEarly.trim().slice(0, 16)}…」`,
+  );
+  check(
+    "公式一键复制：按钮齐备且点击有反馈",
+    extras.formulaCopyButtons > 20 &&
+      (extras.formulaCopyFeedback === "已复制" || extras.formulaCopyFeedback === "已选中"),
+    `${extras.formulaCopyButtons} 个公式块都有复制按钮；点击后按钮显示「${extras.formulaCopyFeedback}」`,
+  );
+
+  // ④ 打印媒体：应用外壳必须消失、只剩文档正文（这是「存 PDF 发讲义」的前提）
+  const printCase = await (async () => {
+    const pg = await browser.newPage();
+    await pg.setViewport({ width: 900, height: 1200 });
+    await pg.goto(URL, { waitUntil: "domcontentloaded" });
+    await pg.click("#btn-docs");
+    await new Promise((r) => setTimeout(r, 500));
+    await pg.evaluate(() => document.querySelector('.docs-toc .module-link[data-doc="trouble"]').click());
+    await new Promise((r) => setTimeout(r, 400));
+    await pg.emulateMediaType("print");
+    await new Promise((r) => setTimeout(r, 200));
+    const res = await pg.evaluate(() => {
+      const size = (sel) => {
+        const el = document.querySelector(sel);
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        return [Math.round(r.width), Math.round(r.height)];
+      };
+      return {
+        panel: size("#panel"),
+        viewport: size("#viewport"),
+        charts: size("#charts"),
+        docShell: size(".docs-shell"),
+        visiblePages: [...document.querySelectorAll(".doc-page")].filter((p) => getComputedStyle(p).display !== "none").length,
+        bodyOverflow: getComputedStyle(document.body).overflow,
+      };
+    });
+    await pg.close();
+    return res;
+  })();
+  check(
+    "打印样式：应用外壳隐藏、只剩当前文档页",
+    printCase.panel?.[0] === 0 &&
+      printCase.viewport?.[0] === 0 &&
+      printCase.charts?.[0] === 0 &&
+      (printCase.docShell?.[1] ?? 0) > 500 &&
+      printCase.visiblePages === 1 &&
+      printCase.bodyOverflow === "visible",
+    `面板 ${printCase.panel} / 视口 ${printCase.viewport} / 曲线 ${printCase.charts}（应全为 0）；` +
+      `文档正文 ${printCase.docShell}；可见分页 ${printCase.visiblePages}；body overflow=${printCase.bodyOverflow}`,
+  );
+
+  // ---------- 文本行协议 / MAVLink 协议：各自的假串口端到端 ----------
+  // 这两种协议是本轮新增的「硬件接入入口」，必须在真浏览器里跑一遍：
+  // 假端口按各自格式发流，断言解析后的读数与值班（unit/mounting）都正确。
+  const runProtocolCase = async (protocol, makeWire) => {
+    const pg = await browser.newPage();
+    await pg.setViewport({ width: 1280, height: 800, deviceScaleFactor: 1 });
+    const errs = [];
+    pg.on("console", (m) => m.type() === "error" && errs.push(m.text()));
+    pg.on("pageerror", (e) => errs.push(String(e)));
+    await pg.evaluateOnNewDocument(makeWire, protocol);
+    await pg.goto(URL, { waitUntil: "domcontentloaded" });
+    await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 15000 });
+    await pg.evaluate(() => {
+      const sec = document.getElementById("sec-imu");
+      if (sec?.classList.contains("collapsed")) sec.querySelector(".panel-toggle").click();
+      const sel = document.getElementById("serial-protocol");
+      sel.value = window.__protoForTest;
+      sel.dispatchEvent(new Event("change", { bubbles: true }));
+      // 安装方向取恒等映射，读数可与发送端直接对照（默认档 x-front-y-left 会翻 y 符号）
+      const mnt = document.getElementById("serial-mounting");
+      mnt.value = "x-front-y-right";
+      mnt.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await pg.click("#btn-serial");
+    await pg.waitForFunction(() => document.body.dataset.imuMode === "real", { timeout: 6000 });
+    await pg.waitForFunction(
+      () => parseFloat((document.getElementById("clock")?.textContent ?? "").replace("t = ", "")) > 0.8,
+      { timeout: 10000 },
+    );
+    const info = await pg.evaluate(() => {
+      const imu = window.attitudeDemo.state.lastImu;
+      return {
+        mode: document.body.dataset.imuMode,
+        status: document.getElementById("serial-status")?.textContent ?? "",
+        accel: imu ? imu.accel.map((v) => +v.toFixed(4)) : null,
+        gyro: imu ? imu.gyro.map((v) => +(v * 57.29578).toFixed(3)) : null,
+        mag: imu ? imu.mag.map((v) => +v.toFixed(2)) : null,
+        proto: document.getElementById("serial-protocol").value,
+        invertVisible: !document.getElementById("serial-invert-row").classList.contains("hidden"),
+      };
+    });
+    await pg.close();
+    return { info, errs };
+  };
+
+  // 文本行：100 Hz 发 `t,0,0,0,0.1,0.2,9.8,32.8,0,37.7`（10 列，带时间戳）
+  const textCase = await runProtocolCase(
+    "text",
+    (proto) => {
+      window.__protoForTest = proto;
+      const enc = new TextEncoder();
+      let timer = 0;
+      let t = 0;
+      const stream = new ReadableStream({
+        start(c) {
+          timer = setInterval(() => {
+            t += 0.01;
+            c.enqueue(enc.encode(t.toFixed(3) + ",1.5,-2.5,0.3,0.1,0.2,9.8,32.8,0,37.7" + String.fromCharCode(10)));
+          }, 10);
+        },
+        cancel() {
+          clearInterval(timer);
+        },
+      });
+      const port = {
+        open: async () => undefined,
+        close: async () => clearInterval(timer),
+        get readable() {
+          return stream;
+        },
+      };
+      Object.defineProperty(navigator, "serial", { configurable: true, value: { requestPort: async () => port } });
+    },
+  );
+  check(
+    "串口文本行协议：端到端读数与单位正确",
+    textCase.info.mode === "real" &&
+      textCase.info.proto === "text" &&
+      textCase.info.status.includes("文本行") &&
+      textCase.info.accel?.[2] > 9.7 &&
+      textCase.info.accel[2] < 9.9 &&
+      Math.abs((textCase.info.gyro?.[0] ?? 0) - 1.5) < 0.2 &&
+      Math.abs((textCase.info.mag?.[0] ?? 0) - 32.8) < 0.1 &&
+      errsEmpty(textCase.errs),
+    `accel=${JSON.stringify(textCase.info.accel)} gyro=${JSON.stringify(textCase.info.gyro)} mag=${JSON.stringify(textCase.info.mag)}｜${textCase.info.status}`,
+  );
+
+  // MAVLink：RAW_IMU + 一条未知 id 的干扰帧交替发，验证「跳过其它消息」路径
+  const mavCase = await runProtocolCase(
+    "mavlink",
+    (proto) => {
+      window.__protoForTest = proto;
+      const crc16 = (d, from, to) => {
+        let crc = 0xffff;
+        for (let i = from; i < to; i++) {
+          let t = d[i] ^ (crc & 0xff);
+          t = (t ^ (t << 4)) & 0xff;
+          crc = ((crc >> 8) ^ (t << 8) ^ (t << 3) ^ (t >> 4)) & 0xffff;
+        }
+        return crc;
+      };
+      const fold = (crc, extra) => {
+        let t = extra ^ (crc & 0xff);
+        t = (t ^ (t << 4)) & 0xff;
+        return ((crc >> 8) ^ (t << 8) ^ (t << 3) ^ (t >> 4)) & 0xffff;
+      };
+      const CRC_EXTRA_RAW_IMU = 144; // 与 src/core/serial.ts 一致（那边由算法推导并自检锁定）
+      const rawImu = (seq, timeUs, accelZmg, gyroXmrad) => {
+        const payload = new Uint8Array(26);
+        const dv = new DataView(payload.buffer);
+        dv.setBigUint64(0, BigInt(timeUs), true);
+        dv.setInt16(8, 0, true);
+        dv.setInt16(10, 0, true);
+        dv.setInt16(12, accelZmg, true);
+        dv.setInt16(14, gyroXmrad, true);
+        dv.setInt16(16, 0, true);
+        dv.setInt16(18, 0, true);
+        dv.setInt16(20, 328, true);
+        dv.setInt16(22, 0, true);
+        dv.setInt16(24, 377, true);
+        const d = new Uint8Array(38);
+        d[0] = 0xfd;
+        d[1] = 26;
+        d[4] = seq & 0xff;
+        d[5] = 1;
+        d[6] = 1;
+        d[7] = 27; // RAW_IMU
+        d.set(payload, 10);
+        const crc = fold(crc16(d, 1, 36), CRC_EXTRA_RAW_IMU);
+        d[36] = crc & 0xff;
+        d[37] = (crc >> 8) & 0xff;
+        return d;
+      };
+      const otherMsg = (seq, id) => {
+        const d = new Uint8Array(12 + 4);
+        d[0] = 0xfd;
+        d[1] = 4;
+        d[4] = seq & 0xff;
+        d[7] = id & 0xff;
+        return d; // 内容无所谓：解析器按 id 先跳过
+      };
+      let timer = 0;
+      let seq = 0;
+      let tUs = 1000000;
+      let flip = false;
+      const stream = new ReadableStream({
+        start(c) {
+          timer = setInterval(() => {
+            flip = !flip;
+            if (flip) c.enqueue(otherMsg(seq++, 77)); // 干扰：未知消息
+            c.enqueue(rawImu(seq++, tUs, 1000, 26));
+            tUs += 10000; // 100 Hz
+          }, 10);
+        },
+        cancel() {
+          clearInterval(timer);
+        },
+      });
+      const port = {
+        open: async () => undefined,
+        close: async () => clearInterval(timer),
+        get readable() {
+          return stream;
+        },
+      };
+      Object.defineProperty(navigator, "serial", { configurable: true, value: { requestPort: async () => port } });
+    },
+  );
+  check(
+    "串口 MAVLink RAW_IMU：端到端读数 + 跳过其它消息",
+    mavCase.info.mode === "real" &&
+      mavCase.info.proto === "mavlink" &&
+      mavCase.info.status.includes("MAVLink") &&
+      mavCase.info.status.includes("跳过其它消息") &&
+      mavCase.info.invertVisible &&
+      mavCase.info.accel?.[2] > 9.79 &&
+      mavCase.info.accel[2] < 9.82 &&
+      Math.abs((mavCase.info.gyro?.[0] ?? 0) - 1.49) < 0.06 &&
+      errsEmpty(mavCase.errs),
+    `accel=${JSON.stringify(mavCase.info.accel)} gyro=${JSON.stringify(mavCase.info.gyro)} 取反开关可见=${mavCase.info.invertVisible}｜${mavCase.info.status}`,
   );
 
   // 深链：当前 hash 重载后参数应保持
