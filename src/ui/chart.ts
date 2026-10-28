@@ -33,6 +33,11 @@ export class RollingChart {
     this.observeResize();
   }
 
+  /** 只读尺寸：长跑自检用（环形缓冲的 count 必须封顶在 cap，不能随时间增长） */
+  get size(): { count: number; cap: number } {
+    return { count: this.count, cap: this.cap };
+  }
+
   setVisible(mask: boolean[]): void {
     this.visible = mask;
     this.render();

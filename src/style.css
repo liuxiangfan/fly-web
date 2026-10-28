@@ -248,6 +248,90 @@ button:disabled { cursor: default; }
   line-height: 1.55;
 }
 .ov-chip.mono { font-size: 11.5px; letter-spacing: 0.01em; }
+
+/* 浏览器能力提示（Firefox / Safari 没有 Web Serial 与 Web Bluetooth）。
+   刻意做成常驻说明而不是 toast：它回答的是「这台浏览器能做什么」，
+   用户可能过一会儿才回来找；一闪而过的提示等于没说。 */
+.cap-notice {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent);
+  border-left: 3px solid var(--warn);
+  border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--warn) 9%, transparent);
+  padding: 7px 10px;
+  font-size: 11.5px;
+  line-height: 1.65;
+}
+.cap-notice b { font-size: 12px; color: var(--warn); }
+.cap-notice span { color: var(--text-dim); }
+
+/* ==========================================================================
+   引导课程卡片（右侧栏第一个分区）
+   --------------------------------------------------------------------------
+   卡片住在面板里而不是浮在视口上：右侧栏正是眼睛看参数的地方，卡片在那儿
+   既不会盖住 3D 视图与曲线，也不用为四档分辨率各调一次定位。
+   ========================================================================== */
+.section-tour .panel-body { display: flex; flex-direction: column; gap: 8px; }
+.tour-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 11px 11px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  background: var(--bg-card);
+}
+.tour-head { display: flex; align-items: baseline; gap: 7px; }
+.tour-counter {
+  flex: none;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+}
+.tour-title { flex: 1 1 auto; font-size: 12.5px; font-weight: 600; line-height: 1.45; color: var(--text); }
+.tour-close {
+  flex: none;
+  padding: 3px 4px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+.tour-close:hover { background: var(--bg-hover); color: var(--text); }
+.tour-body { font-size: 12px; line-height: 1.75; color: var(--text-dim); }
+.tour-look {
+  padding: 6px 8px;
+  border-left: 2px solid var(--accent-line);
+  border-radius: 0 var(--r-md) var(--r-md) 0;
+  background: var(--accent-soft);
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: var(--text-dim);
+}
+.tour-body b, .tour-look b { color: var(--text); font-weight: 600; }
+.tour-progress { height: 3px; border-radius: 999px; background: var(--bg-input); overflow: hidden; }
+.tour-progress > i { display: block; width: 0; height: 100%; background: var(--accent); transition: width var(--t-base); }
+/* 翻页按钮吸底：卡片可能比右侧栏的可滚动区还高（小屏尤其明显），
+   吸底能保证「下一步」永远够得着，而不是被折叠线以下的空白吃掉。 */
+.tour-foot {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  gap: 6px;
+  padding-top: 6px;
+  background: var(--bg-card);
+}
+.tour-foot .btn { flex: 1 1 auto; }
+.tour-doc { justify-content: center; text-align: left; white-space: normal; }
 #readout-source { font-weight: 600; letter-spacing: 0.01em; }
 #readout-imu { font-size: 11px; color: var(--text-dim); }
 #viewport-hint {
@@ -1342,13 +1426,13 @@ body[data-imu-mode="real"] .section-experiments .hint::before {
 }
 .dc-item input[type="range"] {
   width: 168px;
-  accent-color: #0e7fa8;
+  accent-color: #0b688a;
   cursor: pointer;
 }
 .dc-val {
   min-width: 92px;
   font-size: 12px;
-  color: #0e7fa8;
+  color: #0b688a;
   font-variant-numeric: tabular-nums;
 }
 /* 窄屏：文档演示的控制条改为上下排布，滑杆自适应宽度。
@@ -1492,7 +1576,7 @@ body[data-imu-mode="real"] .section-experiments .hint::before {
   padding: 2px 8px;
   font: inherit;
   font-size: 11px;
-  color: #64748c;
+  color: #58667b;
   background: #f4f7fb;
   border: 1px solid #dbe3ee;
   border-radius: 4px;
@@ -1502,7 +1586,7 @@ body[data-imu-mode="real"] .section-experiments .hint::before {
 }
 .formula:hover .formula-copy,
 .formula-copy:focus-visible { opacity: 1; }
-.formula-copy:hover { color: #0e7fa8; border-color: #0e7fa8; }
+.formula-copy:hover { color: #0b688a; border-color: #0b688a; }
 /* 触屏没有 hover：直接常显，否则手机上永远点不到 */
 @media (hover: none) { .formula-copy { opacity: 1; } }
 
@@ -1627,8 +1711,8 @@ body[data-imu-mode="real"] .section-experiments .hint::before {
   --border-strong: #b9c6d8;
   --text: #16202f;
   --text-dim: #45566e;
-  --text-faint: #64748c;
-  --accent: #0e7fa8;
+  --text-faint: #58667b;
+  --accent: #0b688a;
   --accent-soft: rgba(14, 127, 168, 0.12);
   --accent-line: rgba(14, 127, 168, 0.4);
   --on-accent: #ffffff;

@@ -264,6 +264,92 @@ try {
     `role=${docOpen.role} focus=${docOpen.focus} page=${docMath.page} esc=${docClosed.hidden} restore=${docClosed.focus}`,
   );
 
+  // 文档页小演示（ui/doc-demos.ts）：抽出为模块后必须仍然「看得见动静」。
+  // 三个动画演示（互补 / 旋转顺序 / 校准舞蹈）的重绘点只有 docDemos.step(dt)，
+  // 所以「图像指纹两次不同」本身就证明主循环 → 模块的步进链路是通的；
+  // Allan 是惰性一次绘制，有图形即证明翻页钩子 docDemos.refresh 生效。
+  //
+  // 判「画过了」不能用「非白像素数 > X」：canvas 从未绘制时 getImageData 返回
+  // 全零（透明黑），反而每个采样点都算「有内容」。六个文档演示都先铺白底，
+  // 所以判据是「非白像素占比 < 一半」——未绘制=100%，绘制过≈5%。
+  const canvasStat = (id) =>
+    page.evaluate((cid) => {
+      const c = document.getElementById(cid);
+      if (!c || !c.width || !c.height) return { ink: 0, cells: 0, sig: 0 };
+      const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+      let ink = 0;
+      let cells = 0;
+      let h = 0;
+      const stride = 3;
+      for (let y = 0; y < c.height; y += stride) {
+        for (let x = 0; x < c.width; x += stride) {
+          const i = (y * c.width + x) * 4;
+          const v = (d[i] + d[i + 1] + d[i + 2]) / 3;
+          cells++;
+          if (v < 245) ink++;
+          h = (h * 33 + Math.round(v)) % 4294967291;
+        }
+      }
+      return { ink, cells, sig: h };
+    }, id);
+  const painted = (st) => st.ink > 0 && st.ink < st.cells * 0.5;
+  // #btn-docs 只打开不关闭，已开时点击是 no-op，故可无条件调用
+  const gotoDocPage = async (mod) => {
+    await page.click("#btn-docs");
+    await page.waitForFunction(() => !document.getElementById("docs-overlay").hidden);
+    await page.evaluate((m) => {
+      [...document.querySelectorAll(".module-link")].find((b) => b.dataset.doc === m)?.click();
+    }, mod);
+  };
+
+  await gotoDocPage("filters");
+  await new Promise((r) => setTimeout(r, 700)); // 先确保至少画过一帧
+  const compA = await canvasStat("fig-comp-demo");
+  const bodeSt = await canvasStat("fig-bode-demo");
+  await new Promise((r) => setTimeout(r, 3000));
+  const compB = await canvasStat("fig-comp-demo");
+  check(
+    "文档演示：互补滤波曲线在实时推进 + 频域图有图形",
+    compA.sig !== compB.sig && painted(compA) && painted(compB) && painted(bodeSt),
+    `曲线 ${compA.ink}/${compA.cells} → ${compB.ink}/${compB.cells}（指纹变化=${compA.sig !== compB.sig}）；频域 ${bodeSt.ink}/${bodeSt.cells}`,
+  );
+
+  await gotoDocPage("math"); // 顺序 / 校准 / Allan / 一维卡尔曼四个演示都在这一页
+  await new Promise((r) => setTimeout(r, 700));
+  const ordA = await canvasStat("fig-order-demo");
+  const calA = await canvasStat("fig-calib-demo");
+  await new Promise((r) => setTimeout(r, 2500)); // 摆角此刻转到约 35°
+  const ordB = await canvasStat("fig-order-demo");
+  const calB = await canvasStat("fig-calib-demo");
+  const allanSt = await canvasStat("fig-allan-demo");
+  const kfSt = await canvasStat("fig-kf1d-demo");
+  // 一维卡尔曼那张图是**静态**演示：重绘点只有「拖动它自己的滑杆」。抽出模块时
+  // dockInput 与事件绑定也一起搬了家，所以这里必须验一次「拖滑杆 → 图会变」，
+  // 否则「画过一次」的断言在绑定断掉时依然会通过。
+  const kfMoved = await page.evaluate(async () => {
+    const fig = document.getElementById("fig-kf1d-demo").closest("figure");
+    const inp = fig.querySelector('input[data-dock="kf-s1"]');
+    if (!inp) return { found: false };
+    inp.value = String(Number(inp.max || 3)); // 挪到量程另一端
+    inp.dispatchEvent(new Event("input", { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 120));
+    const shown = fig.querySelector('[data-dockval="kf-s1"]')?.textContent ?? "";
+    return { found: true, shown };
+  });
+  const kfAfter = await canvasStat("fig-kf1d-demo");
+  await page.keyboard.press("Escape");
+  await page.waitForFunction(() => document.getElementById("docs-overlay").hidden);
+  check(
+    "文档演示：旋转顺序 / 校准舞蹈在实时重绘",
+    ordA.sig !== ordB.sig && calA.sig !== calB.sig && painted(ordA) && painted(ordB) && painted(calA) && painted(calB),
+    `顺序 ${ordA.ink} → ${ordB.ink}（变化=${ordA.sig !== ordB.sig}）；校准 ${calA.ink} → ${calB.ink}（变化=${calA.sig !== calB.sig}）`,
+  );
+  check(
+    "文档演示：Allan 有图形（惰性一次绘制生效）+ 一维卡尔曼拖滑杆会重绘",
+    painted(allanSt) && painted(kfSt) && painted(kfAfter) && kfMoved.found && kfAfter.sig !== kfSt.sig && kfMoved.shown.length > 0,
+    `Allan=${allanSt.ink}/${allanSt.cells}；KF1D ${kfSt.ink} → ${kfAfter.ink}（拖滑杆后指纹变化=${kfAfter.sig !== kfSt.sig}，读数「${kfMoved.shown}」）`,
+  );
+
   // A/B：开启后 B 组图例 4 个且默认可见
   const ab = await page.evaluate(() => {
     document.getElementById("ab-toggle").click();
@@ -669,6 +755,105 @@ try {
       `文档正文 ${printCase.docShell}；可见分页 ${printCase.visiblePages}；body overflow=${printCase.bodyOverflow}`,
   );
 
+  // ⑤ 能力提示：Firefox / Safari 没有 Web Serial 与 Web Bluetooth。
+  //    本机浏览器是 Chromium，两个 API 天然存在，所以这里在文档创建阶段
+  //    把 navigator 上的它们删掉，模拟非 Chromium 环境，再断言提示与置灰。
+  const capCase = await (async () => {
+    const pg = await browser.newPage();
+    await pg.setViewport({ width: 1280, height: 900 });
+    await pg.evaluateOnNewDocument(() => {
+      // 属性定义在 Navigator.prototype 上，delete navigator.serial 没用
+      for (const k of ["serial", "bluetooth"]) {
+        try {
+          delete Navigator.prototype[k];
+        } catch {
+          /* 不可配置就退化为定义成 undefined 属性 */
+        }
+        if (k in navigator) Object.defineProperty(navigator, k, { value: undefined, configurable: true });
+      }
+    });
+    await pg.goto(URL, { waitUntil: "domcontentloaded" });
+    await new Promise((r) => setTimeout(r, 600));
+    const res = await pg.evaluate(() => {
+      document.getElementById("sec-imu")?.classList.remove("collapsed"); // 面板默认折叠，展开后才能量到 display
+      const box = document.getElementById("cap-notice");
+      return {
+        visible: !box.classList.contains("hidden") && getComputedStyle(box).display !== "none",
+        title: document.getElementById("cap-notice-title").textContent,
+        body: document.getElementById("cap-notice-body").textContent,
+        serialOff: document.getElementById("btn-serial").disabled,
+        bleOff: document.getElementById("btn-ble").disabled,
+        serialTitle: document.getElementById("btn-serial").title,
+        simOk: !document.getElementById("scenario-select").disabled,
+      };
+    });
+    await pg.close();
+    return res;
+  })();
+  check(
+    "非 Chromium 能力提示：面板说明 + 连接按钮置灰（模拟功能不受影响）",
+    capCase.visible &&
+      capCase.serialOff &&
+      capCase.bleOff &&
+      capCase.title.includes("Web Serial") &&
+      capCase.title.includes("Web Bluetooth") &&
+      capCase.simOk,
+    `可见=${capCase.visible} 串口置灰=${capCase.serialOff} BLE 置灰=${capCase.bleOff}；标题「${capCase.title}」；${capCase.body}`,
+  );
+
+  // ⑤ 引导课程：走完全部 13 步（用界面上的真实按钮，不走调试接口）。
+  //    每一步都会装载实验 / 切视图 / 展开面板，所以这条用例同时覆盖了
+  //    「实验库的 id 在课程里没写错」「视图确实切过去了」「走完能正常收尾」。
+  const tourCase = await page.evaluate(async () => {
+    const sec = document.getElementById("sec-tour");
+    if (sec.classList.contains("collapsed")) sec.querySelector(".panel-toggle").click();
+    document.getElementById("tour-start").click();
+    const steps = [];
+    const snap = () => ({
+      counter: document.getElementById("tour-counter").textContent,
+      title: document.getElementById("tour-title").textContent,
+      body: document.getElementById("tour-body").textContent.length,
+      view: document.body.dataset.view,
+      source: document.getElementById("source-select").value,
+      scenario: document.getElementById("scenario-select").value,
+      cardVisible: !document.getElementById("tour-card").classList.contains("hidden"),
+      introHidden: document.getElementById("tour-intro").classList.contains("hidden"),
+      next: document.getElementById("tour-next").textContent,
+    });
+    steps.push(snap());
+    for (let k = 0; k < 13; k++) {
+      document.getElementById("tour-next").click();
+      steps.push(snap());
+    }
+    const done = document.getElementById("tour-card").classList.contains("hidden");
+    const restored = !document.getElementById("tour-intro").classList.contains("hidden");
+    // 再按一次「开始」应能重新开课（上次走到底已经退出）
+    document.getElementById("tour-start").click();
+    const restarted = document.getElementById("tour-counter").textContent;
+    document.getElementById("tour-close").click();
+    const closed = document.getElementById("tour-card").classList.contains("hidden");
+    return { steps, done, restored, restarted, closed };
+  });
+  const walked = tourCase.steps.slice(0, 13);
+  check(
+    "引导课程：13 步逐条装载现场（实验/视图/面板）并正常收尾",
+    walked.length === 13 &&
+      new Set(walked.map((s) => s.title)).size === 13 &&
+      walked.every((s) => s.cardVisible && s.body > 80) &&
+      walked.every((s, k) => s.counter.startsWith(`第 ${k + 1} / 13 步`)) &&
+      walked[0].introHidden &&
+      walked[7].view === "gimbal" && // 第 8 步：万向节锁几何
+      walked[10].view === "quat" && // 第 11 步：4D 投影
+      walked[1].source === "pure" && // 第 2 步：零偏漂移实验把来源切到纯积分
+      tourCase.done &&
+      tourCase.restored &&
+      tourCase.restarted.startsWith("第 1 / 13 步") &&
+      tourCase.closed,
+    `${walked.length} 步；标题去重 ${new Set(walked.map((s) => s.title)).size}；` +
+      `第 2 步来源=${walked[1].source}（应 pure）；第 8/11 步视图=${walked[7].view}/${walked[10].view}（应 gimbal/quat）；` +
+      `走完自动收起=${tourCase.done}、开始入口恢复=${tourCase.restored}；✕ 可退出=${tourCase.closed}`,
+  );
+
   // ---------- 文本行协议 / MAVLink 协议：各自的假串口端到端 ----------
   // 这两种协议是本轮新增的「硬件接入入口」，必须在真浏览器里跑一遍：
   // 假端口按各自格式发流，断言解析后的读数与值班（unit/mounting）都正确。
@@ -963,6 +1148,212 @@ try {
   await mobilePage.close();
 
   check("控制台零错误", errors.length === 0, errors.length ? errors.slice(0, 3).join(" | ") : "无");
+
+  // ---------- 可访问性审计（对比度 + 可访问名 + 键盘）----------
+  // 背景：装置有两套主题——暗色仪表盘与浅色文档。暗色那套的注释里写着「三档文字色
+  // 均满足 WCAG AA」，浅色那套一直没人量过；一量就发现文档主题里 5 处不达标
+  // （accent 用在浅底上只有 4.0、导航当前项 3.7、表格表头 4.05……）。
+  // 这条用例把这个「没人量过」变成每次提交都会量一遍：
+  //   · 对比度：小于 4.5:1（大字 3:1）即失败。背景色按祖先链做 alpha 合成，
+  //     而不是只看元素自己的 background-color——绝大多数文字的背景来自祖先。
+  //   · 禁用控件按 WCAG 豁免（inactive UI components）。
+  //   · 可访问名：按钮/链接/输入框必须能从 aria-label / aria-labelledby /
+  //     <label> / 文本内容 / title 里得到一个名字，否则读屏用户只会听到「按钮」。
+  const a11y = await page.evaluate(async () => {
+    const parse = (c) => {
+      const m = /rgba?\(([^)]+)\)/.exec(c);
+      if (!m) return null;
+      const p = m[1].split(",").map((v) => parseFloat(v));
+      return { r: p[0], g: p[1], b: p[2], a: p.length > 3 ? p[3] : 1 };
+    };
+    const lin = (v) => {
+      v /= 255;
+      return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+    };
+    const lum = (c) => 0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b);
+    const over = (fg, bg) => ({
+      r: fg.r * fg.a + bg.r * (1 - fg.a),
+      g: fg.g * fg.a + bg.g * (1 - fg.a),
+      b: fg.b * fg.a + bg.b * (1 - fg.a),
+      a: 1,
+    });
+    const effBg = (el) => {
+      const chain = [];
+      for (let n = el; n; n = n.parentElement) {
+        const c = parse(getComputedStyle(n).backgroundColor);
+        if (c && c.a > 0) chain.push(c);
+        if (c && c.a >= 1) break;
+      }
+      let out = { r: 255, g: 255, b: 255, a: 1 };
+      for (let i = chain.length - 1; i >= 0; i--) out = over(chain[i], out);
+      return out;
+    };
+    const ownText = (el) => {
+      for (const n of el.childNodes) if (n.nodeType === 3 && n.textContent.trim().length > 1) return true;
+      return false;
+    };
+    const shown = (el) => {
+      const st = getComputedStyle(el);
+      if (st.display === "none" || st.visibility === "hidden" || parseFloat(st.opacity) < 0.5) return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 2 && r.height > 2;
+    };
+    const desc = (el) =>
+      (el.tagName.toLowerCase() +
+        (el.id ? "#" + el.id : "") +
+        (typeof el.className === "string" && el.className ? "." + el.className.trim().split(/\s+/).join(".") : "")).slice(0, 64);
+
+    const lowContrast = [];
+    const noName = [];
+    const scan = (root) => {
+      for (const el of root.querySelectorAll("*")) {
+        if (el.closest("[disabled]") || el.disabled) continue; // WCAG：非活动控件豁免
+        if (!shown(el)) continue;
+        if (ownText(el)) {
+          const st = getComputedStyle(el);
+          const fs = parseFloat(st.fontSize);
+          const fw = parseInt(st.fontWeight, 10) || 400;
+          const fg = parse(st.color);
+          if (fg && fg.a > 0.05) {
+            const bg = effBg(el);
+            const l1 = lum(over(fg, bg));
+            const l2 = lum(bg);
+            const r = (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
+            const need = fs >= 24 || (fs >= 18.66 && fw >= 700) ? 3 : 4.5;
+            if (r < need - 0.02) {
+              lowContrast.push({
+                el: desc(el),
+                text: el.textContent.trim().slice(0, 20),
+                r: Math.round(r * 100) / 100,
+                need,
+                fs: Math.round(fs * 10) / 10,
+                fg: `rgb(${[fg.r, fg.g, fg.b].map((v) => Math.round(v)).join(",")})`,
+                bg: `rgb(${[bg.r, bg.g, bg.b].map((v) => Math.round(v)).join(",")})`,
+              });
+            }
+          }
+        }
+        if (el.matches("button, a[href], select, textarea, input:not([type=hidden]), [tabindex]")) {
+          const name = (
+            el.getAttribute("aria-label") ||
+            (el.getAttribute("aria-labelledby")
+              ? (el.getAttribute("aria-labelledby").split(/\s+/).map((i) => document.getElementById(i)?.textContent ?? "").join(" ")).trim()
+              : "") ||
+            (el.labels ? [...el.labels].map((l) => l.textContent).join(" ") : "") ||
+            el.textContent ||
+            el.getAttribute("title") ||
+            el.getAttribute("placeholder") ||
+            (el.tagName === "INPUT" ? el.value : "")
+          ).trim();
+          if (name.length === 0) noName.push(desc(el));
+        }
+      }
+    };
+    // 覆盖面积：右侧全部分区展开 + 三条曲线全部展开 + 三个视图各切一遍 + 文档两页
+    document.getElementById("panel-expand-all").click();
+    await new Promise((r) => setTimeout(r, 200));
+    scan(document.getElementById("panel"));
+    scan(document.getElementById("charts"));
+    scan(document.getElementById("app-header"));
+    for (const v of ["gimbal", "quat", "attitude"]) {
+      document.querySelector(`#view-seg .seg-btn[data-view="${v}"]`).click();
+      await new Promise((r) => setTimeout(r, 120));
+      scan(document.getElementById("viewport"));
+    }
+    document.getElementById("btn-docs").click();
+    for (const p of ["manual", "math"]) {
+      document.querySelectorAll(`.module-link[data-doc="${p}"]`).forEach((b) => b.click());
+      await new Promise((r) => setTimeout(r, 260));
+      scan(document.getElementById("docs-overlay"));
+    }
+    document.getElementById("btn-docs-close").click();
+    document.getElementById("panel-collapse-all").click();
+    const positiveTab = [...document.querySelectorAll("[tabindex]")].filter((el) => Number(el.getAttribute("tabindex")) > 0).length;
+    return { lowContrast, noName, positiveTab, scanned: true };
+  });
+  const worst = a11y.lowContrast
+    .slice(0, 6)
+    .map((x) => `${x.r}<${x.need} ${x.fs}px ${x.el}「${x.text}」${x.fg} on ${x.bg}`);
+  check(
+    "可访问性：全站文字对比度达 WCAG AA（暗色 + 浅色文档两套主题）",
+    a11y.lowContrast.length === 0,
+    a11y.lowContrast.length ? `${a11y.lowContrast.length} 处不达标：${worst.join("；")}` : `扫描完成，未发现低于 (4.5:1 / 大字 3:1) 的文字`,
+  );
+  check(
+    "可访问性：交互控件都有可访问名，且无正向 tabindex（不破坏 Tab 顺序）",
+    a11y.noName.length === 0 && a11y.positiveTab === 0,
+    a11y.noName.length ? `${a11y.noName.length} 个控件没有名字：${a11y.noName.slice(0, 5).join("、")}` : `全部有名字；正向 tabindex ${a11y.positiveTab} 个`,
+  );
+
+  // ---------- 长跑稳定性（滚动容器封顶 / 堆增长 / 帧率）----------
+  // 装置是「开着不动也会一直跑」的常驻页面（演示用，一开就是几十分钟），
+  // 真正要守的不是首屏多快，而是「跑久了会不会越跑越卡」。
+  // 四个会被不断 push 的容器都必须封顶：记录行、INS 轨迹、串口队列、提示条；
+  // 曲线用的是定长 Float64Array 环形缓冲（设计上不增长，这里一并守）。
+  // 判据取「结构量」而不是只看堆大小：堆在无头软渲染下抖动大，容易被误报；
+  // 结构量是确定性的，堆增长只作为并列信息（宽松上限防真正的泄漏）。
+  const soakRead = () =>
+    page.evaluate(() => ({
+      sizes: window.attitudeDemo.sizes(),
+      clock: parseFloat((document.getElementById("clock")?.textContent ?? "0").replace(/[^\d.]/g, "")) || 0,
+      fps: parseInt((document.getElementById("fps")?.textContent ?? "0").replace(/[^\d]/g, ""), 10) || 0,
+      heap: performance.memory ? performance.memory.usedJSHeapSize : -1,
+      toasts: document.getElementById("toast-layer")?.childElementCount ?? -1,
+    }));
+  // 满负荷：全部分区展开、三条曲线全展开、玻璃盒 + INS 都开着
+  await page.evaluate(() => {
+    document.getElementById("panel-expand-all").click();
+    document.querySelectorAll("#charts .block-toggle").forEach((b) => {
+      if (b.getAttribute("aria-expanded") === "false") b.click();
+    });
+  });
+  await new Promise((r) => setTimeout(r, 3000)); // 先跑热（JIT / 首个记录窗口填满）
+  const soak0 = await soakRead();
+  await new Promise((r) => setTimeout(r, 12000));
+  const soak1 = await soakRead();
+  const heapMb = (soak1.heap - soak0.heap) / 1048576;
+  const sz = soak1.sizes;
+  check(
+    "长跑 15 s：滚动容器全部封顶、时钟推进、堆增长受控",
+    sz.logRows <= sz.logRowsCap &&
+      sz.insTrailMax <= sz.insTrailCap &&
+      sz.serialQueue <= sz.serialQueueCap &&
+      sz.charts.every((c) => c.count <= c.cap) &&
+      soak1.toasts === 0 &&
+      soak1.clock > soak0.clock + 8 &&
+      soak1.fps >= 8 &&
+      (soak1.heap < 0 || heapMb < 24),
+    `记录行 ${sz.logRows}/${sz.logRowsCap}，INS 轨迹 ${sz.insTrailMax}/${sz.insTrailCap}，` +
+      `串口队列 ${sz.serialQueue}/${sz.serialQueueCap}，曲线 ${sz.charts.map((c) => `${c.count}/${c.cap}`).join(" ")}；` +
+      `t ${soak0.clock.toFixed(1)}→${soak1.clock.toFixed(1)} s，fps ${soak1.fps}，提示条残留 ${soak1.toasts}；` +
+      `堆 ${soak0.heap < 0 ? "不可用" : `${(soak0.heap / 1048576).toFixed(1)}→${(soak1.heap / 1048576).toFixed(1)} MB（Δ${heapMb.toFixed(1)}）`}`,
+  );
+  // 上面的 12 s 只证明「结构量在量级上正常」；真正要证明的是**裁剪真的会触发**。
+  // 记录缓冲的裁剪条件是「超过 850 行就丢掉最早的 100 行」，靠自然跑要 34 s 才够。
+  // 这里用离线回放的「最快」档（speed=0，单帧最多消费 4000 个样本）把 40 s 仿真时间
+  // 一口气喂进去：于是「仿真时间推进了 40 s」与「记录行数仍然 ≤ 850」同时成立，
+  // 才真正证明裁剪逻辑在工作——少了 splice 的版本会在这里留下 ~1000 行。
+  const trim = await page.evaluate(async () => {
+    const HZ = 100;
+    // 表头用装置自己导出的那套列名（replay.ts 认的就是这个写法，gx_dps 这种缩写不在其列）
+    const rows = ["t_s,gyro_x_dps,gyro_y_dps,gyro_z_dps,accel_x_ms2,accel_y_ms2,accel_z_ms2"];
+    for (let k = 0; k < 40 * HZ; k++) rows.push(`${(k / HZ).toFixed(3)},1.5,0,0,0,0,9.80665`);
+    const r = window.attitudeDemo.replay.import(rows.join(String.fromCharCode(10)), "soak.csv");
+    document.getElementById("replay-speed").value = "0";
+    document.getElementById("replay-speed").dispatchEvent(new Event("change"));
+    await new Promise((res) => setTimeout(res, 2500)); // 让主循环把 4000 帧消费掉
+    const after = window.attitudeDemo.sizes();
+    const info = window.attitudeDemo.replay.info;
+    window.attitudeDemo.replay.stop();
+    return { imported: r, ...after, replayIdx: info.idx };
+  });
+  check(
+    "长跑：40 s 仿真时间喂进去后记录缓冲仍然封顶（裁剪逻辑真的在跑）",
+    trim.simTime > 35 && trim.logRows <= trim.logRowsCap && trim.logRows >= 500 && trim.insTrailMax <= trim.insTrailCap,
+    `${trim.imported}；仿真时间 ${trim.simTime.toFixed(1)} s（>35 才说明确实灌满过）；` +
+      `记录行 ${trim.logRows}/${trim.logRowsCap}，INS 轨迹 ${trim.insTrailMax}/${trim.insTrailCap}（未裁剪的话会各超一倍）`,
+  );
+  await page.evaluate(() => document.getElementById("panel-collapse-all").click());
 
   // ---------- 真实串口模式：用假 Web Serial 端口端到端验证 ----------
   const serialPage = await browser.newPage();
