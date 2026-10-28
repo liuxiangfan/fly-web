@@ -390,6 +390,165 @@ try {
       `模式=${roundTrip.mode}，模拟控件停用=${roundTrip.controlsOff}，退出后 active=${roundTrip.afterStop?.active}`,
   );
 
+  // ---------- BLE IMU：假 Web Bluetooth（含 20 字节分片的 28 字节帧） ----------
+  // 真机无法在 CI 配对，但「应用侧」整条链路可以像假串口那样完整验证：
+  // 假设备暴露一个 GATT 服务 + 一个 notify 特征，用 20 字节分片发 28 字节二进制帧，
+  // 专门验证「BLE 通知天然分片、装置靠流式缓冲重组」这件事。
+  const runBleCase = async (protocol) => {
+    const pg = await browser.newPage();
+    await pg.setViewport({ width: 1280, height: 800, deviceScaleFactor: 1 });
+    const errs = [];
+    pg.on("console", (m) => m.type() === "error" && errs.push(m.text()));
+    pg.on("pageerror", (e) => errs.push(String(e)));
+    await pg.evaluateOnNewDocument((proto) => {
+      window.__bleProto = proto;
+      const crc8 = (d, from, to) => {
+        let c = 0;
+        for (let i = from; i < to; i++) {
+          c ^= d[i];
+          for (let b = 0; b < 8; b++) c = c & 0x80 ? ((c << 1) ^ 0x07) & 0xff : (c << 1) & 0xff;
+        }
+        return c;
+      };
+      const put = (d, off, v, scale) => {
+        const x = Math.round(v * scale);
+        const u = x < 0 ? x + 0x10000 : x;
+        d[off] = u & 0xff;
+        d[off + 1] = (u >> 8) & 0xff;
+      };
+      const makeFrame = (seq, tick) => {
+        const d = new Uint8Array(28);
+        d[0] = 0xaa; d[1] = 0x55; d[2] = 24;
+        d[3] = seq & 0xff; d[4] = (seq >> 8) & 0xff;
+        d[5] = tick & 0xff; d[6] = (tick >> 8) & 0xff; d[7] = (tick >> 16) & 0xff; d[8] = (tick >>> 24) & 0xff;
+        put(d, 9, 1.5, 10); put(d, 11, 0, 10); put(d, 13, 0, 10);
+        put(d, 15, 0, 100); put(d, 17, 0, 100); put(d, 19, 9.8, 100);
+        put(d, 21, 32.8, 100); put(d, 23, 0, 100); put(d, 25, 37.7, 100);
+        d[27] = crc8(d, 2, 27);
+        return d;
+      };
+      let notifyCb = null;
+      const char = {
+        uuid: "0000ffe1-0000-1000-8000-00805f9b34fb",
+        properties: { notify: true },
+        value: null,
+        startNotifications: async () => char,
+        stopNotifications: async () => char,
+        addEventListener: (t, cb) => {
+          if (t === "characteristicvaluechanged") notifyCb = cb;
+        },
+      };
+      const device = {
+        name: "FAKE-BLE-IMU",
+        id: "fake-1",
+        gatt: {
+          connected: true,
+          connect: async () => ({
+            getPrimaryService: async () => ({ getCharacteristics: async () => [char] }),
+          }),
+          disconnect: () => {
+            device.gatt.connected = false;
+          },
+        },
+        addEventListener: () => undefined,
+      };
+      Object.defineProperty(navigator, "bluetooth", {
+        configurable: true,
+        value: { requestDevice: async () => device },
+      });
+      // 20 字节分片：BLE 默认 ATT MTU 只有 23 → 28 字节帧必然被拆成两条通知
+      let seq = 0;
+      let tick = 5000;
+      window.__bleEmit = () => {
+        const f = makeFrame(seq++, tick);
+        tick += 5;
+        if (window.__bleProto === "text") {
+          // 文本模式：分片也不影响（按行切）
+          const enc = new TextEncoder();
+          const line = "3.5,1.5,-2.5,0.3,0.1,0.2,9.8,32.8,0,37.7" + String.fromCharCode(10);
+          const b = enc.encode(line);
+          for (let i = 0; i < b.length; i += 20) {
+            const part = b.slice(i, i + 20);
+            char.value = new DataView(part.buffer, part.byteOffset, part.byteLength);
+            if (notifyCb) notifyCb({ target: char });
+          }
+          return;
+        }
+        for (let i = 0; i < f.length; i += 20) {
+          const part = f.slice(i, i + 20);
+          char.value = new DataView(part.buffer, part.byteOffset, part.byteLength);
+          if (notifyCb) notifyCb({ target: char });
+        }
+      };
+    }, protocol);
+    await pg.goto(URL, { waitUntil: "domcontentloaded" });
+    await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 15000 });
+    await pg.evaluate((proto) => {
+      const sec = document.getElementById("sec-imu");
+      if (sec?.classList.contains("collapsed")) sec.querySelector(".panel-toggle").click();
+      const p = document.getElementById("serial-protocol");
+      p.value = proto;
+      p.dispatchEvent(new Event("change", { bubbles: true }));
+      const m = document.getElementById("serial-mounting");
+      m.value = "x-front-y-right";
+      m.dispatchEvent(new Event("change", { bubbles: true }));
+    }, protocol);
+    await pg.click("#btn-ble");
+    await pg.waitForFunction(() => document.body.dataset.imuMode === "real", { timeout: 6000 });
+    // 每 10 ms 发一帧（分片后是两条通知）
+    await pg.evaluate(() => {
+      window.__bleTimer = setInterval(() => window.__bleEmit(), 10);
+    });
+    // 等「真的在收帧」：状态行出现非零帧率，比等时钟可靠（连接时 resetSim 会清零时钟，
+    // 而时钟也可能被别的路径推进）。这一条以前踩过：等到的是「连接前的时钟」。
+    await pg.waitForFunction(
+      () => /[1-9]\d* 帧\/s/.test(document.getElementById("serial-status")?.textContent ?? ""),
+      { timeout: 12000 },
+    ).catch(() => undefined);
+    const info = await pg.evaluate(() => {
+      const imu = window.attitudeDemo.state.lastImu;
+      return {
+        mode: document.body.dataset.imuMode,
+        status: document.getElementById("serial-status")?.textContent ?? "",
+        bleStatus: document.getElementById("ble-status")?.textContent ?? "",
+        charVisible: !document.getElementById("ble-char-row").classList.contains("hidden"),
+        accel: imu ? imu.accel.map((v) => +v.toFixed(4)) : null,
+        gyro: imu ? imu.gyro.map((v) => +(v * 57.29578).toFixed(3)) : null,
+        mag: imu ? imu.mag.map((v) => +v.toFixed(2)) : null,
+        btn: document.getElementById("btn-ble").textContent,
+      };
+    });
+    await pg.evaluate(() => clearInterval(window.__bleTimer));
+    await pg.close();
+    return { info, errs };
+  };
+
+  const bleBin = await runBleCase("binary");
+  check(
+    "BLE IMU：分片通知重组 28 字节帧并进入真实模式",
+    bleBin.info.mode === "real" &&
+      bleBin.info.status.includes("BLE IMU") &&
+      bleBin.info.charVisible &&
+      bleBin.info.btn === "断开 BLE" &&
+      bleBin.info.accel?.[2] > 9.7 &&
+      bleBin.info.accel[2] < 9.9 &&
+      Math.abs((bleBin.info.gyro?.[0] ?? 0) - 1.5) < 0.1 &&
+      Math.abs((bleBin.info.mag?.[0] ?? 0) - 32.8) < 0.1 &&
+      errsEmpty(bleBin.errs),
+    `accel=${JSON.stringify(bleBin.info.accel)} gyro=${JSON.stringify(bleBin.info.gyro)}｜状态「${bleBin.info.status}」｜BLE「${bleBin.info.bleStatus}」｜按钮=${bleBin.info.btn}｜错误=${bleBin.errs.slice(0, 2).join(" / ") || "无"}`,
+  );
+
+  const bleTxt = await runBleCase("text");
+  check(
+    "BLE IMU：文本协议走同一条通路",
+    bleTxt.info.mode === "real" &&
+      bleTxt.info.status.includes("BLE IMU") &&
+      bleTxt.info.status.includes("文本行") &&
+      bleTxt.info.accel?.[2] > 9.7 &&
+      errsEmpty(bleTxt.errs),
+    `accel=${JSON.stringify(bleTxt.info.accel)}｜${bleTxt.info.status}`,
+  );
+
   // ---------- 本轮新增：惯性导航 / 整定挑战 / 公式复制 / 打印样式 ----------
   // 这几个都是「画出来的东西」或「结构性行为」，光靠 tsc/自检覆盖不到，所以在真浏览器里点名验收。
   const extras = await page.evaluate(async () => {

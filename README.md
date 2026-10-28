@@ -7,7 +7,7 @@
 
 **在线演示**：[fly_web.070616.xyz](https://fly_web.070616.xyz)　（备用：[workers.dev](https://quaternion-attitude-demo.liu06167492.workers.dev)）
 
-每次推送到 `master` 自动构建部署：类型检查 → 95 项自检 → 产物预算 → 32 项浏览器冒烟 → Cloudflare Workers（PR 也会跑同一套验证，只是不部署）。
+每次推送到 `master` 自动构建部署：类型检查 → 95 项自检 → 产物预算 → 34 项浏览器冒烟 → Cloudflare Workers（PR 也会跑同一套验证，只是不部署）。
 
 ---
 
@@ -32,9 +32,11 @@
 饱和会让姿态在剧烈机动下大幅跑偏且「看不见」，刻度/失准是速率相关误差（零偏估计吸收不了），群延迟造成 ω·τ 的姿态滞后。
 
 **真实 IMU 接入** —— Web Serial 直连 GY-87 等器件（28 字节帧协议，固件参考见 [`firmware/`](firmware/README.md)）。
-**三种协议任选**：本装置二进制帧（28 字节，需自己组帧）/ **文本行**（主控 `Serial.print` 一行数即可，
-6/9/10 列、支持多种分隔符与时间戳列）/ **MAVLink v2 · RAW_IMU**（直连 PX4 / ArduPilot，带取反开关处理安装朝向）。
-三者下游完全一致（同一条帧队列、同一套无真值语义）。**波特率可选**（9600–2000000，默认 921600；
+**三协议 + 两条链路**：数据可以从**串口**（USB-TTL）或**蓝牙 BLE**进来，协议三选一——
+本装置二进制帧（28 字节，需自己组帧）/ **文本行**（主控 `Serial.print` 一行数即可，6/9/10 列、多种分隔符与可选时间戳列）/
+**MAVLink v2 · RAW_IMU**（直连 PX4 / ArduPilot，带取反开关处理安装朝向）。
+BLE 侧预置四组经核实的服务 UUID（HM-10/Nordic UART/ABF0/1000），连上后按 `properties.notify` 自动发现通知特征。
+所有组合的下游完全一致（同一条帧队列、同一套无真值语义）；BLE 的 20 字节分片由流式解析器自动重组。**波特率可选**（9600–2000000，默认 921600；
 连接期间锁定，因为 Web Serial 在 `open()` 时固定端口参数）。
 按固件 tick 差自适应积分步长（100–200 Hz，u32 回绕与空洞自动兜底），CRC 校验、seq 丢帧统计、
 积压保护、1.5 s 断流看门狗；无真值基准时误差曲线自动改以 Mahony 为参照、幻影隐藏、模拟控件置灰。
@@ -179,7 +181,7 @@ npm run preview   # 预览构建产物
 npx tsc --noEmit  # 类型检查
 npm run check     # 95 项：数值 71 + 场景几何 10 + HTML 契约 14
 npm run budget    # 产物体积预算（总量/字体/HTML/主包 JS 四项上限）
-npm run smoke     # 32 项真浏览器端到端（含导出→导入闭环、文本/MAVLink 假串口、打印媒体；需先 build + preview）
+npm run smoke     # 34 项真浏览器端到端（含导出→导入闭环、文本/MAVLink 假串口、假 BLE 设备、打印媒体；需先 build + preview）
 ```
 
 > `npm run budget` 防的是「一次误 import 让产物多背一兆字体」这类回归——体积不会自己报警。
@@ -238,7 +240,7 @@ npm run icons      # 从 favicon.svg 重新生成 PWA 图标
 │   ├── selftest.ts         #   数值自检（71 项）
 │   ├── scenecheck.ts       #   场景几何自检（10 项）
 │   ├── htmlcheck.ts        #   HTML↔TS 契约自检（14 项）
-│   ├── browser-smoke.mjs   #   真浏览器端到端（32 项）
+│   ├── browser-smoke.mjs   #   真浏览器端到端（34 项）
 │   ├── distbudget.mjs      #   产物体积预算（5 项上限）
 │   ├── shot.mjs            #   开发用截图工具（视口/元素截图 + 页面内脚本）
 │   ├── make-icons.mjs      #   PWA 图标生成

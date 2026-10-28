@@ -7,7 +7,8 @@
  *
  * 前置：npm run build
  */
-import { readdirSync, statSync, existsSync } from "node:fs";
+import { readdirSync, statSync, existsSync, readFileSync } from "node:fs";
+import { gzipSync } from "node:zlib";
 import { join } from "node:path";
 
 const DIST = "dist";
@@ -35,8 +36,18 @@ const LIMITS = {
   total: 2.0 * 1024 * 1024,   // 全站产物（含所有字体与图标）
   fonts: 900 * 1024,          // 字体总量（Fira 13 个子集 + KaTeX_Main 4 个）
   fontFiles: 24,              // 字体文件数
-  html: 420 * 1024,           // index.html（7 页文档全部内联，故上限放得较宽）
-  mainJs: 180 * 1024,         // 主包 JS（three 单独成 chunk，不计入）
+  // index.html 把全部文档内联（这是产品的核心价值，不是失误），所以上限放得宽；
+  // 但**真正影响首次加载的是 gzip 后的大小**，所以两者都查。
+  // 历史：开工时 271 KB → 文档扩容到 365 KB → 本轮再加协议/BLE/挑战等章节到 420 KB，
+  // 每轮扩容都有对应的新内容，故此处的上限是「跟着内容走」而不是「跟着报错走」。
+  html: 460 * 1024,           // index.html 原始体积
+  htmlGzip: 165 * 1024,       // index.html 传输体积（这才是用户真正下载的）
+  // 主包 JS（three 单独成 chunk，不计入）。历史：开工时 111 KB，
+  // 本轮前后加了 INS/协议/挑战/BLE 等一大批功能后到 172 KB——都是真代码，没有明显的可删项。
+  // 上限按实测放宽，但仍同时盯 gzip（用户真正下载的量）。
+  mainJs: 210 * 1024,
+  // 实测 66 KB（gzip）——上限留约 14% 余量给下一轮功能，超了就说明又该审视体积了
+  mainJsGzip: 75 * 1024,
 };
 
 const mainJs = js.filter((f) => !/three-/.test(f));
@@ -44,12 +55,29 @@ const metrics = [
   { name: "产物总量", value: total, limit: LIMITS.total, detail: `${(total / 1024).toFixed(0)} KB` },
   { name: "字体总量", value: fontBytes, limit: LIMITS.fonts, detail: `${(fontBytes / 1024).toFixed(0)} KB` },
   { name: "字体文件数", value: fonts.length, limit: LIMITS.fontFiles, detail: `共 ${fonts.length} 个`, count: true },
-  { name: "index.html", value: sizeOf(html), limit: LIMITS.html, detail: `${(sizeOf(html) / 1024).toFixed(0)} KB` },
+  {
+    name: "index.html",
+    value: sizeOf(html),
+    limit: LIMITS.html,
+    detail: `${(sizeOf(html) / 1024).toFixed(0)} KB（gzip ${(gzipSync(readFileSync(html[0]), { level: 9 }).length / 1024).toFixed(0)} KB）`,
+  },
+  {
+    name: "index.html（gzip 传输体积）",
+    value: gzipSync(readFileSync(html[0]), { level: 9 }).length,
+    limit: LIMITS.htmlGzip,
+    detail: `${(gzipSync(readFileSync(html[0]), { level: 9 }).length / 1024).toFixed(0)} KB`,
+  },
   {
     name: "主包 JS",
     value: sizeOf(mainJs),
     limit: LIMITS.mainJs,
     detail: mainJs.map((f) => `${(statSync(f).size / 1024).toFixed(0)}KB`).join(" + "),
+  },
+  {
+    name: "主包 JS（gzip 传输体积）",
+    value: mainJs.reduce((s, f) => s + gzipSync(readFileSync(f), { level: 9 }).length, 0),
+    limit: LIMITS.mainJsGzip,
+    detail: `${(mainJs.reduce((s, f) => s + gzipSync(readFileSync(f), { level: 9 }).length, 0) / 1024).toFixed(0)} KB`,
   },
 ];
 void css;

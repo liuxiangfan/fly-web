@@ -165,14 +165,16 @@ function setSimControlsDisabled(disabled: boolean): void {
   if (note) {
     note.textContent = replayActive()
       ? "离线回放模式：剧本 / 模拟噪声 / 手动目标 / 幻影 / 闭环 / 初始偏差已停用——数据完全来自导入的日志（无真值，误差基准 = Mahony）。"
-      : "真实 IMU 模式：剧本 / 模拟噪声 / 手动目标 / 幻影 / 闭环 / 初始偏差已停用——数据完全来自串口帧。";
+      : bleState.connected && !serialState.running
+        ? "BLE IMU 模式：剧本 / 模拟噪声 / 手动目标 / 幻影 / 闭环 / 初始偏差已停用——数据完全来自蓝牙通知（无真值，误差基准 = Mahony）。"
+        : "真实 IMU 模式：剧本 / 模拟噪声 / 手动目标 / 幻影 / 闭环 / 初始偏差已停用——数据完全来自串口帧。";
     note.classList.toggle("hidden", !disabled);
   }
 }
 
 /** 真实/模拟模式切换的连带语义（幻影、误差参照、UI 显隐） */
 function applyDataSourceSemantics(): void {
-  state.real = serialState.running || replayActive();
+  state.real = serialState.running || replayActive() || bleState.connected;
   document.body.dataset.imuMode = state.real ? "real" : "sim";
   setSimControlsDisabled(state.real);
   updateMagCalUi();
@@ -4475,7 +4477,8 @@ function setSerialStatus(text: string, warn = false): void {
 
 /** 状态行（2 Hz）：帧率、真实 dt、丢帧、断流看门狗 */
 function updateSerialStatus(): void {
-  if (!serialState.running) return;
+  const viaBle = bleState.connected && !serialState.running;
+  if (!serialState.running && !viaBle) return;
   const now = performance.now();
   if (serialState.uiAt > 0) {
     const elapsed = (now - serialState.uiAt) / 1000;
@@ -4489,7 +4492,7 @@ function updateSerialStatus(): void {
     serialState.uiFrames = serialState.frames;
   }
   if (serialState.lastArrival === 0) {
-    setSerialStatus("真实 IMU 已连接——等待数据帧…");
+    setSerialStatus(viaBle ? "BLE IMU 已连接——等待通知…" : "真实 IMU 已连接——等待数据帧…");
     return;
   }
   const age = (now - serialState.lastArrival) / 1000;
@@ -4512,7 +4515,8 @@ function updateSerialStatus(): void {
         ? ` · 跳过其它消息 ${serialState.skippedMsgs}`
         : "";
   setSerialStatus(
-    `真实 IMU · ${protoText}${serialState.baud} · ${serialState.rate.toFixed(0)} 帧/s · dt ${(serialState.lastDt * 1000).toFixed(1)} ms · ` +
+    `${viaBle ? "BLE IMU" : "真实 IMU"} · ${protoText}${viaBle ? "" : `${serialState.baud} · `}` +
+      `${serialState.rate.toFixed(0)} 帧/s · dt ${(serialState.lastDt * 1000).toFixed(1)} ms · ` +
       `seq 丢帧 ${serialState.dropped}${backlog}${extra}`,
   );
 }
@@ -4531,6 +4535,17 @@ async function serialConnect(): Promise<void> {
     // 回放与串口是两条互斥的数据通路：主循环里回放优先，若不在这里退出回放，
     // 串口帧会一直排队堆积（被积压保护丢掉）而界面却还在放日志——看不出所以然。
     // 放在 open() 成功之后而不是之前：用户在选端口对话框上点取消时不该把回放停掉。
+    if (bleState.connected) {
+      // BLE 与串口同理互斥：先断开，避免两条通路互相打架
+      try {
+        bleState.device?.gatt?.disconnect();
+      } catch {
+        /* 已断开 */
+      }
+      bleState.connected = false;
+      bleState.char = null;
+      bleState.device = null;
+    }
     if (replayActive()) {
       replayState.frames = [];
       replayState.idx = 0;
@@ -4763,6 +4778,7 @@ function replayActive(): boolean {
 /** 数据源的可读名字：模拟 / 真实串口 / 离线回放 */
 function dataSourceLabel(): string {
   if (replayActive()) return "离线回放";
+  if (bleState.connected) return "BLE IMU";
   return serialState.running ? "真实 IMU" : "模拟";
 }
 
@@ -4897,6 +4913,236 @@ document.getElementById("replay-speed")?.addEventListener("change", () => {
   replayState.speed = Number.isFinite(v) ? v : 1;
   updateReplayStatus();
 });
+
+/* ==========================================================================
+   BLE IMU（Web Bluetooth）
+   --------------------------------------------------------------------------
+   为什么值得做：BLE 已经是小体积 IMU 模块的默认传输方式（HM-10 之类透传桥、
+   WitMotion 的 BLE 系列、ESP32 板载 BLE 串口）。没有这条路径时，用户必须再找一个
+   USB-TTL 转接才能接上——而「装置本身跑在浏览器里、何必再插一根线」正是它的价值。
+
+   设计上的三个取舍：
+   1) **只预置已核实过的服务 UUID**（HM-10/FFE0、Nordic UART、ABF0、通用 1000 系列，
+      来自 iNav Configurator 这类真实 BLE 串口工具），另给一个自定义输入框——
+      厂商 UUID 五花八门，写死一串猜来的值只会让人连不上还找不到原因。
+   2) **特征不预置**：连上后枚举该服务下所有支持 notify 的特征列给用户挑。
+      因为「TX/RX」的命名方向各家不一致（Nordic 与 iNav 的 read/write 命名正好相反），
+      与其猜方向，不如用 `properties.notify` 这个客观属性。
+   3) **复用串口的下游**：通知里的字节进同一个 `serialState.buffer/text`，再走 `serialDrainBuffer()`。
+      于是三种协议（二进制/文本行/MAVLink）与「无真值」语义全部照旧。
+      BLE 单个通知常只有 20 字节，28 字节的帧会被拆开——流式解析器天然处理（不完整时 consumed=0，
+      缓冲继续攒），这也是这一层不必写分片逻辑的原因。
+   ========================================================================== */
+
+/** Web Bluetooth 的最小类型面（DOM lib 未收录；只声明用到的部分） */
+interface BleCharacteristicLike {
+  uuid: string;
+  properties: { notify?: boolean; indicate?: boolean };
+  value: DataView | null;
+  startNotifications(): Promise<BleCharacteristicLike>;
+  stopNotifications(): Promise<BleCharacteristicLike>;
+  addEventListener(type: string, cb: (ev: { target: BleCharacteristicLike }) => void): void;
+}
+interface BleServiceLike {
+  getCharacteristics(): Promise<BleCharacteristicLike[]>;
+}
+interface BleDeviceLike {
+  name?: string | null;
+  id: string;
+  gatt?: {
+    connected: boolean;
+    connect(): Promise<{
+      getPrimaryService(uuid: string): Promise<BleServiceLike>;
+    }>;
+    disconnect(): void;
+  };
+  addEventListener(type: string, cb: () => void): void;
+}
+declare global {
+  interface Navigator {
+    readonly bluetooth?: {
+      requestDevice(options: {
+        filters: Array<{ services: string[] }>;
+        optionalServices?: string[];
+      }): Promise<BleDeviceLike>;
+    };
+  }
+}
+
+const bleState = {
+  device: null as BleDeviceLike | null,
+  char: null as BleCharacteristicLike | null,
+  connected: false,
+  /** 连接后发现的、支持 notify 的特征（供用户切换） */
+  notifiers: [] as BleCharacteristicLike[],
+};
+
+function bleStatus(text: string, warn = false): void {
+  const chip = document.getElementById("ble-status");
+  if (!chip) return;
+  chip.textContent = text;
+  chip.classList.toggle("warn", warn);
+  chip.classList.remove("hidden");
+}
+
+/** 当前选定的服务 UUID（自定义档读输入框） */
+function bleServiceUuid(): string {
+  const sel = document.getElementById("ble-service") as HTMLSelectElement | null;
+  const v = sel?.value ?? "";
+  if (v === "custom") {
+    return (document.getElementById("ble-custom") as HTMLInputElement | null)?.value.trim() ?? "";
+  }
+  return v;
+}
+
+/** 自定义档才会露出 UUID 输入框 */
+function syncBleUi(): void {
+  const custom = (document.getElementById("ble-service") as HTMLSelectElement | null)?.value === "custom";
+  document.getElementById("ble-custom-row")?.classList.toggle("hidden", !custom);
+}
+
+/** 订阅某个特征的通知；先退订旧的 */
+async function bleSubscribe(char: BleCharacteristicLike): Promise<void> {
+  if (bleState.char && bleState.char !== char) {
+    try {
+      await bleState.char.stopNotifications();
+    } catch {
+      /* 设备可能已断开，忽略 */
+    }
+  }
+  bleState.char = char;
+  char.addEventListener("characteristicvaluechanged", onBleNotify);
+  await char.startNotifications();
+}
+
+/**
+ * 通知到达：字节进与串口同一个缓冲，再走同一个 drain。
+ * 注意这里只用 `ev.target.value` —— 不依赖 Event 的其他字段（便于用假设备测试）。
+ */
+function onBleNotify(ev: { target: BleCharacteristicLike }): void {
+  const dv = ev.target.value;
+  if (!dv || dv.byteLength === 0) return;
+  const bytes = new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength);
+  if (serialProtocol() === "text") {
+    serialState.text += textDecoder.decode(bytes, { stream: true });
+    if (serialState.text.length > 8192) serialState.text = serialState.text.slice(-8192);
+  } else {
+    const merged = new Uint8Array(serialState.buffer.length + bytes.length);
+    merged.set(serialState.buffer);
+    merged.set(bytes, serialState.buffer.length);
+    serialState.buffer = merged.length > 4096 ? merged.subarray(merged.length - 4096) : merged;
+  }
+  serialState.lastArrival = performance.now();
+  serialDrainBuffer();
+}
+
+function bleCleanup(message: string, warn = false): void {
+  bleState.connected = false;
+  bleState.char = null;
+  bleState.device = null;
+  bleState.notifiers = [];
+  serialState.buffer = new Uint8Array(0);
+  serialState.text = "";
+  serialState.queue.length = 0;
+  serialState.lastTickMs = -1;
+  const stopBtn = document.getElementById("btn-ble");
+  if (stopBtn) stopBtn.textContent = "连接 BLE IMU";
+  document.getElementById("ble-char-row")?.classList.add("hidden");
+  bleStatus(message, warn);
+  applyDataSourceSemantics();
+}
+
+async function bleConnect(): Promise<void> {
+  const bt = navigator.bluetooth;
+  if (!bt) {
+    bleStatus("此浏览器不支持 Web Bluetooth（需要 Chrome/Edge + HTTPS；Firefox/Safari 不支持）", true);
+    return;
+  }
+  const serviceUuid = bleServiceUuid();
+  if (!serviceUuid) {
+    bleStatus("先选或填一个服务 UUID（模块手册里有）", true);
+    return;
+  }
+  // 与串口 / 回放互斥：三条数据通路同时活着只会互相打架
+  if (serialState.running) await serialDisconnect();
+  if (replayActive()) stopReplay();
+  try {
+    bleStatus("正在弹出设备选择框…（需要你点一下授权）");
+    const device = await bt.requestDevice({ filters: [{ services: [serviceUuid] }] });
+    bleStatus(`已选 ${device.name ?? device.id ?? "未命名设备"} · 正在连接 GATT…`);
+    device.addEventListener("gattserverdisconnected", () =>
+      bleCleanup("BLE 连接已断开（设备离开范围 / 关机 / 被别的程序占用）——可重新连接", true),
+    );
+    const server = await device.gatt?.connect();
+    if (!server) throw new Error("GATT 连接失败");
+    const service = await server.getPrimaryService(serviceUuid);
+    const chars = await service.getCharacteristics();
+    const notifiers = chars.filter((c) => c.properties.notify || c.properties.indicate);
+    if (notifiers.length === 0) {
+      bleCleanup(
+        `这个服务下没有支持通知（notify/indicate）的特征——UUID 可能选错了（该服务有 ${chars.length} 个特征）`,
+        true,
+      );
+      return;
+    }
+    bleState.device = device;
+    bleState.notifiers = notifiers;
+    // 填充特征下拉；只有一个时直接订阅，多个时默认第一个并让用户可切
+    const sel = document.getElementById("ble-char") as HTMLSelectElement | null;
+    if (sel) {
+      sel.innerHTML = notifiers.map((c) => `<option value="${c.uuid}">${c.uuid}</option>`).join("");
+      sel.selectedIndex = 0;
+      document.getElementById("ble-char-row")?.classList.remove("hidden");
+    }
+    await bleSubscribe(notifiers[0]);
+    bleState.connected = true;
+    serialState.frames = 0;
+    serialState.dropped = 0;
+    serialState.backlogDropped = 0;
+    serialState.skippedMsgs = 0;
+    serialState.badLines = 0;
+    const btn = document.getElementById("btn-ble");
+    if (btn) btn.textContent = "断开 BLE";
+    bleStatus(
+      `BLE 已连接 · ${device.name ?? "未命名"} · 服务 ${serviceUuid.slice(0, 8)} · ` +
+        `通知特征 ${notifiers[0].uuid.slice(0, 8)}（共 ${notifiers.length} 个可用）· 等待数据…`,
+    );
+    applyDataSourceSemantics();
+    resetSim();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    // 用户点取消是常态，不该当成错误吓人
+    const cancelled = /cancel|chooser|user/i.test(msg);
+    bleCleanup(cancelled ? "已取消设备选择" : `BLE 连接失败：${msg}`, !cancelled);
+  }
+}
+
+async function bleDisconnect(): Promise<void> {
+  try {
+    await bleState.char?.stopNotifications();
+  } catch {
+    /* 已断开 */
+  }
+  try {
+    bleState.device?.gatt?.disconnect();
+  } catch {
+    /* 已断开 */
+  }
+  bleCleanup("BLE 已断开——回到模拟模式");
+}
+
+document.getElementById("btn-ble")?.addEventListener("click", () => {
+  if (bleState.connected) void bleDisconnect();
+  else void bleConnect();
+});
+document.getElementById("ble-service")?.addEventListener("change", syncBleUi);
+document.getElementById("ble-char")?.addEventListener("change", () => {
+  const sel = document.getElementById("ble-char") as HTMLSelectElement | null;
+  const uuid = sel?.value;
+  const char = bleState.notifiers.find((c) => c.uuid === uuid);
+  if (char) void bleSubscribe(char);
+});
+syncBleUi();
 
 // ---------- 初始化 ----------
 updateSourceChip();

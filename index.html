@@ -208,6 +208,33 @@
           <span class="mono dim serial-baud-note" id="serial-baud-note">连接前可改</span>
         </div>
         <div class="ov-chip hidden" id="serial-status"></div>
+        <div class="row serial-row">
+          <button class="btn" id="btn-ble">连接 BLE IMU</button>
+          <select id="ble-service" title="BLE 模块的「串口服务」UUID —— 决定设备选择框里能看到哪些设备">
+            <option value="0000ffe0-0000-1000-8000-00805f9b34fb" selected>HM-10 / CC2541 透传（FFE0）</option>
+            <option value="6e400001-b5a3-f393-e0a9-e50e24dcca9e">Nordic UART（NUS）</option>
+            <option value="0000abf0-0000-1000-8000-00805f9b34fb">SpeedyBee 类（ABF0）</option>
+            <option value="00001000-0000-1000-8000-00805f9b34fb">通用 1000 系列</option>
+            <option value="custom">自定义…</option>
+          </select>
+        </div>
+        <div class="row serial-row hidden" id="ble-custom-row">
+          <label for="ble-custom">自定义 UUID</label>
+          <input type="text" id="ble-custom" placeholder="服务 UUID（查模块手册，如 0000ffe5-…）" spellcheck="false" />
+        </div>
+        <div class="row serial-row hidden" id="ble-char-row">
+          <label for="ble-char">通知特征</label>
+          <select id="ble-char"></select>
+        </div>
+        <div class="ov-chip hidden" id="ble-status"></div>
+        <p class="hint">
+          BLE 模块（HM-10 之类透传桥、WitMotion、ESP32 板载 BLE 串口）可以<b>直接连</b>，不必再经 USB-TTL 转接。
+          服务 UUID 从下拉选或粘贴模块手册里的那个（决定设备选择框里能看到谁）；连上后装置会列出该服务下
+          <b>所有支持通知的特征</b>让你挑——这样就不必猜厂商把 TX/RX 命名成哪个方向了。
+          协议、安装方向、磁校准等下游设置与串口模式完全一致（共用同一条帧队列）。
+          <b>注意 BLE 单个通知通常只有 20 字节</b>：28 字节的二进制帧会被拆成两条通知——装置的流式解析器天然处理分片，
+          你不需要做任何额外的事（这一条在冒烟测试里有专门用例）。
+        </p>
         <p class="hint">连接后进入真实模式：模拟剧本与污染滑块停用，五种算法改吃真实数据（无真值基准，误差曲线以 Mahony 为参照）。固件帧协议见 firmware/README.md；固件调试先用 SerialWeb。</p>
         <div class="row">
           <label for="imu-preset">器件预设</label>
@@ -942,7 +969,23 @@
           </div>
 
           <div class="ctl">
-            <div class="ctl-name">参数整定挑战 <span class="ctl-range">3 道题 · 开始 / 结算</span></div>
+                      <div class="ctl">
+            <div class="ctl-name">连接 BLE IMU <span class="ctl-range">按钮 + 服务 UUID + 通知特征</span></div>
+            <p><span class="k k1">是什么</span>用 Web Bluetooth 直连无线 IMU 模块（HM-10 类透传桥、WitMotion、
+              ESP32 板载 BLE 串口）。需要先选一个<b>服务 UUID</b>——它决定设备选择框里能看到谁，
+              下拉里预置了四组经核实的常见值（FFE0 / Nordic UART / ABF0 / 通用 1000），
+              也可以选「自定义」粘模块手册里的那个。连上后装置枚举该服务下所有支持通知的特征，列出来让你挑。</p>
+            <p><span class="k k2">起什么作用</span>把「必须有一个 USB-TTL 转接」这道门槛也拆掉：
+              装置本身跑在浏览器里，模块带 BLE 就能直接连。下游与串口完全一致——
+              协议（二进制 / 文本行 / MAVLink）、安装方向、磁校准、无真值语义全部照旧，共用同一条帧队列。</p>
+            <p><span class="k k3">改了会怎样</span>连上前会与串口 / 离线回放互斥（三条数据通路同时活着只会互相打架），
+              连接后模拟控件停用、幻影隐藏、误差基准改 Mahony。状态行显示「BLE IMU · 帧/s · dt」。
+              <b>两个已知的坑</b>：① 不填对服务 UUID 就看不到设备（Web Bluetooth 的选择框只显示声明了该服务的设备）；
+              ② 默认 ATT MTU 下单个通知只有 20 字节，28 字节的二进制帧必然分两条——解析器是流式的会自动重组，
+              但你在自己写发送端时要保证字节顺序不被打乱。设备离开范围/关机时提示「BLE 连接已断开」，可重新连接。</p>
+          </div>
+
+<div class="ctl-name">参数整定挑战 <span class="ctl-range">3 道题 · 开始 / 结算</span></div>
             <p><span class="k k1">是什么</span>三道有唯一可验证答案的小任务，每题给一套现场（一键装载）与一个 RMSE 目标：
               ① 2°/s 零偏下把 Mahony 压到 1.65° 以内；② 强振动下把 Madgwick 压到 3.0° 以内；
               ③ 硬铁+交变干扰下把卡尔曼压到 4.5° 以内。</p>
@@ -3577,6 +3620,40 @@ A = <span class="mtx"><i class="ml"></i><span class="mrows" style="--cols:2"><sp
           </p>
         </section>
 
+        <section id="g-ble">
+          <h2>BLE：连无线模块，不必再经 USB-TTL</h2>
+          <p>
+            小体积 IMU 模块现在基本都走 BLE（HM-10 之类透传桥、WitMotion 的 BLE 系列、ESP32 板载 BLE 串口）。
+            装置提供「连接 BLE IMU」入口，<b>传输层变了、下游完全不变</b>：
+            通知里的字节进同一条帧队列，三种协议（二进制 / 文本行 / MAVLink）与「无真值」语义一概照旧。
+          </p>
+          <div class="tscroll"><table class="docs-table">
+            <thead><tr><th>服务 UUID（下拉里可选）</th><th>常见于</th></tr></thead>
+            <tbody>
+              <tr><td class="mono">0000ffe0-0000-1000-8000-00805f9b34fb</td><td>HM-10 / CC2541 及其大量克隆（最常见的透传桥）</td></tr>
+              <tr><td class="mono">6e400001-b5a3-f393-e0a9-e50e24dcca9e</td><td>Nordic UART Service（NUS）——官方 SDK 示例与多数 DIY 板</td></tr>
+              <tr><td class="mono">0000abf0-0000-1000-8000-00805f9b34fb</td><td>SpeedyBee 一类飞控 BLE 适配器</td></tr>
+              <tr><td class="mono">00001000-0000-1000-8000-00805f9b34fb</td><td>通用 1000 系列</td></tr>
+            </tbody>
+          </table></div>
+          <p>
+            <b>为什么要填服务 UUID</b>：Web Bluetooth 的设备选择框只显示「声明了该服务」的设备——不填就看不到你的模块。
+            这四组来自真实的 BLE 串口工具（iNav Configurator 等），但厂商 UUID 五花八门，
+            所以还有「自定义」一档让你粘模块手册里的值。
+          </p>
+          <p>
+            <b>为什么不用填特征 UUID</b>：连上后装置会枚举该服务下所有支持通知（notify/indicate）的特征列出来让你挑。
+            因为「TX/RX 到底指哪个方向」各家命名不一致（Nordic 官方与 iNav 的 read/write 命名恰好相反），
+            与其猜方向，不如用 <span class="mono">properties.notify</span> 这个客观属性。只列一个时自动订阅。
+          </p>
+          <p class="hint">
+            <b>分片是 BLE 的常态</b>：默认 ATT MTU 只有 23 字节，单个通知最多带 20 字节——28 字节的二进制帧
+            必然被拆成两条通知。装置的解析器是流式的（数据不完整时返回「等更多字节」），所以自动重组，
+            你不需要做任何事；冒烟测试里有一条专门用 20 字节分片发 28 字节帧的用例守着这件事。
+            BLE 需要 Chrome/Edge + HTTPS，并且由你点按钮触发（浏览器要求用户手势）。
+          </p>
+        </section>
+
         <section id="g-text">
           <h2>文本行协议：格式与几条规则</h2>
           <div class="formula">每行一条采样，列数三选一：
@@ -3764,6 +3841,10 @@ A = <span class="mtx"><i class="ml"></i><span class="mrows" style="--cols:2"><sp
               <tr><td>选端口对话框里没有我的设备</td><td>串口被别的程序占用（SerialWeb / 厂商上位机 / 另一个标签页）。关掉它们；必要时拔插 USB。</td></tr>
               <tr><td>连上了但一直「等待数据帧」</td><td>固件没在发帧，或波特率不匹配（默认 921600）。先用厂商上位机确认有数据。</td></tr>
               <tr><td>状态行显示很大的「seq 丢帧」</td><td>主机侧来不及消费：帧率过高、或页面被切到后台（rAF 停摆）。降低固件帧率，或保持页面在前台。</td></tr>
+              <tr><td>BLE：设备选择框里看不到我的模块</td><td>服务 UUID 不对——选择框只显示「声明了该服务」的设备。换下拉里的另一组，或从模块手册里找那个 UUID 填进「自定义」。</td></tr>
+              <tr><td>BLE：连上了但没有「通知特征」可挑</td><td>该服务下确实没有支持 notify/indicate 的特征：多半是服务 UUID 选错了（提示里会写明该服务有几个特征）。</td></tr>
+              <tr><td>BLE：数据像被切碎 / 帧率异常</td><td>BLE 单个通知通常只有 20 字节，发送端若没按顺序发完整帧就会这样。装置的流式解析器能重组，但前提是**字节顺序不乱**（不要把一帧拆到两个不同的特征上发）。</td></tr>
+              <tr><td>BLE：点连接没反应 / 直接提示不支持</td><td>需要 Chrome/Edge + HTTPS；Firefox/Safari 没有 Web Bluetooth。另外首次连接必须由你点按钮触发（浏览器要求用户手势）。</td></tr>
               <tr><td>「协议」选哪个？</td><td>看主控在发什么：自己组的 28 字节帧 → 二进制；只打印一行数 → 文本行；PX4/ArduPilot 飞控 → MAVLink。选错的统一症状就是「连上了但 0 帧」。</td></tr>
               <tr><td>文本行模式：状态行报「坏行 N」</td><td>列数不是 6/9/10、或分隔符不认识（只认逗号/空格/Tab/分号）、或有无法解析的字符。工具提示里会直接写原因。</td></tr>
               <tr><td>文本行模式：帧率只有设定值的几分之一</td><td>波特率不够（文本一条 60–80 字节，比二进制大一倍多）。115200 大约够 100–150 Hz。</td></tr>
@@ -3905,6 +3986,8 @@ A = <span class="mtx"><i class="ml"></i><span class="mrows" style="--cols:2"><sp
               <tr><td class="mono">RAW_IMU (27)</td><td>MAVLink 里的 9 轴原始读数消息（注意 id 是 27，26 是 SCALED_IMU）；单位 mG / mrad·s⁻¹ / mGauss</td><td>硬件与固件 · MAVLink</td></tr>
               <tr><td class="mono">crc_extra</td><td>MAVLink 每条消息参与校验的「盐」值，由消息名与字段定义推导；写错则一帧都收不到（本装置用算法推导并自检锁定）</td><td>硬件与固件 · MAVLink</td></tr>
               <tr><td>文本行协议</td><td>每行 6/9/10 个数（陀螺+加计[+磁力计][+时间戳]），让「能打印就能接」；单位不自动换算</td><td>硬件与固件 · 文本行</td></tr>
+              <tr><td>BLE / GATT 通知</td><td>蓝牙低功耗：设备端的「通知」是主机的数据源；单个通知通常只有 20 字节（默认 ATT MTU 23），长帧靠流式解析器重组</td><td>硬件与固件 · BLE</td></tr>
+              <tr><td>服务 UUID / 特征 UUID</td><td>服务决定「设备选择框能看到谁」，特征才是真正收发数据的那条通道；本装置只让你填服务，特征连上后按 properties.notify 自动发现</td><td>硬件与固件 · BLE</td></tr>
               <tr><td>RMSE / 整定</td><td>均方根误差——「整定挑战」的评分口径，与曲线同源；阈值先量后定，两侧留余量吸收随机种子涨落</td><td>控制项手册 · 参数整定挑战</td></tr>
             </tbody>
           </table></div>
@@ -4123,6 +4206,16 @@ A = <span class="mtx"><i class="ml"></i><span class="mrows" style="--cols:2"><sp
           <div class="tscroll"><table class="docs-table">
             <thead><tr><th>版本 / 轮次</th><th>内容</th></tr></thead>
             <tbody>
+              <tr>
+                <td>BLE 接入轮</td>
+                <td>
+                  新增 <b>Web Bluetooth 直连</b>（「连接 BLE IMU」）：预置四组经核实的服务 UUID
+                  （HM-10/FFE0、Nordic UART、ABF0、通用 1000，来源为真实 BLE 串口工具），另给自定义输入；
+                  连上后按 <span class="mono">properties.notify</span> 自动发现通知特征（不猜厂商的 TX/RX 命名方向）。
+                  传输层换掉、下游完全复用：字节进同一条帧队列，三种协议与无真值语义照旧；
+                  <b>BLE 的 20 字节分片由流式解析器天然重组</b>（冒烟里有用例专门守这件事）。
+                </td>
+              </tr>
               <tr>
                 <td>硬件接入拓宽 + 互动加固轮</td>
                 <td>
