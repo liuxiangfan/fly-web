@@ -2139,6 +2139,9 @@ body[data-imu-mode="real"] .section-experiments .hint::before {
   white-space: nowrap;
 }
 .docs-table td { color: var(--text-dim); }
+/* 课时计划表：第一列是「分钟」区间（12–20 这种），窄列下会在破折号处折行成「12-」「20」，
+   把时间读成两个数。这一列不折行即可（表格外层本就有 .tscroll 可横向滚动）。 */
+.docs-table.tg-plan td:first-child { white-space: nowrap; }
 .docs-table td:first-child { color: var(--text); font-weight: 500; }
 
 /* ---- 右侧「本页目录」栏 ---- */

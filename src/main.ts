@@ -689,6 +689,20 @@ void manYaw;
 // ---------- IMU 器件预设（真实数据手册规格 → 滑块一键写入） ----------
 // 噪声密度（°/s/√Hz、μg/√Hz）按白噪声采样换算成每采样点 σ：σ = 密度 × √(fs/2)，fs = 500 Hz（√250 ≈ 15.81）。
 // 滑块按自身步距对齐，写不入的精确值在注释里保留原数。规格来源见文档·控制项手册·IMU 传感器模拟。
+/**
+ * 器件预设 = **器件参数的完整快照**（不是「只改我写的那几个」）。
+ *
+ * 契约（改预设时务必遵守）：预置只写**器件本身**的参数——
+ * 零偏、陀螺噪声、加计噪声、交叉轴、非线性、磁量化；
+ * 环境与器件级非理想（机动线加速度、振动、硬铁、干扰、软铁、量程、刻度、失准、群延迟）
+ * 一律不动，它们各有独立滑块/开关，属于「你怎么用这台器件」而不是「这台器件是什么」。
+ *
+ * 为什么强调「完整快照」：早期实现用 `if (p.x !== undefined)` 逐项覆盖，于是
+ * **没写的字段会继承上一颗器件的值**——选完 MPU-9250 再选 ICM-42688-P，
+ * 磁力计量化会留着 AK8963 的 0.6 μT/LSB，而后者是 6 轴、根本没有磁力计。
+ * 两个学生做同样的操作却因为起始状态不同得到不同结果，与「可复现」的承诺相悖。
+ * 冒烟里有一条不变量用例：同一个预置，无论之前选过什么，写入结果必须一致。
+ */
 interface ImuPreset {
   biasDps?: number;
   gyroNoiseDps?: number;
@@ -706,19 +720,21 @@ const IMU_PRESETS: Record<string, ImuPreset> = {
     accelNoise: 0.05, // 密度 300 μg/√Hz ≈ 0.0029 m/s²/√Hz × 15.81 ≈ 0.047
     crossAxis: 0.02, // 交叉轴敏感度 ±2%
     accelNonlin: 0.005, // 非线性 ±0.5%
-    magQuantUts: 0.6, // 内置 AK8963 = 0.6 μT/LSB
+    magQuantUts: 0.6, // 内置 AK8963 = 0.6 μT/LSB（数据手册）
     note: "MPU-9250（9 轴，2010 年代教学最常用）：陀螺噪声密度 0.01 °/s/√Hz、加计 300 μg/√Hz；初始零偏容差 ±5 °/s（取 2 为典型值，规格上限拉满更夸张）；交叉轴 ±2%、非线性 ±0.5%、AK8963 磁力计 0.6 μT/LSB。",
   },
   icm42688: {
     biasDps: 1,
     gyroNoiseDps: 0.05, // 密度 0.0028 × 15.81 ≈ 0.044
     accelNoise: 0, // 密度 70 μg/√Hz ≈ 0.011 m/s²（滑块网格对齐后为 0——比默认干净一个量级）
+    magQuantUts: 0, // 这是 6 轴器件，本身没有磁力计；装置仍模拟磁链，量化为 0 = 不做量化（不沿用上一颗的值）
     note: "ICM-42688-P（现役 6 轴低噪声标杆）：陀螺噪声密度 0.0028 °/s/√Hz（约为 MPU-9250 的 1/3.6）、加计 70 μg/√Hz；片上可编程数字滤波。零偏未给典型值，保持 1 °/s。",
   },
   bno055: {
     biasDps: 0.5,
     gyroNoiseDps: 0.2, // 密度 0.014 × 15.81 ≈ 0.222
     accelNoise: 0.05, // 密度 175 μg/√Hz ≈ 0.027
+    magQuantUts: 0, // 磁力计在片内与融合一起做校准，其分辨率不能直接换算到本模拟链，量化为 0（不沿用上一颗的值）
     note: "BNO055（片上融合智能传感器）：陀螺 0.014、加计 175 μg/√Hz；零偏由片上 Cortex-M0 自动校准追踪（取 0.5 °/s 模拟校准后残余）。它直接输出四元数——相当于把本页算法固化进了传感器。",
   },
 };
@@ -2824,6 +2840,8 @@ const DOC_MODULE_OF: Record<string, string> = {
   "f-madg-detail": "filters",
   "f-kalman-detail": "filters",
   labs: "labs",
+  teach: "labs", // 教师指南挂在「实验与练习」模块下（那本来就是给教与学用的）
+  cheatsheet: "glossary", // 公式速查放在「术语与符号索引」模块下（同一类「查阅」用途）
   guide: "guide",
   magcal: "guide", // 磁力计校准在「硬件与固件」模块下（真机接入流程的一部分）
   trouble: "trouble",
@@ -4419,6 +4437,8 @@ interface BleServiceLike {
 interface BleDeviceLike {
   name?: string | null;
   id: string;
+  /** 可选：真实实现（EventTarget）都有；假设备可能没有，调用处用 ?. 兜底 */
+  removeEventListener?(type: string, cb: () => void): void;
   gatt?: {
     connected: boolean;
     connect(): Promise<{
@@ -4522,6 +4542,11 @@ function onBleNotify(ev: { target: BleCharacteristicLike }): void {
   serialDrainBuffer();
 }
 
+/** BLE 设备断开回调（命名函数：重新连接时要能把它摘掉，见下） */
+function onBleDeviceLost(): void {
+  bleCleanup("BLE 连接已断开（设备离开范围 / 关机 / 被别的程序占用）——可重新连接", true);
+}
+
 function bleCleanup(message: string, warn = false): void {
   // 摘监听：否则特征对象仍持有回调（断开后复用同一对象时会重复消费）
   try {
@@ -4572,9 +4597,10 @@ async function bleConnect(): Promise<void> {
     bleStatus("正在弹出设备选择框…（需要你点一下授权）");
     const device = await bt.requestDevice({ filters: [{ services: [serviceUuid] }] });
     bleStatus(`已选 ${device.name ?? device.id ?? "未命名设备"} · 正在连接 GATT…`);
-    device.addEventListener("gattserverdisconnected", () =>
-      bleCleanup("BLE 连接已断开（设备离开范围 / 关机 / 被别的程序占用）——可重新连接", true),
-    );
+    // 同一个物理设备重复连接时浏览器可能复用同一个 BluetoothDevice 对象，
+    // 因此监听器要「先摘再挂」——否则连 5 次就挂 5 个回调（与特征上的监听器同一类问题）。
+    device.removeEventListener?.("gattserverdisconnected", onBleDeviceLost);
+    device.addEventListener("gattserverdisconnected", onBleDeviceLost);
     const server = await device.gatt?.connect();
     if (!server) throw new Error("GATT 连接失败");
     const service = await server.getPrimaryService(serviceUuid);

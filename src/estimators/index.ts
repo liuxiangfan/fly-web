@@ -90,8 +90,8 @@ function rampK(age: number, enabled: boolean): number {
  * 两个阈值都是**实例字段**（`gateDeg` / `gateMagPct`），面板滑块可实时改：
  * 阈值太松污染穿堂而过，太紧正常机动被误拒——这条 U 形权衡本身就是教学点。
  */
-const ACCEL_GATE_DEG = 20;
-const ACCEL_GATE_MAG_PCT = 0.35;
+export const ACCEL_GATE_DEG = 20;
+export const ACCEL_GATE_MAG_PCT = 0.35;
 function accelGateActive(gateOn: boolean, rampEnabled: boolean, age: number): boolean {
   return gateOn && !(rampEnabled && age < RAMP_SEC);
 }

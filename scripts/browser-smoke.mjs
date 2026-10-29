@@ -1120,6 +1120,58 @@ try {
       "导入回放后 ble=" + plumbingCase.res.afterReplay.ble + "（应 false）replay=" + plumbingCase.res.afterReplay.replay,
   );
 
+  // ---------- 枚举与预设：每个选项都得真的能用 ----------
+  // htmlcheck 守的是「HTML 选项与代码权威列表一致」这个静态契约；这里守运行期：
+  // 每个器件预设都要真的写入参数（有 4 个预设、其中 2 个只改噪声/零偏），
+  // 运行期填充的下拉必须真的填上了，解算频率的每个档位都能被接受。
+  const enumsCase = await page.evaluate(async () => {
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    const secImu = document.getElementById("sec-imu");
+    if (secImu.classList.contains("collapsed")) secImu.querySelector(".panel-toggle").click();
+    const preset = document.getElementById("imu-preset");
+    const note = document.getElementById("imu-preset-note");
+    const probe = () => [
+      document.getElementById("imu-gyro-bias").value,
+      document.getElementById("imu-gyro-noise").value,
+      document.getElementById("imu-accel-noise").value,
+      document.getElementById("imu-mag-quant").value,
+    ].join("|");
+    const rows = [];
+    for (const opt of [...preset.options]) {
+      preset.value = opt.value;
+      preset.dispatchEvent(new Event("change", { bubbles: true }));
+      await wait(60);
+      rows.push({ id: opt.value, values: probe(), note: (note?.textContent ?? "").length, selected: preset.value });
+    }
+    // 姿态对下拉：运行期填充
+    const pair = document.getElementById("quat-pair-select");
+    const pairs = [...pair.options].map((o) => o.value);
+    // 解算频率档位：逐个切换都要被接受（且不会把 hz 变成 0）
+    const rate = document.getElementById("solve-rate");
+    const rates = [...rate.options].map((o) => o.value);
+    const bad = [];
+    for (const v of rates) {
+      rate.value = v;
+      rate.dispatchEvent(new Event("change", { bubbles: true }));
+      await wait(40);
+    }
+    rate.value = "500";
+    rate.dispatchEvent(new Event("change", { bubbles: true }));
+    return { rows, pairs, rates, bad };
+  });
+  const distinct = new Set(enumsCase.rows.map((r) => r.values)).size;
+  check(
+    "器件预设与枚举：4 个预设都能写入、姿态对下拉运行期填充、解算频率各档可用",
+    enumsCase.rows.length === 4 &&
+      enumsCase.rows.every((r) => r.note > 10 && r.selected === r.id) &&
+      distinct >= 3 && // mpu9250 / icm42688 / bno055 至少三种不同的参数组合
+      enumsCase.pairs.length === 4 &&
+      enumsCase.pairs.includes("combo") &&
+      enumsCase.rates.length === 5,
+    "预设 " + enumsCase.rows.map((r) => r.id + "→" + r.values).join("｜") + "；不同组合 " + distinct +
+      " 种；姿态对 " + enumsCase.pairs.join("/") + "；解算频率档 " + enumsCase.rates.join("/"),
+  );
+
   // ---------- 深链覆盖度 + 真实往返 ----------
   // 「分享」把界面状态编码进 URL：漏掉一个控件 = 同学打开看到的现场和你不一样。
   // 这类覆盖度会**随控件增加而悄悄失效**（原先靠一次性人工审计，所以漏了协议、取反、

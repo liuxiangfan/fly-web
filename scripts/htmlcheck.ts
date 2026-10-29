@@ -15,6 +15,9 @@ import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { parse, type DefaultTreeAdapterMap } from "parse5";
 import { EXPERIMENTS } from "../src/ui/experiments";
+import { scenarios } from "../src/core/scenarios";
+import { QUAT_POSE_PAIRS } from "../src/scene/quatview";
+import { ACCEL_GATE_DEG, ACCEL_GATE_MAG_PCT } from "../src/estimators";
 
 type Node = DefaultTreeAdapterMap["node"];
 type Element = DefaultTreeAdapterMap["element"];
@@ -264,6 +267,77 @@ check(
     swOk = false;
   }
   check("PWA 清单与 Service Worker 合法", manifestOk && swOk, `manifest 图标 ${iconCount} 个；sw 语法=${swOk}`);
+}
+
+// ---------- 7c. 常量一致性：HTML 选项必须与代码里的权威列表一致 ----------
+// 这一组防的是「同一个列表存在三份、改一处忘两处」——文档说「10 个分区」而实际 13 个就是这么来的。
+// 能用真实模块的绝不抄字面量：下面 scenarios / 估计器 / 姿态对都是从源码导入的。
+{
+  const optionValues = (id: string): string[] => {
+    const sel = els.find((el) => el.tagName === "select" && attr(el, "id") === id);
+    if (!sel) return [];
+    return elements(sel)
+      .filter((e) => e.tagName === "option")
+      .map((o) => attr(o, "value") ?? "")
+      .filter((v) => v !== "");
+  };
+  const sameSet = (a: string[], b: string[]): boolean =>
+    a.length === b.length && [...a].sort().join(",") === [...b].sort().join(",");
+
+  const scenarioIds = Object.keys(scenarios);
+  const estIds = ["pure", "comp", "mahony", "madg", "kalman"];
+  const pairIds = QUAT_POSE_PAIRS.map((p) => p.id);
+
+  const problems: string[] = [];
+  if (!sameSet(optionValues("scenario-select"), scenarioIds)) {
+    problems.push("scenario-select ≠ scenarios（" + optionValues("scenario-select").join("/") + "）");
+  }
+  // source-select = 真值 + 五个算法
+  if (!sameSet(optionValues("source-select"), ["truth", ...estIds])) {
+    problems.push("source-select ≠ truth+五个算法（" + optionValues("source-select").join("/") + "）");
+  }
+  // 姿态对下拉是**运行期**由 QUAT_POSE_PAIRS 填充的（单一事实来源在 TS 里），
+  // 所以 HTML 里必须留空——留一份静态拷贝反而会与代码漂开。运行期选项数在冒烟里校验。
+  const pairOpts = optionValues("quat-pair-select");
+  if (pairOpts.length !== 0) {
+    problems.push("quat-pair-select 不该在 HTML 里写选项（应由 QUAT_POSE_PAIRS 运行期填充，实际有 " + pairOpts.length + " 个）");
+  }
+  if (pairIds.length < 4) problems.push("QUAT_POSE_PAIRS 少于 4 组？" + pairIds.join("/"));
+  // 下面几个的权威定义在 main.ts（不可导入），在检查里写成字面量并注明改哪里：
+  //   改了 main.ts 的 MagMode 联合类型 / solve-rate 处理 / 波特率下拉，必须同步这里与文档
+  if (!sameSet(optionValues("mag-mode"), ["yaw", "full"])) problems.push("mag-mode ≠ yaw|full");
+  const solveRates = optionValues("solve-rate");
+  if (!sameSet(solveRates, ["500", "250", "125", "100", "50"])) {
+    problems.push("solve-rate ≠ 500/250/125/100/50（" + solveRates.join("/") + "）");
+  }
+  const bauds = optionValues("serial-baud");
+  for (const need of ["9600", "115200", "921600", "2000000"]) {
+    if (!bauds.includes(need)) problems.push("波特率下拉缺 " + need);
+  }
+  // 固件与文档都把 921600 当默认（firmware/README.md）：下拉里必须有，且默认项就是它
+  const baudSel = els.find((el) => el.tagName === "select" && attr(el, "id") === "serial-baud");
+  const defOpt = baudSel
+    ? elements(baudSel).find((o) => o.tagName === "option" && attr(o, "selected") !== undefined)
+    : undefined;
+  if (defOpt && (attr(defOpt, "value") ?? "") !== "921600") {
+    problems.push("波特率默认值不是 921600（实际 " + (attr(defOpt, "value") ?? "") + "）");
+  }
+  // 门控阈值滑杆的默认值必须与估计器的常量一致（改了 ACCEL_GATE_* 就要改 HTML / 文档三处）
+  const gateDeg = els.find((el) => attr(el, "id") === "gate-deg");
+  const gateMag = els.find((el) => attr(el, "id") === "gate-mag");
+  const gateDegDefault = gateDeg ? Number(attr(gateDeg, "value")) : NaN;
+  const gateMagDefault = gateMag ? Number(attr(gateMag, "value")) : NaN;
+  if (gateDegDefault !== ACCEL_GATE_DEG) {
+    problems.push("gate-deg 默认 " + gateDegDefault + " ≠ ACCEL_GATE_DEG " + ACCEL_GATE_DEG);
+  }
+  if (Math.abs(gateMagDefault - ACCEL_GATE_MAG_PCT * 100) > 1e-9) {
+    problems.push("gate-mag 默认 " + gateMagDefault + " ≠ ACCEL_GATE_MAG_PCT×100 " + ACCEL_GATE_MAG_PCT * 100);
+  }
+  check(
+    "常量一致性：HTML 选项与代码权威列表一致",
+    problems.length === 0,
+    problems.length ? problems.slice(0, 4).join("；") : "机动剧本 / 数据来源 / 姿态对 / 磁形态 / 解算频率 / 波特率·默认值 / 门控阈值全部一致",
+  );
 }
 
 // ---------- 8. 实验库引用的控件都存在 ----------

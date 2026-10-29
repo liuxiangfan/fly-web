@@ -43,8 +43,11 @@ const LIMITS = {
   // 每轮扩容都对应新内容，所以上限是「跟着内容走」而不是「跟着报错走」；但这条线不能无限抬：
   // 若再涨 1–2 轮，正确做法是把文档拆成按需加载的 chunk（代价：全文搜索与打印需要改，
   // 因为现在的搜索是遍历 DOM、打印依赖一次性就绪），而不是继续抬上限。
-  html: 500 * 1024,           // index.html 原始体积
-  htmlGzip: 175 * 1024,       // index.html 传输体积（这才是用户真正下载的）
+  // 拆开量之后（本轮实测）：外壳 59 KB、内联文档 441 KB。
+  html: 600 * 1024,           // index.html 原始体积（外壳 + 文档，按内容增长）
+  htmlGzip: 195 * 1024,       // index.html 传输体积（用户真正下载的；实测 173 KB）
+  htmlShell: 100 * 1024,      // **应用外壳硬上限**：骨架/面板/覆盖层/弹窗。这是事故报警线
+  htmlDocs: 700 * 1024,       // 内联文档上限（宽松，只防「同一段内容被复制粘贴进两页」这类失控）
   // 主包 JS（three 单独成 chunk，不计入）。历史：开工时 111 KB → 加 INS/协议/挑战/BLE
   // 到 172 KB → 抽出文档演示模块（-10 KB）→ 再加引导课程（+10 KB）到 182 KB。
   // 引导课程那 18 KB 源码是**教学内容正文**（13 步的讲稿），与文档正文同性质：
@@ -53,6 +56,49 @@ const LIMITS = {
   // 实测 72 KB（gzip）——上限留约 11% 余量给下一轮功能，超了就说明又该审视体积了
   mainJsGzip: 80 * 1024,
 };
+
+/**
+ * 把 index.html 拆成「应用外壳」与「内联文档」两部分。
+ * 为什么要拆：文档全部内联是本产品的核心设计（单文件 + 离线 PWA + 全文搜索 + 打印），
+ * 所以文档会**随着内容增长而合法地变大**；而外壳（骨架/面板/覆盖层/弹窗）一旦膨胀
+ * 一定是事故（误引入、误复制）。把两者放在一个上限里，结果是「内容一涨就报警」，
+ * 逼着人抬上限——那正是我们要避免的「跟着报错走」。
+ * 拆开之后：外壳有硬上限（小、灵敏），文档有宽松上限（大、只防失控）。
+ * 定位方式：从 .doc-pages 容器开始做 div 配对扫描（不依赖注释标记，构建压缩后依然成立）。
+ */
+function splitShellAndDocs(htmlPath, text) {
+  const start = text.indexOf('<div class="doc-pages">');
+  if (start < 0) {
+    console.error(`找不到 .doc-pages 容器：${htmlPath}`);
+    process.exit(2);
+  }
+  let depth = 0;
+  let i = start;
+  let end = -1;
+  while (i < text.length) {
+    if (text.startsWith("<div", i)) depth++;
+    else if (text.startsWith("</div>", i)) {
+      depth--;
+      if (depth === 0) {
+        end = i + 6;
+        break;
+      }
+    }
+    i++;
+  }
+  if (end < 0) {
+    console.error(`.doc-pages 容器没有闭合：${htmlPath}`);
+    process.exit(2);
+  }
+  const docsText = text.slice(start, end);
+  return {
+    docs: Buffer.byteLength(docsText, "utf8"),
+    shell: Buffer.byteLength(text, "utf8") - Buffer.byteLength(docsText, "utf8"),
+    docsGzip: gzipSync(Buffer.from(docsText, "utf8"), { level: 9 }).length,
+  };
+}
+const htmlText = readFileSync(html[0], "utf8");
+const split = splitShellAndDocs(html[0], htmlText);
 
 const mainJs = js.filter((f) => !/three-/.test(f));
 const metrics = [
@@ -64,6 +110,18 @@ const metrics = [
     value: sizeOf(html),
     limit: LIMITS.html,
     detail: `${(sizeOf(html) / 1024).toFixed(0)} KB（gzip ${(gzipSync(readFileSync(html[0]), { level: 9 }).length / 1024).toFixed(0)} KB）`,
+  },
+  {
+    name: "index.html · 应用外壳（骨架/面板/弹窗）",
+    value: split.shell,
+    limit: LIMITS.htmlShell,
+    detail: `${(split.shell / 1024).toFixed(0)} KB`,
+  },
+  {
+    name: "index.html · 内联文档（16 页，可打印/可搜索）",
+    value: split.docs,
+    limit: LIMITS.htmlDocs,
+    detail: `${(split.docs / 1024).toFixed(0)} KB（gzip ${(split.docsGzip / 1024).toFixed(0)} KB）`,
   },
   {
     name: "index.html（gzip 传输体积）",
