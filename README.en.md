@@ -168,13 +168,11 @@ Includes three interactive demos (**non-commutativity of rotation order**, **1-D
 **complementary filter in the frequency domain**), the gimbal lock **matrix evidence**, the **magnetometer
 calibration dance**, and a **measured data table** for the algorithmic consequences of gimbal lock.
 
-**The other six modules** — "Experiments & exercises" (a **teacher's guide** with three time-boxed lesson plans,
-six predict-then-verify questions, eight common misconceptions and how to correct them live, plus homework
-suggestions; three **self-check milestones**; three learning paths; 17 indexed experiments; 12 self-test
-questions whose answers are experiments), "Hardware & firmware" (frame-protocol table / wiring /
+**The other six modules** — "Experiments & exercises" (three learning paths + 17 indexed experiments +
+12 self-test questions whose answers are experiments), "Hardware & firmware" (frame-protocol table / wiring /
 sign conventions / real-mode semantics / debugging steps), "Troubleshooting" (wrong curves / cannot connect /
-page problems / performance — four symptom tables), "Terminology & symbols" (four symbol tables plus a **printable formula cheat sheet**: ten groups of formulas,
-each noting where it is used in the device), "References" (26 sources, each annotated with where in the
+page problems / performance — four symptom tables), "Terminology & symbols" (quaternion · sensor · algorithm ·
+coordinates, each entry citing where it is used), "References" (26 sources, each annotated with where in the
 device it applies, 15 of them external links), "About this device" (**an honest list of simplifications and
 deviations** / technical stance / changelog / acknowledgements).
 

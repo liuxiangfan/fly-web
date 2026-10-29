@@ -118,7 +118,7 @@ const metrics = [
     detail: `${(split.shell / 1024).toFixed(0)} KB`,
   },
   {
-    name: "index.html · 内联文档（16 页，可打印/可搜索）",
+    name: "index.html · 内联文档（14 页，可打印/可搜索）",
     value: split.docs,
     limit: LIMITS.htmlDocs,
     detail: `${(split.docs / 1024).toFixed(0)} KB（gzip ${(split.docsGzip / 1024).toFixed(0)} KB）`,
