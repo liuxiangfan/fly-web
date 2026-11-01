@@ -4,7 +4,7 @@
  */
 import { World } from "../src/core/world";
 import { manualTarget, scenarios } from "../src/core/scenarios";
-import { G_ACC, MAG_WORLD_NED, simulateImu, simulateMag, softIronGains, type ImuParams } from "../src/core/imu";
+import { G_ACC, MAG_WORLD_NED, SOFT_IRON_M, simulateImu, simulateMag, softIronGains, type ImuParams, type ImuSample } from "../src/core/imu";
 import { Gauss, mulberry32 } from "../src/core/rng";
 import {
   ATTITUDE_BASE_FIELDS,
@@ -16,6 +16,8 @@ import {
   buildMavlinkRawImu,
   computeCrcExtra,
   frameDtSec,
+  frameIntervalSec,
+  logIntervalSec,
   parseFrame,
   parseMavlinkFrame,
   parseTextLine,
@@ -44,6 +46,8 @@ import {
   qId,
   qIntegrate,
   qLog,
+  qMul,
+  qConj,
   qNorm,
   qRot,
   qRotInv,
@@ -66,13 +70,98 @@ import {
   toDisplayQ,
 } from "../src/core/gimbal";
 import { narrateGimbal } from "../src/ui/mode";
-import { calibrateMag, fitMagSphere, applyMagCalibration } from "../src/core/magcal";
+import {
+  calibrateMag,
+  fitMagSphere,
+  applyMagCalibration,
+  calibrateMagFull,
+  calibrateMagWithValidation,
+  magFieldResidual,
+  splitFitValidate,
+  verifyMagCalibration,
+} from "../src/core/magcal";
 import { ErrorTracker } from "../src/core/stats";
 import { b64urlDecode, b64urlEncode } from "../src/ui/b64";
-import { parseImuCsv } from "../src/core/replay";
+import { parseImuCsv, type ReplayFrame } from "../src/core/replay";
 import { allanDeviation, allanSlope, synthesizeGyroAngle } from "../src/core/allan";
 import { InsIntegrator, driftLaw, G_NED } from "../src/core/ins";
 import { EXPERIMENTS } from "../src/ui/experiments";
+import {
+  cloneExperimentConfig,
+  defaultExperimentConfig,
+  migrateExperimentConfig,
+  parseAccelCalibration,
+  parseMagCalibration,
+  validateExperimentConfig,
+  type ExperimentConfig,
+} from "../src/core/experiment-config";
+import { SolveLoop } from "../src/core/solve-loop";
+import {
+  MetricAccumulator,
+  STATS_CAP,
+  STATS_RESERVOIR_CAP,
+  resultDigest,
+  runExperiment,
+  runExperimentDetailed,
+  runTrace,
+  summarizeRuns,
+  runMonteCarlo,
+  seedSequence,
+  so3ErrorSplit,
+} from "../src/core/runner";
+import { hasPhysicalReference, referenceKindOf, sourceLabelOf } from "../src/core/data-source";
+import {
+  REF_GRAVITY_NED,
+  REF_MAG_NORTH_NED,
+  attitudeErrorDeg,
+  observationsDegenerate,
+  syntheticObservations,
+  triad,
+  wahbaCost,
+  wahbaQuest,
+  weightedSolution,
+  type VectorObservation,
+} from "../src/core/attitude-determination";
+import { aliasHz, coningSweep } from "../src/core/coning";
+import { SensorPipeline } from "../src/core/sensor-pipeline";
+import { accelChannel } from "../src/core/imu";
+import { pushBounded } from "../src/core/serial-queue";
+import { ReplayPlayer } from "../src/core/replay-player";
+import { ReconnectPolicy } from "../src/core/reconnect";
+import { accelVerdict, synthesizeAccelVerification } from "../src/core/calib-verify";
+import { calibrationStaleness, fingerprintOf } from "../src/core/calib-meta";
+import {
+  ARCHIVE_KIND,
+  ARCHIVE_SCHEMA,
+  buildArchive,
+  describeArchiveRun,
+  parseArchive,
+  type ArchiveRunInfo,
+} from "../src/core/experiment-archive";
+import { EXPERIMENT_SCHEMA_VERSION } from "../src/core/experiment-config";
+import { batchRowsHtml, batchStatusText } from "../src/ui/batch-table";
+import {
+  accelResultHtml,
+  accelStatusText,
+  accelVerifyLineHtml,
+  magResultHtml,
+  magStatusText,
+  magVerifyLineHtml,
+} from "../src/ui/calib-panel";
+import {
+  ACCEL_MAX_COND,
+  applyAccelCalibration,
+  assessStaticWindow,
+  calibrateAccel,
+  conditionNumber3,
+  faceMatchesReading,
+  faceTrueVector,
+  G_ACCEL,
+  synthesizeAccelSamples,
+  validateAccelCalibration,
+  type AccelCalibrationSample,
+  verifyAccelCalibration,
+} from "../src/core/accelcal";
 
 const H = 1 / 500;
 let failures = 0;
@@ -215,17 +304,16 @@ const dirty: ImuParams = { gyroBiasDps: 1, gyroNoiseDps: 0.2, gyroWalkDps: 0, gy
   );
 }
 
-// 5b. 手动模式（回归）：滑块写入共享目标 manualTarget 后姿态应跟踪到位
+// 5b. 手动模式（回归）：目标角写在**世界实例**上后姿态应跟踪到位
+//     （历史版本写全局 scenarios.manualTarget，导致同配置不可复现；见 5c）
 {
   const world = new World(scenarios.manual);
-  manualTarget.rollDeg = 40;
-  manualTarget.pitchDeg = -30;
-  manualTarget.yawDeg = 90;
+  world.setManualTarget([40, -30, 90]);
   for (let i = 0; i < 1000; i++) world.step(H, clean);
   const e = qToEuler(world.q);
   const err =
     Math.abs(e.roll - 40 * RAD) * DEG + Math.abs(e.pitch + 30 * RAD) * DEG + Math.abs(e.yaw - 90 * RAD) * DEG;
-  check("手动模式滑块驱动姿态", err < 3, `2s 后三轴误差之和 ${err.toFixed(2)}°`);
+  check("手动模式目标驱动姿态", err < 3, `2s 后三轴误差之和 ${err.toFixed(2)}°`);
   manualTarget.rollDeg = 0;
   manualTarget.pitchDeg = 0;
   manualTarget.yawDeg = 0;
@@ -1936,6 +2024,2092 @@ const dirty: ImuParams = { gyroBiasDps: 1, gyroNoiseDps: 0.2, gyroWalkDps: 0, gy
       Math.abs(kEst / 0.02 - 1) < 0.35, // K=0.02 的量级（单次实现有统计涨落）
     `白噪声段斜率 ${slopeW.toFixed(3)}（理论 −0.5）、σ(1s)=${sigma1.toFixed(4)}（N=0.01）；` +
       `随机游走段斜率 ${slopeR.toFixed(3)}（理论 +0.5）、由 σ(5s) 反推 K=${kEst.toFixed(4)}（真值 0.02）`,
+  );
+}
+
+// 54. 实验配置 + 确定性运行内核：版本迁移、校验、同 seed 逐位复现、磁链隔离、种子序列
+//     这组守护把「可复现」从参数快照提升为可验证性质：
+//     · 同配置同 seed 两次 runExperiment 的 digest 必须完全一致；
+//     · 只改磁噪声不能改变同 seed 的陀螺/加计读数（独立随机流）；
+//     · 不同 seed 必须产生不同结果，否则种子没有真正生效。
+{
+  const base = defaultExperimentConfig();
+  const round = migrateExperimentConfig(JSON.parse(JSON.stringify(base)));
+  const clean = defaultExperimentConfig();
+  clean.seed = 777;
+  clean.durationSec = 2;
+  clean.imu = { ...clean.imu, gyroNoiseDps: 0.3, magNoise: 0 };
+  const dirty = cloneExperimentConfig(clean);
+  dirty.imu.magNoise = 1.5;
+
+  const r1 = runExperiment(clean);
+  const r2 = runExperiment(clean);
+  const r3 = runExperiment(dirty);
+  const rSeed = runExperiment({ ...clean, seed: 778 });
+  const digest = (r: ReturnType<typeof runExperiment>): string => resultDigest(r);
+  const same = digest(r1) === digest(r2);
+  const magChangedMetrics = digest(r1) !== digest(r3);
+  // 逐轴比较 IMU 读数：用两个同 seed 的 World 前 200 步验证磁链隔离
+  const wA = new World(scenarios.hover, 777);
+  const wB = new World(scenarios.hover, 777);
+  let imuIsolated = true;
+  for (let i = 0; i < 200; i++) {
+    const a = wA.step(H, { ...clean.imu, magNoise: 0 });
+    const b = wB.step(H, { ...dirty.imu, magNoise: 1.5 });
+    if (
+      a.gyro.some((v, k) => v !== b.gyro[k]) ||
+      a.accel.some((v, k) => v !== b.accel[k])
+    ) {
+      imuIsolated = false;
+      break;
+    }
+  }
+  const valid = validateExperimentConfig(clean).length === 0;
+  const bad = cloneExperimentConfig(clean);
+  bad.durationSec = NaN;
+  bad.solveRateHz = 0;
+  const catchesBad = validateExperimentConfig(bad).length >= 2;
+  const seeds = seedSequence(42, 5);
+  const seeds2 = seedSequence(42, 5);
+  const unique = new Set(seeds).size === seeds.length;
+  const diffSeed = digest(r1) !== digest(rSeed);
+
+  check(
+    "实验配置与确定性运行内核（迁移/校验/复现/磁链隔离/种子）",
+    JSON.stringify(round) === JSON.stringify(base) &&
+      valid &&
+      catchesBad &&
+      same &&
+      magChangedMetrics &&
+      imuIsolated &&
+      unique &&
+      JSON.stringify(seeds) === JSON.stringify(seeds2) &&
+      diffSeed,
+    `往返一致=${JSON.stringify(round) === JSON.stringify(base)}；校验通过=${valid}、坏配置命中=${catchesBad}；` +
+      `同 seed digest 一致=${same}、不同 seed 不同=${diffSeed}；磁噪声变化改变整体结果=${magChangedMetrics}、` +
+      `但不改变陀螺/加计前 200 步=${imuIsolated}；seedSequence 稳定且互异=${unique && JSON.stringify(seeds) === JSON.stringify(seeds2)}`,
+  );
+}
+
+// 55. 数据源/误差参考语义：模拟有物理真值，真实/BLE/回放默认只有 Mahony 算法间基准
+{
+  const sim = { kind: "simulation" as const, externalReference: false };
+  const replay = { kind: "replay" as const, externalReference: false };
+  const replayTruth = { kind: "replay" as const, externalReference: true };
+  const ok =
+    hasPhysicalReference(sim) &&
+    !hasPhysicalReference(replay) &&
+    hasPhysicalReference(replayTruth) &&
+    referenceKindOf(replay) === "mahony" &&
+    referenceKindOf(replayTruth) === "external" &&
+    sourceLabelOf(replay) === "离线回放";
+  check("数据源与误差参考类型（模拟真值 / Mahony 基准 / 外部参考）", ok,
+    `模拟=${referenceKindOf(sim)}；回放=${referenceKindOf(replay)}；带回放真值=${referenceKindOf(replayTruth)}；标签=${sourceLabelOf(replay)}`);
+}
+
+// 56. 时间完整性与回放有效性：空隙保留真实时间；坏样本拒绝、外部真值、引号、重复列
+{
+  const gap = frameIntervalSec(0, 300); // 300 ms 真实空洞
+  const clamp = frameDtSec(0, 300); // 旧接口仍用于“安全单步”
+  const quoted = parseImuCsv(
+    [
+      "t_s,gx,gy,gz,ax,ay,az,mx,my,mz,truth_qw,truth_qx,truth_qy,truth_qz",
+      ...Array.from({ length: 25 }, (_, i) =>
+        `${i * 0.01},1,0,0,0,0,9.8,30,"20",0,1,0,0,0`,
+      ),
+    ].join("\n"),
+  );
+  const badRows = parseImuCsv(
+    [
+      "t_s,gx,gy,gz,ax,ay,az",
+      ...Array.from({ length: 30 }, (_, i) => (i % 10 === 5 ? `${i * 0.01},nan,0,0,0,0,9.8` : `${i * 0.01},1,0,0,0,0,9.8`)),
+    ].join("\n"),
+  );
+  const dup = parseImuCsv(["t_s,gx,gy,gz,ax,ay,az,gyro_x_dps", ...Array.from({ length: 21 }, (_, i) => `${i},1,0,0,0,0,9.8,1`)].join("\n"));
+  const quotedOk = quoted.error === undefined && quoted.frames[0]?.gyroDps[0] === 1;
+  const truthOk = quoted.hasTruth && quoted.frames.every((f) => f.qTrue !== undefined);
+  const badRejected = badRows.error === undefined && badRows.invalidRows === 3 && badRows.frames.length === 27;
+  const dupRejected = Boolean(dup.error && dup.error.includes("歧义"));
+  check(
+    "回放时间完整性 + 坏样本拒绝 + 外部真值 + 引号/重复列",
+    Math.abs(gap - 0.3) < 1e-9 &&
+      clamp < gap &&
+      quotedOk && truthOk && badRejected && dupRejected,
+    `300 ms 空洞：真实间隔 ${gap.toFixed(3)} s（旧安全步长 ${clamp.toFixed(3)} s）；` +
+      `带引号 CSV=${quotedOk}、外部真值=${truthOk}；坏样本拒绝 ${badRows.invalidRows}/30（应 3）、保留 ${badRows.frames.length}；` +
+      `重复列报错=${dupRejected}`,
+  );
+}
+
+// 57. 卡尔曼统计诊断：NIS/NEES 有限且非负；χ² 门控与固定角门控都能运行并给出可比较指标
+{
+  const cfg = defaultExperimentConfig();
+  cfg.durationSec = 5;
+  cfg.seed = 2468;
+  const angle = runExperiment(cfg);
+  const chi = cloneExperimentConfig(cfg);
+  chi.estimators.kalman.kalmanGate = "mahalanobis";
+  chi.estimators.kalman.kalmanChi2 = 11.345;
+  const mah = runExperiment(chi);
+  const ka = angle.metrics.find((m) => m.id === "kalman")!;
+  const km = mah.metrics.find((m) => m.id === "kalman")!;
+  const finite = (v: number | undefined): boolean => typeof v === "number" && Number.isFinite(v) && v >= 0;
+  const ok =
+    finite(ka.neesThetaMean) && finite(ka.neesBiasMean) && finite(ka.nisAccelMean) &&
+    finite(ka.accelAcceptPct) && finite(km.neesThetaMean) && finite(km.nisAccelMean) &&
+    (ka.accelAcceptPct ?? 0) > 0 && (ka.accelAcceptPct ?? 0) <= 100;
+  check(
+    "卡尔曼诊断：NIS/NEES 与两种门控形态",
+    ok,
+    `固定角：NEESθ=${ka.neesThetaMean?.toFixed(2)}、NEESb=${ka.neesBiasMean?.toFixed(2)}、` +
+      `NISa=${ka.nisAccelMean?.toFixed(2)}、接受率=${ka.accelAcceptPct?.toFixed(1)}%；` +
+      `χ²：NEESθ=${km.neesThetaMean?.toFixed(2)}、NISa=${km.nisAccelMean?.toFixed(2)}、接受率=${km.accelAcceptPct?.toFixed(1)}%`,
+  );
+}
+
+// 58. 单帧姿态确定：TRIAD/QUEST 在干净观测下回到真值；权重生效；共线观测被拒
+{
+  const qTrue = qFromEuler(25 * RAD, -35 * RAD, 70 * RAD);
+  const cleanObs = syntheticObservations(qTrue, [REF_GRAVITY_NED, REF_MAG_NORTH_NED]);
+  const tri = triad(cleanObs);
+  const que = wahbaQuest(cleanObs);
+  const trueCost = wahbaCost(qTrue, cleanObs);
+  const errT = tri ? attitudeErrorDeg(tri.q, qTrue) : NaN;
+  const errQ = que ? attitudeErrorDeg(que.q, qTrue) : NaN;
+  const weighted = syntheticObservations(qTrue, [REF_GRAVITY_NED, REF_MAG_NORTH_NED], [0, 6], [0, 0]);
+  const wLow = weightedSolution(weighted, 1);
+  const wHigh = weightedSolution(weighted, 50);
+  // 权重增大 → 解更靠近被扰动的那条观测（误差通常变小）
+  const costLow = wLow ? wahbaCost(wLow.q, [{ ...weighted[1], weight: 50 }, weighted[0]]) : NaN;
+  const costHigh = wHigh ? wahbaCost(wHigh.q, [{ ...weighted[1], weight: 50 }, weighted[0]]) : NaN;
+  const collinear: [VectorObservation, VectorObservation] = [
+    { world: [0, 0, 1], body: [0, 0, 1] },
+    { world: [0, 0, 2], body: [0, 0, 2] },
+  ];
+  const ok =
+    Boolean(tri) && Boolean(que) &&
+    errT < 1e-6 && errQ < 1e-6 &&
+    trueCost < 1e-20 &&
+    observationsDegenerate(collinear[0], collinear[1]) &&
+    triad(collinear) === null && wahbaQuest(collinear) === null &&
+    Number.isFinite(costLow) && Number.isFinite(costHigh) && costHigh <= costLow + 1e-9;
+  check(
+    "单帧姿态确定：TRIAD/QUEST 干净解、Wahba 代价、权重与共线退化",
+    ok,
+    `TRIAD 误差 ${errT.toExponential(1)}°、QUEST 误差 ${errQ.toExponential(1)}°、真值代价 ${trueCost.toExponential(1)}；` +
+      `加权代价 w=1 → ${costLow.toFixed(4)}、w=50 → ${costHigh.toFixed(4)}（应 ≤ 前者）；共线观测被拒=true`,
+  );
+}
+
+// 59. 圆锥效应与混叠：有限采样率产生与采样周期平方同阶的净漂移；混叠折回频率可算
+{
+  const pts = coningSweep({ freqHz: 12, ampDps: 120, durationSec: 4 });
+  const byRate = new Map(pts.map((p) => [p.rateHz, p.errDeg]));
+  const e500 = byRate.get(500) ?? NaN;
+  const e50 = byRate.get(50) ?? NaN;
+  // 采样率每降一半，圆锥误差应显著上升（近似 ×4，但允许数值参考带来的偏差）
+  const monotone = pts.every((p, i) => i === 0 || p.errDeg >= pts[i - 1].errDeg - 1e-12);
+  const ratio = e50 / e500;
+  const aliasOk = aliasHz(31, 50) === 19 && aliasHz(12, 50) === 12 && aliasHz(60, 50) === 10;
+  check(
+    "圆锥效应：误差随采样率下降而上升；混叠折回频率正确",
+    e500 < 0.05 && e50 > 0.5 && monotone && ratio > 20 && aliasOk,
+    `12 Hz / 120°/s 圆锥 4 s：500 Hz → ${e500.toFixed(3)}°、50 Hz → ${e50.toFixed(3)}°（比值 ${ratio.toFixed(1)}×）；` +
+      `误差随采样率单调上升=${monotone}；混叠 31 Hz@50 Hz → ${aliasHz(31, 50)} Hz、60 Hz@50 Hz → ${aliasHz(60, 50)} Hz`,
+  );
+}
+
+// 60. 加速度计六面校准：已知 M/bias 可恢复；带噪残差小；应用后更接近真实比力；朝向不足被拒
+{
+  const M = [1.02, 0.02, -0.01, -0.015, 0.98, 0.03, 0.02, -0.012, 1.01];
+  const bias: V3 = [0.05, -0.03, 0.08];
+  const clean = calibrateAccel(synthesizeAccelSamples(M, bias, 0));
+  const noisy = calibrateAccel(synthesizeAccelSamples(M, bias, 0.02, 99));
+  const mErr = clean ? Math.max(...clean.M.map((v, i) => Math.abs(v - M[i]))) : NaN;
+  const bErr = clean ? Math.max(...clean.bias.map((v, i) => Math.abs(v - bias[i]))) : NaN;
+  // 应用校准到某一面的原始读数：应回到真实重力投影 (±g 在对应轴上)
+  const raw = synthesizeAccelSamples(M, bias, 0).find((s) => s.face === "-y")!;
+  const trueVec = faceTrueVector("-y");
+  const cal = applyAccelCalibration(raw.raw, noisy);
+  const applyErr = Math.max(...cal.map((v, i) => Math.abs(v - trueVec[i])));
+  const insufficient = calibrateAccel(synthesizeAccelSamples(M, bias, 0).slice(0, 3));
+  const ok =
+    clean !== null && noisy !== null &&
+    mErr < 1e-9 && bErr < 1e-9 &&
+    Math.max(...noisy.rmse) < 0.05 &&
+    applyErr < 0.06 &&
+    insufficient === null;
+  check(
+    "加速度计六面校准：矩阵/偏置可恢复、应用后回到 ±g、朝向不足被拒",
+    ok,
+    `无噪 M 最大误差 ${mErr.toExponential(1)}、bias 误差 ${bErr.toExponential(1)}；` +
+      `带噪残差 RMS ${Math.max(...(noisy?.rmse ?? [NaN])).toFixed(4)} m/s²；应用后 -y 面最大偏差 ${applyErr.toFixed(4)} m/s²；` +
+      `只给 3 个朝向返回 null=${insufficient === null}`,
+  );
+}
+
+// 61. online-fork：运行期状态复制后可继续逐位一致；卡尔曼协方差重置保持对称半正定
+{
+  const params: ImuParams = { ...dirty };
+  const qTrue = qFromEuler(15 * RAD, 10 * RAD, 25 * RAD);
+  const g = new Gauss(mulberry32(2026));
+  const mahA = new MahonyEstimator();
+  const madA = new MadgwickEstimator();
+  const kalA = new KalmanEstimator();
+  const feed = (ests: Estimator[], samples: ReturnType<typeof simulateImu>[]): void => {
+    for (const s of samples) for (const e of ests) e.update(s.gyro, s.accel, s.mag, H);
+  };
+  const warm = Array.from({ length: 500 }, (_, i) => simulateImu(qTrue, [0.1, -0.05, 0.2], i * H, params, g, 1));
+  feed([mahA, madA, kalA], warm);
+  const mahB = new MahonyEstimator();
+  const madB = new MadgwickEstimator();
+  const kalB = new KalmanEstimator();
+  mahB.copyRuntimeFrom!(mahA);
+  madB.copyRuntimeFrom!(madA);
+  kalB.copyRuntimeFrom!(kalA);
+  // 分叉后的输入必须对两组完全相同（同一批样本），否则测到的是噪声差异而不是状态复制
+  const after = Array.from({ length: 500 }, (_, i) => simulateImu(qTrue, [0.1, -0.05, 0.2], (500 + i) * H, params, g, 1));
+  feed([mahA, madA, kalA], after);
+  feed([mahB, madB, kalB], after);
+  const errMah = qAngleBetween(mahA.q, mahB.q) * DEG;
+  const errMad = qAngleBetween(madA.q, madB.q) * DEG;
+  const errKal = qAngleBetween(kalA.q, kalB.q) * DEG;
+  const pA = kalA.getCovariance();
+  const pB = kalB.getCovariance();
+  const covSame = pA.every((v, i) => Math.abs(v - pB[i]) < 1e-18);
+
+  // 协方差重置路径：P 必须保持对称、特征值非负，姿态有限
+  const kalR = new KalmanEstimator();
+  kalR.resetCovOnInject = true;
+  const g2 = new Gauss(mulberry32(77));
+  for (let i = 0; i < 3000; i++) {
+    const s = simulateImu(qTrue, [0.2, 0, -0.1], i * H, params, g2, 1);
+    kalR.update(s.gyro, s.accel, s.mag, H);
+  }
+  const P = kalR.getCovariance();
+  const sym = P.every((v, i) => {
+    const row = Math.floor(i / 6);
+    const col = i % 6;
+    return Math.abs(v - P[col * 6 + row]) < 1e-15;
+  });
+  const block = [P[0], P[1], P[2], P[6], P[7], P[8], P[12], P[13], P[14]];
+  const eig = symmetricEigen3(block).values;
+  const psd = eig.every((v) => v > -1e-12) && kalR.q.w !== undefined;
+  check(
+    "online-fork 状态复制 + 卡尔曼 P←GPGᵀ：复现一致、协方差保持对称半正定",
+    errMah < 1e-12 && errMad < 1e-12 && errKal < 1e-12 && covSame && sym && psd,
+    `复制后 500 步最大姿态差：Mahony ${errMah.toExponential(1)}°、Madgwick ${errMad.toExponential(1)}°、` +
+      `卡尔曼 ${errKal.toExponential(1)}°（P 逐位一致=${covSame}）；重置路径对称=${sym}、最小特征值 ${Math.min(...eig).toExponential(1)}`,
+  );
+}
+
+// 62. 完整 3×3 椭球校准：交叉项软铁下残差与方向误差都应优于对角模型；朝向不足被拒
+{
+  const B = 50;
+  const g = 0.35;
+  const hard: V3 = [9, -6, 13];
+  const build = (S: number[][], seed: number): { raws: V3[]; trues: V3[] } => {
+    const rnd = mulberry32(seed);
+    const raws: V3[] = [];
+    const trues: V3[] = [];
+    for (let i = 0; i < 240; i++) {
+      let x = 0, y = 0, z = 0, n = 0;
+      while (n < 1e-6) {
+        x = 2 * rnd() - 1; y = 2 * rnd() - 1; z = 2 * rnd() - 1;
+        n = Math.hypot(x, y, z);
+      }
+      const dir: V3 = [x / n, y / n, z / n];
+      const t: V3 = [B * dir[0], B * dir[1], B * dir[2]];
+      const s = (row: number): number => S[row][0] * t[0] + S[row][1] * t[1] + S[row][2] * t[2];
+      raws.push([s(0) + hard[0], s(1) + hard[1], s(2) + hard[2]]);
+      trues.push(t);
+    }
+    return { raws, trues };
+  };
+  // 非对称软铁（含交叉项）：形状可校正，但方向会残留一个“未知旋转”分量——这是只凭点云无法识别的
+  const nonSym = build(
+    [
+      [1 + g * SOFT_IRON_M[0][0], g * SOFT_IRON_M[0][1], g * SOFT_IRON_M[0][2]],
+      [g * SOFT_IRON_M[1][0], 1 + g * SOFT_IRON_M[1][1], g * SOFT_IRON_M[1][2]],
+      [g * SOFT_IRON_M[2][0], g * SOFT_IRON_M[2][1], 1 + g * SOFT_IRON_M[2][2]],
+    ],
+    4242,
+  );
+  // 对称软铁（工程上常假设的形态）：方向也可恢复
+  const sym = build(
+    [[1.2, 0.1, 0.05], [0.1, 0.85, 0.08], [0.05, 0.08, 1.25]],
+    2026,
+  );
+  const diagN = calibrateMag(nonSym.raws);
+  const fullN = calibrateMagFull(nonSym.raws, B);
+  const diagS = calibrateMag(sym.raws);
+  const fullS = calibrateMagFull(sym.raws, B);
+  const dirErr = (cal: typeof diagN, data: { raws: V3[]; trues: V3[] }): number => {
+    if (!cal) return NaN;
+    let max = 0;
+    for (let i = 0; i < data.raws.length; i++) {
+      const c = applyMagCalibration(data.raws[i], cal);
+      const ct = data.trues[i];
+      const dot = (c[0] * ct[0] + c[1] * ct[1] + c[2] * ct[2]) / (Math.hypot(...c) * Math.hypot(...ct) || 1);
+      max = Math.max(max, (Math.acos(Math.max(-1, Math.min(1, dot))) * 180) / Math.PI);
+    }
+    return max;
+  };
+  const dErrS = dirErr(diagS, sym);
+  const fErrS = dirErr(fullS, sym);
+  const partial = calibrateMagFull(nonSym.raws.slice(0, 8), B);
+  const ok =
+    Boolean(diagN && fullN && diagS && fullS) &&
+    fullN!.residual < diagN!.residual * 0.5 &&
+    fErrS < dErrS &&
+    fErrS < 2 &&
+    fullS!.residual < 0.01 &&
+    partial === null;
+  check(
+    "完整 3×3 磁椭球校准：形状校正优于对角、对称软铁方向可恢复、覆盖不足拒绝",
+    ok,
+    `非对称软铁残差 ${(diagN?.residual ?? NaN).toFixed(4)} → ${(fullN?.residual ?? NaN).toFixed(4)}；` +
+      `对称软铁方向误差 ${dErrS.toFixed(2)}° → ${fErrS.toFixed(2)}°（残差 ${(fullS?.residual ?? NaN).toFixed(5)}）；` +
+      `8 点覆盖返回 null=${partial === null}`,
+  );
+}
+
+// 63. 传感器前端流水线：默认逐位透传；整帧延迟等于历史帧；带宽衰减高频；延迟差让三路不同步
+{
+  const h = 1 / 500;
+  const mk = (i: number) => {
+    const t = i * h;
+    const s = Math.sin(2 * Math.PI * 50 * t);
+    return { gyro: [s, 0, 0] as V3, accel: [0, s, 9.80665] as V3, mag: [30, 0, 40] as V3 };
+  };
+  const pass = new SensorPipeline();
+  const p0: ImuParams = { ...clean };
+  let passthrough = true;
+  for (let i = 0; i < 50; i++) {
+    const inS = mk(i);
+    const out = pass.push(inS, p0, h);
+    if (out.gyro[0] !== inS.gyro[0] || out.accel[1] !== inS.accel[1]) passthrough = false;
+  }
+  const delayed = new SensorPipeline();
+  const pDelay: ImuParams = { ...clean, sensorDelayMs: 10 };
+  const hist: ReturnType<typeof mk>[] = [];
+  for (let i = 0; i < 60; i++) {
+    const inS = mk(i);
+    hist.push(inS);
+    delayed.push(inS, pDelay, h);
+  }
+  // 10 ms @500 Hz = 5 帧：第 59 帧的输出应对应第 59−5=54 帧的输入
+  const lastOut = delayed.push(mk(60), pDelay, h);
+  const delayOk = Math.abs(lastOut.gyro[0] - mk(55).gyro[0]) < 1e-12;
+  const bw = new SensorPipeline();
+  const pBw: ImuParams = { ...clean, sensorBandwidthHz: 20 };
+  let ampIn = 0;
+  let ampOut = 0;
+  for (let i = 0; i < 400; i++) {
+    const inS = mk(i);
+    const out = bw.push(inS, pBw, h);
+    if (i > 100) {
+      ampIn = Math.max(ampIn, Math.abs(inS.gyro[0]));
+      ampOut = Math.max(ampOut, Math.abs(out.gyro[0]));
+    }
+  }
+  const bwAtten = ampOut / ampIn;
+  const skew = new SensorPipeline();
+  const pSkew: ImuParams = { ...clean, sensorDelayMs: 10, sensorDelaySkewMs: 10 };
+  const inSkew: ReturnType<typeof mk>[] = [];
+  for (let i = 0; i < 60; i++) {
+    const inS = mk(i);
+    inSkew.push(inS);
+    skew.push(inS, pSkew, h);
+  }
+  const skewOut = skew.push(mk(60), pSkew, h);
+  const gyroNow = Math.abs(skewOut.gyro[0] - mk(60).gyro[0]) < 1e-12; // base−skew = 0
+  const accel5 = Math.abs(skewOut.accel[1] - mk(55).accel[1]) < 1e-12; // base = 10 ms = 5 帧
+  check(
+    "传感器流水线：透传逐位一致、延迟=历史帧、带宽衰减高频、延迟差三路不同步",
+    passthrough && delayOk && bwAtten < 0.5 && bwAtten > 0.1 && gyroNow && accel5,
+    `透传=${passthrough}；10 ms 延迟对齐历史帧=${delayOk}；20 Hz 带宽对 50 Hz 衰减到 ${(bwAtten * 100).toFixed(1)}%；` +
+      `延迟差 ±10 ms 下陀螺=当前(${gyroNow})、加计=5 帧前(${accel5})`,
+  );
+}
+
+// 64. 运动学一致剧本：真值姿态/角速度/比力/位置同源；理想姿态下的 INS 精确跟踪真值轨迹
+{
+  const params: ImuParams = { ...clean };
+  const ins = new InsIntegrator();
+  const w = new World(scenarios.coordinatedTurn, 99);
+  ins.v = [...w.velNed]; // 真值初速是圆弧的切向速度；INS 必须从同一初值开始才能比对编排一致性
+  let maxQErr = 0;
+  const T = 10;
+  for (let i = 0; i < Math.round(T / H); i++) {
+    const s = w.step(H, params);
+    ins.step(w.q, s.accel, H);
+    // 解析角速度：世界 ω=[0,0,r]，机体系 = Rᵀω = r·[0, sinφ, cosφ]
+    const V = 8, r = 0.5;
+    const bank = Math.atan2(V * r, 9.80665);
+    const expect: V3 = [0, r * Math.sin(bank), r * Math.cos(bank)];
+    maxQErr = Math.max(maxQErr, Math.hypot(w.omega[0] - expect[0], w.omega[1] - expect[1], w.omega[2] - expect[2]));
+  }
+  const drift = Math.hypot(ins.p[0] - w.posNed[0], ins.p[1] - w.posNed[1], ins.p[2] - w.posNed[2]);
+  const radius = 8 / 0.5;
+  // 圆弧圆心在起点东侧 16 m；判据应是「到圆心的距离」，而不是到原点的距离
+  const center: V3 = [0, radius, 0];
+  const radiusErr = Math.abs(
+    Math.hypot(w.posNed[0] - center[0], w.posNed[1] - center[1]) - radius,
+  );
+  const truthOk = radiusErr < 0.05;
+  const accel = new World(scenarios.constantAccel, 7);
+  const ins2 = new InsIntegrator();
+  for (let i = 0; i < Math.round(4 / H); i++) {
+    const s = accel.step(H, params);
+    ins2.step(accel.q, s.accel, H);
+  }
+  const expectAccel = 0.5 * 1.5 * 16;
+  const accelInsErr = Math.hypot(ins2.p[0] - accel.posNed[0], ins2.p[1] - accel.posNed[1], ins2.p[2] - accel.posNed[2]);
+  const accelAnalyticErr = Math.abs(Math.hypot(accel.posNed[0], accel.posNed[1]) - expectAccel);
+  check(
+    "运动学一致剧本：解析角速度吻合、INS 理想编排跟踪真值轨迹、位置符合 ½at²",
+    maxQErr < 2e-3 && drift < 1e-3 && truthOk && accelInsErr < 1e-6 && accelAnalyticErr < 0.05,
+    `协调转弯：解析角速度最大偏差 ${maxQErr.toExponential(1)} rad/s、理想 INS 与真值位置差 ${drift.toExponential(1)} m、` +
+      `到圆心距离偏差 ${radiusErr.toFixed(4)} m（半径应 ${radius} m）；` +
+      `恒定加速度 4 s：INS 与真值差 ${accelInsErr.toExponential(1)} m、真值位置 ${Math.hypot(accel.posNed[0], accel.posNed[1]).toFixed(4)} m（理论 ${expectAccel}）`,
+  );
+}
+
+// 65. 六面校准静止质量判据：平均为零的摆动必须被最大角速度/模长标准差抓住
+{
+  const stable = Array.from({ length: 250 }, () => ({
+    gyro: [0.01, -0.02, 0.005] as V3,
+    accel: [0, 0, 9.80665] as V3,
+  }));
+  const a = assessStaticWindow(stable);
+  // 正负摆动：平均角速度接近 0，但单帧峰值 8°/s（0.14 rad/s），应判不合格
+  const oscillating = Array.from({ length: 250 }, (_, i) => ({
+    gyro: [0.14 * (i % 2 ? 1 : -1), 0, 0] as V3,
+    accel: [0, 0, 9.80665] as V3,
+  }));
+  const b = assessStaticWindow(oscillating);
+  // 被触碰/搬运：模长标准差大
+  const bumpy = Array.from({ length: 250 }, (_, i) => ({
+    gyro: [0, 0, 0] as V3,
+    accel: [0, 0, 9.80665 + 0.3 * Math.sin(i)] as V3,
+  }));
+  const c = assessStaticWindow(bumpy);
+  check(
+    "六面校准静止判据：稳定窗口通过、摆动与搬运被拒",
+    a.ok && !b.ok && !c.ok && a.maxGyroDps < 6 && b.meanGyroDps < 3 && b.maxGyroDps > 6 && c.accelNormStd > 0.15,
+    `稳定：平均 ${a.meanGyroDps.toFixed(2)}°/s、最大 ${a.maxGyroDps.toFixed(2)}°/s、σ‖a‖ ${a.accelNormStd.toFixed(3)} → ${a.ok}` +
+      `；摆动：平均 ${b.meanGyroDps.toFixed(2)}°/s、最大 ${b.maxGyroDps.toFixed(2)}°/s → ${b.ok}` +
+      `；搬运：σ‖a‖ ${c.accelNormStd.toFixed(3)} → ${c.ok}`,
+  );
+}
+
+// 66. 传感器采样率：低于仿真步长时零阶保持（样本数 ≈ fs × 时间），且与带宽叠加后仍有界
+{
+  const h = 1 / 500;
+  const p: ImuParams = { ...clean, sensorSampleHz: 50 };
+  const sp = new SensorPipeline();
+  const outs: number[] = [];
+  for (let i = 0; i < 500; i++) {
+    const out = sp.push({ gyro: [i, 0, 0] as V3, accel: [0, 0, 9.80665] as V3, mag: [30, 0, 40] as V3 }, p, h);
+    outs.push(out.gyro[0]);
+  }
+  const changes = outs.filter((v, i) => i > 0 && v !== outs[i - 1]).length;
+  const p2: ImuParams = { ...clean, sensorSampleHz: 50, sensorBandwidthHz: 20 };
+  const sp2 = new SensorPipeline();
+  let finite = true;
+  for (let i = 0; i < 500; i++) {
+    const out = sp2.push({ gyro: [Math.sin(i * 0.4), 0, 0] as V3, accel: [0, 0, 9.80665] as V3, mag: [30, 0, 40] as V3 }, p2, h);
+    if (![...out.gyro, ...out.accel, ...out.mag].every(Number.isFinite)) finite = false;
+  }
+  check(
+    "传感器采样率：50 Hz 零阶保持样本数正确、与带宽叠加后仍有限",
+    changes >= 45 && changes <= 55 && finite,
+    `500 步（1 s @500 Hz）内输出变化 ${changes} 次（应 ≈50）；带宽+降采样输出有限=${finite}`,
+  );
+}
+
+// 67. 配置迁移必须保住校准对象与模型（第四轮 P1：档案导入后校准状态丢失的根因）
+{
+  const src = defaultExperimentConfig();
+  src.magModel = "full";
+  src.magCalibration = {
+    offset: [1.25, -2.5, 3.75],
+    scale: [1.02, 0.98, 1.0],
+    field: 50,
+    residual: 0.012,
+    count: 280,
+    kind: "full",
+    matrix: [1.02, 0.01, 0, 0.01, 0.98, 0.02, 0, 0.02, 1.0],
+  };
+  src.magCalibrationApplied = true;
+  src.accelCalibration = {
+    M: [1.001, 0, 0, 0, 0.999, 0.001, 0, 0.001, 1.002],
+    bias: [0.01, -0.02, 0.03],
+    rmse: [0.001, 0.002, 0.0015],
+    count: 6,
+    faces: ["+x", "-x", "+y", "-y", "+z", "-z"],
+  };
+  src.accelCalibrationApplied = false;
+  src.steadyFromSec = 12;
+  const back = migrateExperimentConfig(JSON.parse(JSON.stringify(src)));
+  const keepCal =
+    back.magModel === "full" &&
+    back.magCalibration?.kind === "full" &&
+    back.magCalibration.matrix?.length === 9 &&
+    back.magCalibrationApplied === true &&
+    back.accelCalibration?.faces.length === 6 &&
+    back.accelCalibrationApplied === false &&
+    back.steadyFromSec === 12;
+  // 结构不完整的校准不得被"修"成半有效对象
+  const broken = parseMagCalibration({ offset: [1, 2, 3], scale: [1, 1, 1] }); // 缺 field
+  const brokenFull = parseMagCalibration({
+    offset: [0, 0, 0], scale: [1, 1, 1], field: 50, kind: "full", matrix: [1, 0, 0],
+  });
+  // 模型与校准对象不一致必须被校验拦下
+  const mismatch = cloneExperimentConfig(back);
+  mismatch.magModel = "diag";
+  const caught = validateExperimentConfig(mismatch).some((p) => p.path === "magModel");
+  check(
+    "配置迁移/校验：校准对象+模型+应用标志完整往返，坏结构被拒、模型不一致被拦",
+    keepCal && broken === null && brokenFull === null && caught,
+    `往返完整=${keepCal}（model=${back.magModel}、applied=${back.magCalibrationApplied}/${back.accelCalibrationApplied}、steady=${back.steadyFromSec}）` +
+      `；缺 field→null=${broken === null}；坏矩阵→null=${brokenFull === null}；模型不一致被拦=${caught}`,
+  );
+}
+
+// 68. 回放 IMU 语义元数据：raw / calibrated 决定"是否二次校准"
+{
+  const lines: string[] = ["# quaternion-attitude-demo raw IMU export", "# imu=raw"];
+  lines.push("t_s,gyro_x_dps,gyro_y_dps,gyro_z_dps,accel_x_ms2,accel_y_ms2,accel_z_ms2,mag_x_ut,mag_y_ut,mag_z_ut");
+  for (let i = 0; i < 30; i++) {
+    lines.push(`${(i / 50).toFixed(4)},0.1,0,0,0,0,9.8,30,0,40`);
+  }
+  const asRaw = parseImuCsv(lines.join("\n"));
+  const asCal = parseImuCsv(lines.join("\n").replace("# imu=raw", "# imu=calibrated"));
+  const noMeta = parseImuCsv(lines.filter((l) => l !== "# imu=raw").join("\n"));
+  check(
+    "回放元数据：imu=raw/calibrated/未声明 三种语义都被解析出来",
+    asRaw.imuCalibrated === false && asCal.imuCalibrated === true && noMeta.imuCalibrated === null &&
+      asRaw.frames.length === 30 && asCal.notes.some((n) => n.includes("校准后")),
+    `raw=${asRaw.imuCalibrated}、calibrated=${asCal.imuCalibrated}、未声明=${noMeta.imuCalibrated}；帧数=${asRaw.frames.length}`,
+  );
+}
+
+// 69. 共享解算调度（core/solve-loop.ts）：对准阈值/冷却、关闭开关、解算抽帧、B 组同步
+{
+  // 调度行为（何时触发、冷却多久、按什么频率解算）用**桩估计器**直接测：
+  // 这些是调度层的契约，不该被估计器内部实现（ramp/gate 收敛速度）干扰。
+  // 「真实估计器下确实会触发」由测试 72 端到端覆盖。
+  const H = 1 / 500;
+  interface StubRec {
+    resetCount: number;
+  }
+  const makeStub = (id: string, errDeg: number, rec?: StubRec) =>
+    ({
+      id,
+      label: id,
+      color: "#fff",
+      magEnabled: true,
+      q: qId(),
+      telemetry: {
+        gyroRate: 0,
+        rawGyro: [0, 0, 0],
+        correction: [0, 0, 0],
+        predictedGravity: [0, 0, 1],
+        measuredGravity: [0, 0, 1],
+        accelNorm: 9.80665,
+        accelValid: true,
+        magValid: true,
+        detail: { alignErrorDeg: errDeg },
+      },
+      getParams: () => ({}),
+      setParams: () => undefined,
+      update: () => undefined,
+      reset(this: { q: unknown }, q?: { w: number; x: number; y: number; z: number }) {
+        this.q = q ? { ...q } : qId();
+        if (rec) rec.resetCount++;
+      },
+    }) as unknown as Estimator;
+  const stillSample = {
+    gyro: [0.5 * (Math.PI / 180), 0, 0] as V3, // 0.5 °/s < 3 °/s
+    accel: [0, 0, 9.80665] as V3,
+    mag: [30, 0, 40] as V3,
+  };
+
+  // ① 静止且偏差 30°：3 s 处首次触发；冷却 5 s 内不再触发，之后再次触发
+  const rec: StubRec = { resetCount: 0 };
+  const alignTimes: number[] = [];
+  const loop = new SolveLoop({
+    estimators: [makeStub("pure", 0), makeStub("mahony", 30, rec)],
+    solveRateHz: 500,
+    calibrate: { mag: (m) => m, accel: (a) => a },
+    magEnabled: true,
+    autoCoarseAlign: true,
+    onAlign: (ev) => alignTimes.push(ev.t),
+  });
+  for (let i = 1; i <= 6000; i++) loop.step(stillSample, H, i * H);
+  const firstGap = alignTimes.length ? Math.abs(alignTimes[0] - 3.002) : NaN;
+  const secondGap = alignTimes.length > 1 ? alignTimes[1] - alignTimes[0] : NaN;
+
+  // ② 收敛良好（偏差 3°）不触发；③ 关掉开关不触发
+  let goodTriggers = 0;
+  const loopGood = new SolveLoop({
+    estimators: [makeStub("pure", 0), makeStub("mahony", 3)],
+    solveRateHz: 500,
+    calibrate: { mag: (m) => m, accel: (a) => a },
+    magEnabled: true,
+    autoCoarseAlign: true,
+    onAlign: () => goodTriggers++,
+  });
+  for (let i = 1; i <= 3000; i++) loopGood.step(stillSample, H, i * H);
+  let offTriggers = 0;
+  const loopOff = new SolveLoop({
+    estimators: [makeStub("pure", 0), makeStub("mahony", 60)],
+    solveRateHz: 500,
+    calibrate: { mag: (m) => m, accel: (a) => a },
+    magEnabled: true,
+    autoCoarseAlign: false,
+    onAlign: () => offTriggers++,
+  });
+  for (let i = 1; i <= 3000; i++) loopOff.step(stillSample, H, i * H);
+
+  // ④ 解算抽帧：500 Hz 输入 + 100 Hz 解算 → 1 s 内更新 ≈100 次
+  let solves = 0;
+  const loopRate = new SolveLoop({
+    estimators: [makeStub("pure", 0)],
+    solveRateHz: 100,
+    calibrate: { mag: (m) => m, accel: (a) => a },
+    magEnabled: true,
+    autoCoarseAlign: false,
+    onSolve: () => solves++,
+  });
+  for (let i = 1; i <= 500; i++) loopRate.step(stillSample, H, i * H);
+
+  // ⑤ 粗对准必须**同步重置 B 组**（界面 A/B 同步对准的契约）
+  const recB: StubRec = { resetCount: 0 };
+  const recA: StubRec = { resetCount: 0 };
+  const loopAB = new SolveLoop({
+    estimators: [makeStub("pure", 0), makeStub("mahony", 30, recA)],
+    secondary: [makeStub("madg", 30, recB)],
+    solveRateHz: 500,
+    calibrate: { mag: (m) => m, accel: (a) => a },
+    magEnabled: true,
+    autoCoarseAlign: true,
+  });
+  for (let i = 1; i <= 2000; i++) loopAB.step(stillSample, H, i * H);
+
+  check(
+    "共享解算调度：3 s 阈值 / 5 s 冷却 / 收敛良好与关闭时不触发 / 按解算率抽帧 / B 组同步重置",
+    alignTimes.length >= 2 && firstGap < 0.02 && secondGap > 4.9 && secondGap < 5.1 &&
+      goodTriggers === 0 && offTriggers === 0 && Math.abs(solves - 100) <= 1 &&
+      recA.resetCount > 0 && recB.resetCount === recA.resetCount && rec.resetCount > 0,
+    `触发 ${alignTimes.length} 次：首次 t=${alignTimes[0]?.toFixed(3)}s（差值 ${firstGap.toFixed(3)}）、` +
+      `第二次间隔 ${secondGap.toFixed(2)}s；偏差 3° 触发 ${goodTriggers} 次、关闭后触发 ${offTriggers} 次；` +
+      `100 Hz 解算 1 s 更新 ${solves} 次；A/B 重置 ${recA.resetCount}/${recB.resetCount} 次`,
+  );
+}
+
+// 69b. SolveLoop 的界面侧 API：真实路径（applyFrame 子步）、运行期改频率/换 B 组/换校准链
+{
+  const stub = (id: string, rec?: { updates: number }) =>
+    ({
+      id,
+      label: id,
+      color: "#fff",
+      magEnabled: true,
+      q: qId(),
+      telemetry: { detail: { alignErrorDeg: 0 } },
+      getParams: () => ({}),
+      setParams: () => undefined,
+      update: () => {
+        if (rec) rec.updates++;
+      },
+      reset: () => undefined,
+    }) as unknown as Estimator;
+
+  // ① applyFrame：120 ms 的帧拆成 3 个 ≤50 ms 子步（与界面真实/回放路径一致）
+  const recA: { updates: number } = { updates: 0 };
+  const subDts: number[] = [];
+  const loop = new SolveLoop({
+    estimators: [stub("mahony", recA)],
+    solveRateHz: 500,
+    calibrate: { mag: (m) => m, accel: (a) => [a[0], a[1], a[2]] },
+    magEnabled: true,
+    autoCoarseAlign: true,
+    onSolve: ({ dt }) => subDts.push(dt),
+  });
+  loop.applyFrame(
+    { gyro: [0, 0, 0] as V3, accel: [0, 0, 9.80665] as V3, mag: [30, 0, 40] as V3 },
+    0.12,
+    1,
+    0.05,
+  );
+  const frameOk = recA.updates === 3 && subDts.length === 3 && subDts.every((d) => Math.abs(d - 0.04) < 1e-9);
+
+  // ② 运行期改解算频率：100 Hz → 200 Hz，同样 1 s 内更新次数翻倍
+  let solves = 0;
+  const loopRate = new SolveLoop({
+    estimators: [stub("mahony")],
+    solveRateHz: 100,
+    calibrate: { mag: (m) => m, accel: (a) => a },
+    magEnabled: true,
+    autoCoarseAlign: false,
+    onSolve: () => solves++,
+  });
+  const sample = { gyro: [0, 0, 0] as V3, accel: [0, 0, 9.80665] as V3, mag: [30, 0, 40] as V3 };
+  for (let i = 1; i <= 250; i++) loopRate.step(sample, 1 / 500, i / 500);
+  const at100 = solves;
+  loopRate.setSolveRate(200);
+  solves = 0;
+  for (let i = 251; i <= 500; i++) loopRate.step(sample, 1 / 500, i / 500);
+  const at200 = solves;
+  // 200 Hz 在 500 Hz 仿真下必须退化成 3/2 交替（而不是"每 3 步一次"的 166.7 Hz）：
+  // 0.5 s 内应约 100 次，而不是 83 次。
+  const rateOk = Math.abs(at100 - 50) <= 1 && Math.abs(at200 - 100) <= 2;
+
+  // ③ 运行期换 B 组：新数组必须真的被更新（旧实现自持引用，换了数组就不再更新）
+  const recB: { updates: number } = { updates: 0 };
+  const loopB = new SolveLoop({
+    estimators: [stub("mahony")],
+    solveRateHz: 500,
+    calibrate: { mag: (m) => m, accel: (a) => a },
+    magEnabled: true,
+    autoCoarseAlign: false,
+  });
+  loopB.setSecondary([stub("madg", recB)]);
+  for (let i = 1; i <= 10; i++) loopB.step(sample, 1 / 500, i / 500);
+  const swapOk = recB.updates === 10 && loopB.secondaryGroup.length === 1;
+
+  // ⑤ 不变量：Σdt 必须等于总经过时间（抽帧保留余量时最容易在这里出错——
+  //   复核实测过「余量被重复计入 dt」导致 12 s 的仿真积出了 13.2 s 的角增量）。
+  const dtsSum: number[] = [];
+  const loopSum = new SolveLoop({
+    estimators: [stub("mahony")],
+    solveRateHz: 200,
+    calibrate: { mag: (m) => m, accel: (a) => a },
+    magEnabled: true,
+    autoCoarseAlign: false,
+    onSolve: ({ dt }) => dtsSum.push(dt),
+  });
+  const SIM_STEPS = 2500; // 5 s @500 Hz
+  for (let i = 1; i <= SIM_STEPS; i++) loopSum.step(sample, 1 / 500, i / 500);
+  const elapsed = SIM_STEPS / 500;
+  const dtTotal = dtsSum.reduce((a, b) => a + b, 0);
+  const sumOk = Math.abs(dtTotal - elapsed) < 1e-9;
+  // 同时确认解算次数 ≈ 200 Hz × 5 s（3/2 交替，而不是每 3 步一次）
+  const countOk = Math.abs(dtsSum.length - 1000) <= 3;
+
+  // ④ 校准链注入：observations() 必须走注入的实现（界面用它读「校准后」的观测）
+  const loopCal = new SolveLoop({
+    estimators: [stub("mahony")],
+    solveRateHz: 500,
+    calibrate: { mag: (m) => [m[0] * 2, m[1], m[2]], accel: (a) => [a[0] + 1, a[1], a[2]] },
+    magEnabled: true,
+    autoCoarseAlign: false,
+  });
+  const obs = loopCal.observations({ gyro: [0, 0, 0] as V3, accel: [1, 1, 1] as V3, mag: [5, 0, 0] as V3 });
+  const calOk = obs.mag[0] === 10 && obs.accel[0] === 2;
+  // 运行期替换校准链（界面在校准状态变化时会换）
+  loopCal.setCalibration({ mag: (m) => m, accel: (a) => a });
+  const obs2 = loopCal.observations({ gyro: [0, 0, 0] as V3, accel: [1, 1, 1] as V3, mag: [5, 0, 0] as V3 });
+  const calSwapOk = obs2.mag[0] === 5 && obs2.accel[0] === 1;
+  loopCal.setMagEnabled(false);
+
+  // ⑥ 复核 P2-3 回归：子步时间递增 / 每帧只有一个对准事件 / 子步数有上限（Σdt 仍精确）
+  {
+    const timesSeen: number[] = [];
+    const alignEvents: number[] = [];
+    const loopT = new SolveLoop({
+      estimators: [stub("mahony")],
+      solveRateHz: 500,
+      calibrate: { mag: (m) => m, accel: (a) => [a[0], a[1], a[2]] },
+      magEnabled: true,
+      autoCoarseAlign: true,
+      onSolve: ({ t }) => timesSeen.push(t),
+      onAlign: (ev) => alignEvents.push(ev.t),
+    });
+    // 120 ms 帧在 t=10.12 结束 → 子步应报 10.00 / 10.04 / 10.08 / 10.12 里去掉首个子步的那三个？不：
+    // 3 个子步覆盖 (10.00, 10.12]，因此报 10.04 / 10.08 / 10.12（末子步正好落在帧时刻）。
+    loopT.applyFrame({ gyro: [0, 0, 0] as V3, accel: [0, 0, 9.80665] as V3, mag: [30, 0, 40] as V3 }, 0.12, 10.12);
+    const increasing =
+      timesSeen.length === 3 &&
+      Math.abs(timesSeen[2] - 10.12) < 1e-9 &&
+      timesSeen[0] < timesSeen[1] && timesSeen[1] < timesSeen[2];
+
+    // 对准：先让融合算法"明显偏离"（telemetry.detail.alignErrorDeg 大），静止 3 s 后应触发**一次**
+    let errDeg = 30;
+    const alignStub = (id: string): Estimator =>
+      ({
+        id,
+        label: id,
+        color: "#fff",
+        magEnabled: true,
+        q: qId(),
+        telemetry: { detail: { alignErrorDeg: errDeg } },
+        getParams: () => ({}),
+        setParams: () => undefined,
+        update: () => undefined,
+        reset: () => undefined,
+      }) as unknown as Estimator;
+    const aligns: number[] = [];
+    const loopA = new SolveLoop({
+      estimators: [alignStub("mahony")],
+      solveRateHz: 500,
+      calibrate: { mag: (m) => m, accel: (a) => [a[0], a[1], a[2]] },
+      magEnabled: true,
+      autoCoarseAlign: true,
+      onAlign: (ev) => aligns.push(ev.t),
+    });
+    const stillSample = { gyro: [0, 0, 0] as V3, accel: [0, 0, 9.80665] as V3, mag: [30, 0, 40] as V3 };
+    // 一次 4 s 的"真实帧"（长间隔拆子步）：静止累计 4 s ≥ 3 s → 触发一次
+    loopA.applyFrame(stillSample, 4, 4);
+    const oneEventPerFrame = aligns.length === 1;
+
+    // 子步上限：30 s 空洞按 50 ms 拆 600 步；把上限压到 100 步时**只积分 5 s（100×50 ms）**，
+    // 余下 25 s 记入 deferredSec 并如实上报——绝不把步长放大到 0.3 s（旧实现 1000 s → 0.25 s）
+    const bigDts: number[] = [];
+    const loopBig = new SolveLoop({
+      estimators: [stub("mahony")],
+      solveRateHz: 500,
+      calibrate: { mag: (m) => m, accel: (a) => a },
+      magEnabled: true,
+      autoCoarseAlign: false,
+      onSolve: ({ dt }) => bigDts.push(dt),
+    });
+    loopBig.applyFrame(stillSample, 30, 30, 0.05, 100);
+    const firstCallDts = bigDts.length;
+    const firstPending = loopBig.pendingSec;
+    // **续拍补完**（ROUND12 的核心契约）：继续喂空帧（dt=0），队列必须被补完，
+    // Σdt=30、每步 ≤0.05、最后 pending=0——旧实现只记数不补，永远剩 25 s
+    let guard = 0;
+    while (loopBig.pendingSec > 0 && guard++ < 50) loopBig.applyFrame(stillSample, 0, 30, 0.05, 100);
+    const bigSum = bigDts.reduce((a, b) => a + b, 0);
+    const bigMax = Math.max(...bigDts);
+    const bounded =
+      firstCallDts === 100 && Math.abs(firstPending - 25) < 1e-9 &&
+      bigMax <= 0.05 + 1e-9 && Math.abs(bigSum - 30) < 1e-6 &&
+      loopBig.pendingSec === 0 && loopBig.droppedFrames === 0;
+    // 默认上限下 30 s 空洞应拆成 600 步（50 ms），说明真实空洞不再被截断成 10 s
+    const freeDts: number[] = [];
+    const loopFree = new SolveLoop({
+      estimators: [stub("mahony")],
+      solveRateHz: 500,
+      calibrate: { mag: (m) => m, accel: (a) => a },
+      magEnabled: true,
+      autoCoarseAlign: false,
+      onSolve: ({ dt }) => freeDts.push(dt),
+    });
+    loopFree.applyFrame(stillSample, 30, 30);
+    const freeSum = freeDts.reduce((a, b) => a + b, 0);
+    const fullGap = freeDts.length === 600 && Math.abs(freeSum - 30) < 1e-9 && loopFree.pendingSec === 0;
+
+    // ② **即时回调**（ROUND11 P1）：回调里读到的 live 姿态必须是**该子步**的姿态。
+    //    旧实现先更新完再批量回调，20 个子步读到的都是末姿态（INS 东向位置 3.925 m vs 1.556 m）。
+    const liveRolls: number[] = [];
+    let counter = 0;
+    // 估计器内部累计 dt 并写进 q：回调里读 live q 就能看出「是最新子步还是末姿态」
+    const liveEst = {
+      id: "mahony" as const,
+      label: "mahony",
+      color: "#fff",
+      magEnabled: true,
+      q: qId(),
+      telemetry: { detail: { alignErrorDeg: 0 } },
+      getParams: () => ({}),
+      setParams: () => undefined,
+      update: (_g: V3, _a: V3, _m: V3, dt: number) => {
+        counter += dt;
+        liveEst.q = { w: 1, x: 0, y: Math.sin(counter), z: 0 };
+      },
+      reset: () => undefined,
+    } as unknown as Estimator;
+    const loopLive = new SolveLoop({
+      estimators: [liveEst],
+      solveRateHz: 500,
+      calibrate: { mag: (m) => m, accel: (a) => a },
+      magEnabled: true,
+      autoCoarseAlign: false,
+      onSolve: () => liveRolls.push(counter),
+    });
+    loopLive.applyFrame(stillSample, 1, 1);
+    // 回调里读到的必须是 0.05,0.10,…,1.00（严格递增且首值远小于末值），不是 20 个 1.00
+    const liveOk =
+      liveRolls.length === 20 &&
+      liveRolls[0] < 0.06 &&
+      Math.abs(liveRolls[19] - 1) < 1e-9 &&
+      liveRolls.every((v, i) => i === 0 || v > liveRolls[i - 1] + 1e-9);
+
+    // ③ 0 dt / 非法 dt 不积分、不产生 NaN 回调
+    let zeroUpdates = 0;
+    const zeroLoop = new SolveLoop({
+      estimators: [
+        ({
+          id: "mahony",
+          label: "mahony",
+          color: "#fff",
+          magEnabled: true,
+          q: qId(),
+          telemetry: { detail: { alignErrorDeg: 0 } },
+          getParams: () => ({}),
+          setParams: () => undefined,
+          update: () => {
+            zeroUpdates++;
+          },
+          reset: () => undefined,
+        }) as unknown as Estimator,
+      ],
+      solveRateHz: 500,
+      calibrate: { mag: (m) => m, accel: (a) => a },
+      magEnabled: true,
+      autoCoarseAlign: false,
+      onSolve: () => {
+        zeroUpdates += 1000; // 不该发生的回调
+      },
+    });
+    zeroLoop.applyFrame(stillSample, 0, 1);
+    zeroLoop.applyFrame(stillSample, Number.NaN, 2);
+    zeroLoop.applyFrame(stillSample, -0.5, 3);
+    const zeroDtOk = zeroUpdates === 0;
+
+    check(
+      "共享调度帧契约：即时逐子步回调、0dt 不积分、子步恒 ≤ 上限、超出部分如实记账",
+      increasing && oneEventPerFrame && bounded && fullGap && liveOk && zeroDtOk,
+      `子步时间 ${timesSeen.map((t) => t.toFixed(2)).join(" → ")}；4 s 帧的对准事件 ${aligns.length} 次（t=${aligns.join(",")}）；` +
+        `30 s 空洞（上限 100/拍）：首拍 ${firstCallDts} 步、待积分 ${firstPending.toFixed(1)}s → 续拍补完后共 ${bigDts.length} 步 / 最大步长 ${bigMax.toFixed(3)}s / Σdt=${bigSum.toFixed(3)}s / 剩余 ${loopBig.pendingSec.toFixed(1)}s，` +
+        `默认时 ${freeDts.length} 步 / Σdt=${freeSum.toFixed(3)}s；` +
+        `回调内 live 累计 ${liveRolls.length} 次（首 ${liveRolls[0]?.toFixed(3)}、末 ${liveRolls[liveRolls.length - 1]?.toFixed(3)}，递增=${liveOk}）；` +
+        `0/NaN/负 dt 的更新与回调次数=${zeroUpdates}`,
+    );
+  }
+
+  check(
+    "共享调度界面侧 API：applyFrame 子步、运行期改解算频率、换 B 组、注入/替换校准链",
+    frameOk && rateOk && swapOk && calOk && calSwapOk && sumOk && countOk,
+    `120 ms 帧 → ${recA.updates} 个子步（dt=${subDts.map((d) => d.toFixed(3)).join(",")}）；` +
+      `100 Hz 半秒 ${at100} 次、改 200 Hz 后 ${at200} 次；换 B 组后更新 ${recB.updates} 次；` +
+      `校准链注入=${calOk}、替换=${calSwapOk}；Σdt=${dtTotal.toFixed(6)}s vs 时长 ${elapsed.toFixed(6)}s（${dtsSum.length} 次解算）`,
+  );
+}
+
+// 69c. 复核反例回归：延迟按采样时刻寻址 / 日志浮点时间 / 手动目标进配置
+{
+  // ① 采样率 × 延迟：500 Hz 仿真 + 50 Hz 采样 + 10 ms 延迟，滞后必须是 10 ms 量级。
+  //    旧实现用「延迟 ÷ 仿真步长」查历史下标，实测放大到 100 ms。
+  const lagOf = (fs: number, delayMs: number): number => {
+    const p: ImuParams = { ...clean, sensorSampleHz: fs, sensorDelayMs: delayMs };
+    const sp = new SensorPipeline();
+    let out: ImuSample | null = null;
+    for (let i = 0; i < 1000; i++) {
+      out = sp.push({ gyro: [i, 0, 0] as V3, accel: [0, 0, 9.80665] as V3, mag: [30, 0, 40] as V3 }, p, H);
+    }
+    const t = out?.times;
+    return t ? (1000 * H - t.gyro) * 1000 : NaN;
+  };
+  // 语义：输出通道的 time 是「这份读数的采样时刻」。零阶保持期间读数不刷新，
+  // 因此 `当前时刻 − times.ch` ∈ [延迟, 延迟 + 1/fs]（保持期最长一个采样周期）。
+  // 旧实现的错误是把延迟按仿真步长换算历史下标，50 Hz 下变成 100 ms（≈5 个采样周期）。
+  const lag500 = lagOf(0, 10);
+  const lag50 = lagOf(50, 10);
+  const lag200 = lagOf(200, 10);
+  const inBand = (lag: number, delayMs: number, fs: number): boolean => {
+    const holdMs = fs > 0 ? 1000 / fs : 2; // 无降采样时保持期就是一个仿真步（2 ms）
+    return lag >= delayMs - 1.5 && lag <= delayMs + holdMs + 1.5;
+  };
+  const delayOk = inBand(lag500, 10, 0) && inBand(lag50, 10, 50) && inBand(lag200, 10, 200);
+
+  // ①b 极低采样率 + 大延迟（复核 P2-2）：5 Hz 采样 + 250 ms 延迟时，
+  //     历史必须多留**一个采样周期**，否则找不到目标时刻之前的帧、插值退化成
+  //     "下一个样本"，实测年龄只有 200 ms（配置说 250 ms）。
+  const lag5 = lagOf(5, 250);
+  const lowRateOk = lag5 >= 248.5 && lag5 <= 250 + 200 + 1.5;
+  // 零延迟路径也必须带 times（否则导出的 sensor_lag_ms 行时有时无），且三路自洽为同一时刻
+  const p0: ImuParams = { ...clean, sensorSampleHz: 50, sensorDelayMs: 0 };
+  const sp0 = new SensorPipeline();
+  let out0: ImuSample | null = null;
+  for (let i = 0; i < 200; i++) out0 = sp0.push({ gyro: [1, 0, 0] as V3, accel: [0, 0, 9.80665] as V3, mag: [30, 0, 40] as V3 }, p0, H);
+  const t0 = out0!.times;
+  const zeroDelayTimesOk =
+    t0 !== undefined && Number.isFinite(t0.gyro) && t0.gyro === t0.accel && t0.accel === t0.mag &&
+    out0!.times !== undefined && 200 * H - t0.gyro >= 0 && 200 * H - t0.gyro <= 1 / 50 + 1e-9;
+
+  // ② 日志浮点时间：400 Hz（2.5 ms/帧）日志，Σdt 必须等于日志跨度
+  const frames: ReplayFrame[] = Array.from({ length: 401 }, (_, i) => ({
+    tMs: i * 2.5,
+    gyroDps: [1, 0, 0],
+    accelMs2: [0, 0, 9.8],
+    magUt: [30, 0, 40],
+    hasMag: true,
+    gyroValid: true,
+    accelValid: true,
+  }));
+  const player = new ReplayPlayer({ maxFramesPerTick: 5000 });
+  player.load(frames, 0); // 最快档：一次吃完
+  const steps = player.advance(0.016);
+  const dtSum = steps.reduce((a, st) => a + st.dtSec, 0);
+  const spanSec = (frames[frames.length - 1].tMs - frames[0].tMs) / 1000;
+  const logTimeOk = Math.abs(dtSum - spanSec) < 1e-9 && steps[0].dtSec === 0;
+
+  // ③ 手动目标进配置：改全局对象不得再改变「同配置 + 同 seed」的结果
+  const cfg: ExperimentConfig = {
+    ...defaultExperimentConfig(),
+    scenario: "manual",
+    durationSec: 1.5,
+    manualTargetDeg: [0, 0, 30],
+  };
+  const withGlobalDefault = runExperiment(cfg);
+  manualTarget.yawDeg = 30; // 故意弄脏全局对象
+  const withGlobalDirty = runExperiment(cfg);
+  manualTarget.yawDeg = 0;
+  const pureA = withGlobalDefault.finalQuats.pure;
+  const pureB = withGlobalDirty.finalQuats.pure;
+  const dot = Math.abs(pureA.w * pureB.w + pureA.x * pureB.x + pureA.y * pureB.y + pureA.z * pureB.z);
+  const deterministicDeg = 2 * Math.acos(Math.min(1, dot)) * DEG;
+  const manualOk = deterministicDeg < 1e-9;
+
+  check(
+    "复核反例回归：延迟按采样时刻（50/200/500 Hz 均为 10 ms）、5 Hz/250 ms 不退化成 200 ms、零延迟带 times、日志浮点 Σdt=跨度、手动目标进配置",
+    delayOk && lowRateOk && zeroDelayTimesOk && logTimeOk && manualOk,
+    `10 ms 延迟实测：500 Hz=${lag500.toFixed(2)}ms、50 Hz=${lag50.toFixed(2)}ms、200 Hz=${lag200.toFixed(2)}ms；` +
+      `5 Hz/250 ms 实测年龄 ${lag5.toFixed(2)}ms；零延迟 times=${zeroDelayTimesOk}；` +
+      `400 Hz 日志 Σdt=${dtSum.toFixed(6)}s vs 跨度 ${spanSec.toFixed(6)}s（${steps.length} 帧，首帧 dt=${steps[0].dtSec}）；` +
+      `改全局 manualTarget 后终态差 ${deterministicDeg.toExponential(1)}°`,
+  );
+}
+
+// 70. SO(3) 误差分解：纯偏航误差只进偏航分量，纯倾角误差只进倾角分量（欧拉分解做不到）
+{
+  const yawRel = qFromAxisAngle([0, 0, 1], 7 * RAD);
+  const tiltRel = qFromAxisAngle([1, 0, 0], 7 * RAD);
+  const y = so3ErrorSplit(yawRel, [0, 0, 1]);
+  const t = so3ErrorSplit(tiltRel, [0, 0, 1]);
+  // 欧拉分解对照：绕机体 x 转 7°（横滚）时，roll 分量 7° 而倾角联合值也是 7°——
+  // 二者一致；但真正要验证的是重力轴分解的正确性。
+  // 小角近似 e ≈ 2·sin(θ/2) 有 0.03% 量级偏差，容差按 0.02° 取。
+  const yawOk = Math.abs(y.yawDeg - 7) < 0.02 && y.tiltDeg < 1e-6;
+  const tiltOk = Math.abs(t.tiltDeg - 7) < 0.02 && t.yawDeg < 1e-6;
+  // 万向节锁处（俯仰 90°）用 SO(3) 分解仍稳定：误差 7° 不会突然放大
+  const locked = qMul(qFromEuler(0, Math.PI / 2, 0), qFromAxisAngle([0, 0, 1], 7 * RAD));
+  const l = so3ErrorSplit(qMul(qConj(locked), qFromEuler(0, Math.PI / 2, 0)), [0, 0, 1]);
+  const lockOk = Number.isFinite(l.tiltDeg) && Number.isFinite(l.yawDeg) && Math.hypot(l.tiltDeg, l.yawDeg) <= 7.001;
+  check(
+    "SO(3) 误差分解：偏航/倾角分量正交可分，万向节锁处不放大",
+    yawOk && tiltOk && lockOk,
+    `纯偏航 → 倾角 ${y.tiltDeg.toExponential(1)}° / 偏航 ${y.yawDeg.toFixed(4)}°；` +
+      `纯倾角 → 倾角 ${t.tiltDeg.toFixed(4)}° / 偏航 ${t.yawDeg.toExponential(1)}°；` +
+      `锁点邻域 → 倾角 ${l.tiltDeg.toFixed(3)}° / 偏航 ${l.yawDeg.toFixed(3)}°`,
+  );
+}
+
+// 71. 采样率下的噪声密度换算：σ 按 √(fs/500) 缩小，噪声密度不随采样率虚增
+{
+  const run = (fs: number): number[] => {
+    const p: ImuParams = {
+      ...clean,
+      gyroBiasDps: 0,
+      gyroNoiseDps: 1,
+      accelNoise: 0,
+      magNoise: 0,
+      sensorSampleHz: fs,
+    };
+    // 完全静止的剧本：目标姿态恒为 0，角速度全程为 0，σ 只反映白噪声
+    const stillScenario = { id: "still", name: "静止", accelFactor: 0, targetEulerDeg: () => [0, 0, 0] as V3 };
+    const w = new World(stillScenario, 12345);
+    const out: number[] = [];
+    for (let i = 0; i < 2000; i++) {
+      const s = w.step(H, p);
+      if (fs > 0 && out.length && s.gyro[0] === out[out.length - 1]) continue; // 只统计新样本
+      out.push(s.gyro[0]);
+    }
+    return out;
+  };
+  const full = run(0);
+  const low = run(50);
+  const std = (a: number[]): number => {
+    const m = a.reduce((x, y) => x + y, 0) / a.length;
+    return Math.sqrt(a.reduce((x, y) => x + (y - m) * (y - m), 0) / a.length);
+  };
+  const sFull = std(full);
+  const sLow = std(low);
+  const ratio = sLow / sFull;
+  check(
+    "采样率噪声换算：50 Hz 每样本 σ 约为 500 Hz 的 √0.1",
+    Math.abs(ratio - Math.sqrt(0.1)) < 0.08 && low.length < full.length,
+    `σ(500 Hz)=${sFull.toFixed(4)} rad/s、σ(50 Hz)=${sLow.toFixed(4)} rad/s、比值=${ratio.toFixed(3)}（理论 ${Math.sqrt(0.1).toFixed(3)}）`,
+  );
+}
+
+// 72. 运行内核的其余出口：详细序列、批量聚合、粗对准真正触发（覆盖 runCore 的主分支）
+{
+  // 用静止剧本（manual 且目标角=0）：hover 的跟踪控制器本身会产生 >3°/s 的角速度，
+  // 静止检测永远不会累计到 3 s——那正是「粗对准只在真正静止时触发」的设计意图。
+  manualTarget.rollDeg = 0;
+  manualTarget.pitchDeg = 0;
+  manualTarget.yawDeg = 0;
+  const cfg: ExperimentConfig = {
+    ...defaultExperimentConfig(),
+    scenario: "manual",
+    durationSec: 8,
+    // 绕机体系 x 的初始偏差（倾角可见：绕重力轴的偏航偏差对加计不可观，不会进 alignErrorDeg）
+    initialAttitude: { kind: "fixed-axis", axis: [1, 0, 0], angleDeg: 35 },
+    estimators: {
+      ...cloneExperimentConfig(defaultExperimentConfig()).estimators,
+    },
+  };
+  // 让互补滤波收敛极慢（alpha 很小、关掉启动 ramp）→ 静止 3 s 后偏差仍 >8° → 应触发粗对准
+  cfg.estimators.comp = { ...cfg.estimators.comp, rampEnabled: false, params: { alpha: 0.01 } };
+  const detailed = runExperimentDetailed(cfg);
+  const aligned = detailed.events.filter((e) => e.type === "align").length;
+  const seriesOk =
+    detailed.series.length === 5 &&
+    detailed.series[1].t.length > 100 &&
+    detailed.series[1].t.length === detailed.series[1].errDeg.length;
+  check(
+    "详细运行：误差序列完整 + 慢收敛场景下静止粗对准真的触发",
+    aligned >= 1 && seriesOk,
+    `对准事件=${aligned}；序列=${detailed.series.length} 组、互补样本 ${detailed.series[1]?.t.length ?? 0} 条`,
+  );
+
+  // 近似口径要能被聚合层看见：用小上限强制截断 → approximate 必为 true
+  const approxBatch = runMonteCarlo({ ...cfg, durationSec: 2 }, 1);
+  const truncatedBatch = summarizeRuns(
+    { ...cfg, durationSec: 2 },
+    [cfg.seed],
+    [runExperiment({ ...cfg, durationSec: 2 }, { statsCapOverride: 100 })],
+  );
+  const approxFlagOk = approxBatch.approximate === false && truncatedBatch.approximate === true;
+  const batch = runMonteCarlo({ ...cfg, durationSec: 2 }, 2);
+  const s = batch.summary.find((x) => x.id === "mahony")!;
+  check(
+    "批量聚合：跨种子分布字段齐全（含 SO(3) 倾角/偏航与稳态窗口）",
+    batch.runs.length === 2 && s.runs === 2 && Number.isFinite(s.rmseP50) &&
+      Number.isFinite(s.steadyRmseP95) && Number.isFinite(s.tiltSo3P95 ?? NaN) && Number.isFinite(s.yawSo3P95 ?? NaN) &&
+      approxFlagOk,
+    `运行 ${batch.runs.length} 次；Mahony RMSE P50=${s.rmseP50.toFixed(3)}°、稳态 P95=${s.steadyRmseP95.toFixed(3)}°、` +
+      `SO(3) 倾角 P95=${(s.tiltSo3P95 ?? NaN).toFixed(3)}°、偏航 P95=${(s.yawSo3P95 ?? NaN).toFixed(3)}°；` +
+      `近似口径标记 正常=${approxBatch.approximate} 截断=${truncatedBatch.approximate}`,
+  );
+}
+
+// 73. 传感器时间戳与非整数延迟插值：三路各自的时间戳 + 非整数延迟按权重混合
+{
+  const h = 1 / 500;
+  // 三路延迟差 ±3 ms：陀螺 3 ms（1.5 帧，非整数）、加计 6 ms、磁 9 ms
+  const p: ImuParams = { ...clean, sensorDelayMs: 6, sensorDelaySkewMs: 3 };
+  const sp = new SensorPipeline();
+  let out: ImuSample | null = null;
+  for (let i = 0; i < 40; i++) {
+    out = sp.push({ gyro: [i, 0, 0] as V3, accel: [0, 0, 9.80665] as V3, mag: [30, 0, 40] as V3 }, p, h);
+  }
+  const t = out?.times;
+  const simT = 40 * h;
+  const lagGyro = t ? (simT - t.gyro) * 1000 : NaN;
+  const lagAccel = t ? (simT - t.accel) * 1000 : NaN;
+  const lagMag = t ? (simT - t.mag) * 1000 : NaN;
+  const lagOk =
+    Number.isFinite(lagGyro) &&
+    Math.abs(lagGyro - 3) < 2.5 && Math.abs(lagAccel - 6) < 2.5 && Math.abs(lagMag - 9) < 2.5 &&
+    lagGyro < lagAccel && lagAccel < lagMag;
+
+  // 非整数延迟的插值：斜坡输入下输出应是「1.5 帧前」的值 = 39 − 1.5
+  const sp2 = new SensorPipeline();
+  let v2 = 0;
+  for (let i = 0; i < 40; i++) {
+    const o = sp2.push(
+      { gyro: [i, 0, 0] as V3, accel: [0, 0, 9.80665] as V3, mag: [30, 0, 40] as V3 },
+      { ...clean, sensorDelayMs: 3 },
+      h,
+    );
+    v2 = o.gyro[0];
+  }
+  const interpOk = Math.abs(v2 - (39 - 1.5)) < 1e-6;
+
+  // 整数延迟必须与「取历史帧」逐位一致（旧行为不能变）
+  const sp3 = new SensorPipeline();
+  let intOut = 0;
+  for (let i = 0; i < 40; i++) {
+    const o = sp3.push({ gyro: [i, 0, 0] as V3, accel: [0, 0, 9.80665] as V3, mag: [30, 0, 40] as V3 }, { ...clean, sensorDelayMs: 4 }, h);
+    intOut = o.gyro[0];
+  }
+  const exactOk = Math.abs(intOut - 37) < 1e-12; // 4 ms = 2 帧 → 第 39 帧读到第 37 帧
+
+  // 透传快路径不得引入 times 字段（逐位一致的契约）
+  const plain = new SensorPipeline().push(
+    { gyro: [1, 2, 3] as V3, accel: [0, 0, 9.8] as V3, mag: [1, 2, 3] as V3 },
+    { ...clean },
+    h,
+  );
+  const passthroughOk = plain.times === undefined;
+
+  check(
+    "传感器时间戳与插值：三路时间戳分离、非整数延迟线性插值、整数延迟逐位取帧、透传不加字段",
+    lagOk && interpOk && exactOk && passthroughOk,
+    `滞后 陀螺 ${lagGyro.toFixed(2)} / 加计 ${lagAccel.toFixed(2)} / 磁 ${lagMag.toFixed(2)} ms（应 3/6/9）；` +
+      `3 ms 插值输出 ${v2.toFixed(3)}（应 37.5）；4 ms 取帧 ${intOut}（应 37）；透传无 times=${passthroughOk}`,
+  );
+}
+
+// 73b. 「拟合」与「应用」是两个独立状态：勾掉应用后，批量必须与界面一样吃原始读数
+{
+  // 用硬铁偏移 8 μT 的标定：应用时应把它减回去；不应用时估计器仍吃到它
+  const cal = {
+    offset: [8, 0, 0] as V3,
+    scale: [1, 1, 1] as V3,
+    field: 50,
+    residual: 0.01,
+    count: 100,
+    kind: "diag" as const,
+  };
+  const base = defaultExperimentConfig();
+  const appliedCfg: ExperimentConfig = {
+    ...base, seed: 555, scenario: "manual", durationSec: 4,
+    magCalibration: cal, magCalibrationApplied: true,
+  };
+  const notAppliedCfg: ExperimentConfig = { ...appliedCfg, magCalibrationApplied: false };
+  const applied = runExperiment(appliedCfg);
+  const notApplied = runExperiment(notAppliedCfg);
+  const am = applied.metrics.find((m) => m.id === "mahony")!;
+  const nm = notApplied.metrics.find((m) => m.id === "mahony")!;
+  // 两套结果必须不同（否则「应用开关」在 runner 里没有意义）
+  const differ = Math.abs(am.rmse - nm.rmse) > 1e-9 || Math.abs(am.p50 - nm.p50) > 1e-9;
+  // 「不应用」路径应与完全不带校准的路径一致（校准链被完整旁路，而不是部分应用）
+  const bare = runExperiment({ ...appliedCfg, magCalibration: null, magCalibrationApplied: false });
+  const bm = bare.metrics.find((m) => m.id === "mahony")!;
+  const bareSame = Math.abs(nm.rmse - bm.rmse) < 1e-9 && Math.abs(nm.p50 - bm.p50) < 1e-9;
+  check(
+    "校准「应用」开关在 runner 也生效：不应用 = 完全旁路，与应用版结果不同",
+    differ && bareSame && nm.rmse >= 0 && am.rmse >= 0,
+    `应用 RMSE ${am.rmse.toFixed(4)}° / 不应用 ${nm.rmse.toFixed(4)}° / 无校准 ${bm.rmse.toFixed(4)}°（差异 ${(nm.rmse - am.rmse).toFixed(4)}°）`,
+  );
+}
+
+// 73c. 抽出的数据源核心：有界队列、回放播放调度、重连退避
+{
+  // ① 有界队列：超限丢最旧、计数正确、上限为 0/1 的边界
+  const q: number[] = [];
+  let drops = 0;
+  for (let i = 0; i < 10; i++) if (pushBounded(q, i, 4).dropped) drops++;
+  const qOk = q.length === 4 && q[0] === 6 && q[3] === 9 && drops === 6;
+  const q1: number[] = [];
+  const one = pushBounded(q1, 1, 1);
+  const two = pushBounded(q1, 2, 1);
+  const qEdge = one.dropped === false && two.dropped === true && q1.length === 1 && q1[0] === 2;
+
+  // ② 回放播放器：按录制时间消费、逐帧 dt 为真实间隔、倍速 0 一口气、单拍上限
+  const mkFrames = (n: number, stepMs: number, gapAt = -1, gapMs = 0): ReplayFrame[] =>
+    Array.from({ length: n }, (_, i) => ({
+      tMs: i * stepMs + (gapAt >= 0 && i > gapAt ? gapMs : 0),
+      gyroDps: [1, 0, 0],
+      accelMs2: [0, 0, 9.8],
+      magUt: [30, 0, 40],
+      hasMag: true,
+      gyroValid: true,
+      accelValid: true,
+    }));
+  const player = new ReplayPlayer();
+  const frames = mkFrames(100, 10); // 100 帧 @100 Hz（10 ms 间隔）
+  player.load(frames, 1);
+  // 一拍给 100 ms 预算：首帧按**标称** 5 ms（首帧前没有真实间隔，沿用 frameIntervalSec 的兜底），
+  // 之后每帧 10 ms → 共 5 + 9×10 + 剩 5 ms 不足再消费一帧 = 10 帧。
+  const tickBig = player.advance(0.1);
+  const stepOk =
+    // 首帧 dt=0（它是初值），随后每帧 10 ms → 100 ms 预算吃掉 1 + 10 帧
+    tickBig.length === 11 &&
+    tickBig[0].dtSec === 0 &&
+    tickBig.slice(1).every((s) => Math.abs(s.dtSec - 0.01) < 1e-12) &&
+    player.cursor === 11;
+  // 倍速 0：一口气吃完，但受单拍上限保护
+  const fast = new ReplayPlayer({ maxFramesPerTick: 40 });
+  fast.load(frames, 0);
+  const fastBatch = fast.advance(0.016);
+  const cappedOk = fastBatch.length === 40 && fast.cursor === 40; // 单拍上限 40 帧
+  // 大空洞（200 ms 间隔）：第一拍不足预算时不提前消费
+  const gapPlayer = new ReplayPlayer();
+  gapPlayer.load(mkFrames(40, 5, 20, 200), 1);
+  gapPlayer.advance(0.5); // 预算 0.5 s 足够跨过空洞
+  const gapOk = gapPlayer.cursor > 20;
+
+  // ②a 复核 P1-G 回归：**30 s 空洞按真实 30 s 播放**，不被截成 10 s。
+  //     两帧日志 0 / 30000 ms：必须消耗 30 秒动画预算才消费掉第二帧，且该帧 dt=30 s。
+  const gap30 = new ReplayPlayer();
+  gap30.load(
+    [
+      { tMs: 0, gyroDps: [0, 0, 0], accelMs2: [0, 0, 9.8], magUt: [30, 0, 40], hasMag: true, gyroValid: true, accelValid: true },
+      { tMs: 30000, gyroDps: [0, 0, 0], accelMs2: [0, 0, 9.8], magUt: [30, 0, 40], hasMag: true, gyroValid: true, accelValid: true },
+    ] as ReplayFrame[],
+    1,
+  );
+  let ticks = 0;
+  let lastDt = 0;
+  for (let i = 0; i < 40 && !gap30.done; i++) {
+    const st = gap30.advance(1); // 每拍 1 s
+    ticks++;
+    if (st.length) lastDt = st[st.length - 1].dtSec;
+  }
+  const gap30Ok = ticks === 30 && Math.abs(lastDt - 30) < 1e-9 && Math.abs(gap30.durationSec - 30) < 1e-9;
+  // 同一份日志的「精确间隔」函数本身也不得夹紧（旧实现 logIntervalSec(0,30000)=10）
+  const rawGap = logIntervalSec(0, 30000);
+  const gapFnOk = Math.abs(rawGap - 30) < 1e-9 && logIntervalSec(0, 2.5) === 0.0025 && logIntervalSec(5, 5) === 0;
+
+  // ②b 播放器其余接口：清空/载入判定/时长/进度/非法倍速夹紧
+  const misc = new ReplayPlayer();
+  const miscFrames = mkFrames(50, 20); // 50 帧 @50 Hz = 0.98 s
+  const emptyState = !misc.loaded && !misc.done && misc.durationSec === 0 && misc.playedSec === 0;
+  misc.load(miscFrames, 1);
+  misc.setSpeed(Number.NaN); // 非法倍速 → 回落到 1×
+  const loadedState = misc.loaded && misc.frameCount === 50 && Math.abs(misc.durationSec - 0.98) < 1e-9;
+  misc.advance(0.5);
+  const midProgress = misc.playedSec > 0 && !misc.done;
+  misc.setSpeed(0); // 最快
+  misc.advance(0.016);
+  const finished = misc.done && misc.cursor === 50 && Math.abs(misc.playedSec - 0.98) < 1e-9;
+  misc.clear();
+  const cleared = !misc.loaded && misc.frameCount === 0 && misc.playedSec === 0;
+  const miscOk = emptyState && loadedState && midProgress && finished && cleared;
+
+  // ③ 重连退避：模拟「每次重连都失败」的连续链路，检查 1s→2s→4s 与次数用尽
+  let now = 0;
+  let pending: { fn: () => void; at: number } | null = null;
+  const policy = new ReconnectPolicy({
+    maxAttempts: 3,
+    baseDelayMs: 1000,
+    schedule: (fn, delay) => {
+      pending = { fn, at: now + delay };
+      return pending;
+    },
+    cancelScheduled: () => {
+      pending = null;
+    },
+  });
+  let retries = 0;
+  const delays: number[] = [];
+  let exhausted = false;
+  // 每次重连都失败 → 走完整个退避序列
+  const attempt = (): void => {
+    retries++;
+    const plan = policy.onFailure(attempt);
+    if (!plan) return;
+    if (plan.exhausted) {
+      exhausted = true;
+      return;
+    }
+    delays.push(plan.delayMs);
+  };
+  attempt(); // 第 1 次失败 → 排 1s
+  // 依次触发排程（每次触发都等于"又失败一次"）
+  for (let i = 0; i < 4 && pending; i++) {
+    const p: { fn: () => void; at: number } = pending;
+    pending = null;
+    now = p.at;
+    p.fn();
+  }
+  const delaysOk = delays[0] === 1000 && delays[1] === 2000 && delays[2] === 4000;
+  const exhaustedOk = exhausted && policy.attemptCount === 3;
+  const firedOk = retries === 4; // 首失败 + 3 次重连尝试
+  // onSuccess 清零后还能重新计数
+  policy.onSuccess();
+  const after = policy.onFailure(() => retries++);
+  const resetOk = after?.attempt === 1 && after.delayMs === 1000;
+  // cancel：取消挂起的排程，且不再重连
+  policy.cancel();
+  const cancelOk = policy.pending === false && policy.attemptCount === 0;
+  let disabledCalls = 0;
+  const disabledPolicy = new ReconnectPolicy({ maxAttempts: 3, enabled: () => false });
+  const disabledPlan = disabledPolicy.onFailure(() => disabledCalls++);
+  const disabledOk = disabledPlan === null && disabledPolicy.attemptCount === 0;
+  check(
+    "数据源核心：有界队列丢最旧、回放按录制时间/倍速消费、重连退避 1s→2s→4s 并可取消",
+    qOk && qEdge && stepOk && cappedOk && gapOk && gap30Ok && gapFnOk && miscOk && delaysOk && exhaustedOk && firedOk && resetOk && cancelOk && disabledOk,
+    `队列 ${q.join(",")}（drop ${drops}）、边界=${qEdge}；回放一拍 ${tickBig.length} 帧（首帧 dt=${tickBig[0]?.dtSec.toFixed(4)}s）、` +
+      `最快档单拍 ${fastBatch.length} 帧、空洞后游标 ${gapPlayer.cursor}、` +
+      `30 s 空洞用 ${ticks} 拍（dt=${lastDt.toFixed(1)}s，间隔函数=${rawGap.toFixed(1)}s）、其余接口=${miscOk}；` +
+      `退避 ${delays.join("/")}ms、用尽=${exhaustedOk}、触发 ${retries} 次、` +
+      `成功后重排 ${after?.delayMs}ms、取消=${cancelOk}、关闭=${disabledOk}`,
+  );
+}
+
+// 74. 有界统计 + golden 指纹：长跑内存不增长、短跑仍按旧口径、数值回归被钉住
+{
+  // 130 s × 500 Hz = 65000 个样本 > STATS_CAP(60000) → 进入蓄水池近似
+  const longRun = runExperiment({ ...defaultExperimentConfig(), durationSec: 130 });
+  const m = longRun.metrics.find((x) => x.id === "mahony")!;
+  const shortRun = runExperiment({ ...defaultExperimentConfig(), durationSec: 30 });
+  const ms = shortRun.metrics.find((x) => x.id === "mahony")!;
+  const boundedOk =
+    m.percentileApprox === true &&
+    ms.percentileApprox !== true &&
+    Number.isFinite(m.rmse) && Number.isFinite(m.p95) && Number.isFinite(m.steadyRmse) &&
+    Math.abs(m.n - 130 * 500) <= 2;
+  check(
+    "有界统计：超过 STATS_CAP 后转时间分桶（内存封顶），全程指标仍有限且样本数正确",
+    boundedOk && (m.steadyMode === "exact" || m.steadyMode === "early-stop") && ms.steadyMode === "exact",
+    `130 s 样本数=${m.n}（≈65000）、分位数近似=${m.percentileApprox}、稳态口径=${m.steadyMode}、RMSE=${m.rmse.toFixed(3)}°；` +
+      `30 s 分位数近似=${ms.percentileApprox ?? false}、稳态口径=${ms.steadyMode}`,
+  );
+
+  // 截断不能改变数值口径：同一个 30 s 配置，分别用默认上限与「很小」的上限跑，
+  // 均值/均方/峰值/稳态/分位数必须一致（分位数允许时间均匀子集带来的小偏差）。
+  const capBase = { ...defaultExperimentConfig(), durationSec: 30 };
+  const full = runExperiment(capBase);
+  const cut = runExperiment(capBase, { statsCapOverride: 3000 }); // 6 s 之后就截断
+  const cmp = (id: string) => {
+    const a = full.metrics.find((x) => x.id === id)!;
+    const b = cut.metrics.find((x) => x.id === id)!;
+    return {
+      id,
+      mean: [a.mean, b.mean] as const,
+      rmse: [a.rmse, b.rmse] as const,
+      max: [a.max, b.max] as const,
+      steady: [a.steadyRmse, b.steadyRmse] as const,
+      p50: [a.p50, b.p50] as const,
+      p95: [a.p95, b.p95] as const,
+      approx: b.percentileApprox === true,
+      mode: b.steadyMode,
+    };
+  };
+  const rows = ["pure", "comp", "mahony", "madg", "kalman"].map(cmp);
+  const exactOk = rows.every(
+    (r) =>
+      Math.abs(r.mean[0] - r.mean[1]) < 1e-12 &&
+      Math.abs(r.rmse[0] - r.rmse[1]) < 1e-12 &&
+      Math.abs(r.max[0] - r.max[1]) < 1e-12,
+  );
+  // 稳态与分位数是近似（时间分桶 / 每桶一个样本），允许 ≤3% 的偏差但必须同量级
+  const nearOk = rows.every(
+    (r) =>
+      Math.abs(r.steady[0] - r.steady[1]) / Math.max(1e-9, r.steady[0]) < 0.03 &&
+      Math.abs(r.p95[0] - r.p95[1]) / Math.max(1e-9, r.p95[0]) < 0.15,
+  );
+  check(
+    "截断不改变数值口径：均值/均方/峰值逐位一致，稳态与 P95 在时间分桶误差内",
+    exactOk && nearOk && rows.every((r) => r.approx && r.mode === "exact"),
+    `均值/均方/峰值逐位一致=${exactOk}；` +
+      rows
+        .map((r) => `${r.id} 稳态 ${r.steady[0].toFixed(4)}→${r.steady[1].toFixed(4)}、P95 ${r.p95[0].toFixed(3)}→${r.p95[1].toFixed(3)}`)
+        .join("；"),
+  );
+
+  // golden 快照：把每个算法的 RMSE/稳态写成人能读的字符串（比哈希更有用——
+  // 失败时直接看出**哪一个数**变了）。有意改动数值时必须同步更新这两个常数。
+  const snapshot = (cfg: ExperimentConfig): string => {
+    const r = runExperiment(cfg);
+    return r.metrics.map((m) => `${m.id}=${m.rmse.toFixed(4)}/${m.steadyRmse.toFixed(4)}`).join(" ");
+  };
+  // 2026-10-31 第五轮复核基准：SolveLoop 统一调度后（对准检查顺序与界面一致）重新采样
+  const GOLDEN_A = "pure=17.1806/24.0518 comp=1.5677/1.5853 mahony=1.0486/0.7463 madg=1.3593/1.3517 kalman=1.2021/1.1128";
+  // 2026-10-31：抽帧改为「排程保留余量 + dt 为真实经过时间」后重新采样
+  // （此前 200 Hz 实际跑成 166.7 Hz，且 dt 把余量重复计入，Σdt 比总时长多 10%）
+  const GOLDEN_B = "pure=2.8363/3.7988 comp=4.4326/3.1868 mahony=4.6080/3.2442 madg=4.0926/3.0673 kalman=5.0006/4.6157";
+  const snapA = snapshot(defaultExperimentConfig());
+  const snapB = snapshot({ ...defaultExperimentConfig(), scenario: "violent", durationSec: 12, seed: 777, solveRateHz: 200 });
+  check(
+    "golden 快照：默认配置与剧烈机动配置的逐算法 RMSE/稳态与基准一致（数值回归锁）",
+    snapA === GOLDEN_A && snapB === GOLDEN_B,
+    snapA === GOLDEN_A ? `A 一致；B=${snapB}` : `A=${snapA}（基准 ${GOLDEN_A}）；B=${snapB}（基准 ${GOLDEN_B}）`,
+  );
+}
+
+// 74b. 复核反例回归：统计容器有界、分位数不混叠、稳态窗口精确
+{
+  /* ① 容器有界 + ② 抗混叠：**直接驱动生产实现**（MetricAccumulator）。
+     复核 6.1 的教训：旧用例在测试里复制了一份 Algorithm R、并用 m.n 冒充"容量"，
+     于是"无界数组 / p95=NaN / n 正确"的假实现也能通过。这里改成：
+       · 用真实的累加器喂 130 s 与 260 s 的周期信号，读 diagnostics() 的容器长度；
+       · 分位数直接取生产 summary() 的结果与"全样本精确 P95"比。 */
+  const feed = (durationSec: number, seed: number): MetricAccumulator => {
+    const acc = new MetricAccumulator({ plannedEndSec: durationSec });
+    acc.setReservoirSeed(seed >>> 0);
+    const n = Math.round(durationSec * 500);
+    for (let i = 1; i <= n; i++) {
+      const t = i / 500;
+      // 10 Hz 周期误差：固定相位抽样会恒定采到同一个相位 → P95 掉到 1.25° 左右
+      acc.add(Math.abs(10 * Math.sin(2 * Math.PI * 10 * t)), qId(), t);
+    }
+    return acc;
+  };
+  const acc130 = feed(130, 0x5eed);
+  const acc260 = feed(260, 0x5eed);
+  const d130 = acc130.diagnostics();
+  const d260 = acc260.diagnostics();
+  const stubEst = { id: "mahony", label: "Mahony", color: "#fff", magEnabled: true, q: qId(), telemetry: { detail: {} } } as unknown as Estimator;
+  const m130 = acc130.summary(stubEst, null, true);
+  const m260 = acc260.summary(stubEst, null, true);
+  const countOk =
+    d130.errors === STATS_CAP && d130.times === STATS_CAP &&
+    d260.errors === STATS_CAP && d260.times === STATS_CAP &&
+    d130.reservoirErr === STATS_RESERVOIR_CAP && d260.reservoirErr === STATS_RESERVOIR_CAP &&
+    d130.reservoirT === STATS_RESERVOIR_CAP && d260.reservoirT === STATS_RESERVOIR_CAP &&
+    d130.truncated && d260.truncated &&
+    m130.n === 130 * 500 && m260.n === 260 * 500;
+  const signal: number[] = [];
+  for (let i = 1; i <= 65000; i++) signal.push(Math.abs(10 * Math.sin(2 * Math.PI * 10 * (i / 500))));
+  const exactP95 = percentile(signal, 0.95);
+  // 固定相位对照（旧错法的复现）：每 0.1 s 取一个样本
+  const fixedPhase: number[] = [];
+  for (let i = 0; i < signal.length; i++) if (Math.floor((i / 500) / 0.1) !== Math.floor(((i - 1) / 500) / 0.1)) fixedPhase.push(signal[i]);
+  const fixedP95 = percentile(fixedPhase, 0.95);
+  const resP95 = m130.p95; // ← 生产蓄水池给的分位数
+  const antiAliasOk = Math.abs(resP95 - exactP95) < 0.15 && fixedP95 < exactP95 * 0.5;
+
+  // ③ 稳态窗口精确：窗口前的大误差不得被带进窗口
+  //    用注入小上限的 runner 跑同一配置，比较「全程」与「稳态」；稳态必须严格小于窗口前的污染值。
+  const cfgSteady: ExperimentConfig = { ...defaultExperimentConfig(), durationSec: 30 };
+  const steadyRun = runExperiment(cfgSteady);
+  const steadyMetrics = steadyRun.metrics.find((x) => x.id === "mahony")!;
+  const steadyOk =
+    Number.isFinite(steadyMetrics.steadyRmse) &&
+    steadyMetrics.steadyRmse <= steadyMetrics.rmse * 1.5 &&
+    (steadyMetrics.steadyMode === "exact" || steadyMetrics.steadyMode === "early-stop") &&
+    steadyMetrics.steadyFromSec! > 15;
+
+  check(
+    "复核反例回归：统计容器有界、蓄水池分位数不混叠、稳态窗口按预定切点精确累计",
+    countOk && antiAliasOk && steadyOk,
+    `生产容器 130 s=${d130.errors}/${d130.reservoirErr}、260 s=${d260.errors}/${d260.reservoirErr}（容量 ${d130.cap}/${d130.reservoirCap}），样本 n=${m130.n}/${m260.n}；` +
+      `10 Hz 信号 P95：精确 ${exactP95.toFixed(4)}°、固定相位 ${fixedP95.toFixed(4)}°、蓄水池 ${resP95.toFixed(4)}°；` +
+      `稳态 ${steadyMetrics.steadyRmse.toFixed(3)}° (${steadyMetrics.steadyMode})，切点 ${steadyMetrics.steadyFromSec?.toFixed(2)}s`,
+  );
+}
+
+// 74c. 逐帧 trace 的输入/事件契约：aligned 标在正确的那一步、raw/consumed/dt/事件都在
+{
+  // 静止剧本（manual 目标 0）+ 35° 倾角初偏 + 互补滤波故意收敛很慢：
+  // 静止 3 s 后偏差仍 >8° → 静止粗对准必然触发（与「详细运行」用例同一套阈值条件）
+  const cfgAlign: ExperimentConfig = {
+    ...cloneExperimentConfig(defaultExperimentConfig()),
+    scenario: "manual",
+    manualTargetDeg: [0, 0, 0],
+    durationSec: 8,
+    initialAttitude: { kind: "fixed-axis", axis: [1, 0, 0], angleDeg: 35 },
+  };
+  cfgAlign.estimators.comp = { ...cfgAlign.estimators.comp, rampEnabled: false, params: { alpha: 0.01 } };
+  const tr = runTrace(cfgAlign, 5000);
+  const alignedSteps = tr.steps.filter((st) => st.aligned);
+  // ① aligned 必须标在**对准发生的那一步**：其 t 等于事件时刻；前一步不得被标（复核 P2-4）
+  const alignAtRightStep =
+    tr.alignTimes.length >= 1 &&
+    alignedSteps.length === tr.alignTimes.length &&
+    tr.alignTimes.every((at) => alignedSteps.some((st) => Math.abs(st.t - at) < 1e-12)) &&
+    tr.steps.every((st, i) => !st.aligned || i === 0 || tr.steps[i - 1].t < st.t);
+  const prevNotMarked = alignedSteps.every((st) => {
+    const idx = tr.steps.indexOf(st);
+    return idx <= 0 || tr.steps[idx - 1].aligned === false;
+  });
+  // ② 每步都带得动 dt / raw / consumed（比较器与诊断都靠它们）
+  const fieldsOk = tr.steps.length > 100 && tr.steps.every((st) =>
+    Number.isFinite(st.dt) && st.dt > 0 &&
+    st.raw.gyro.length === 3 && st.raw.accel.every(Number.isFinite) &&
+    st.consumed.accel.every(Number.isFinite) && st.consumed.mag.every(Number.isFinite));
+  // ③ 时间严格递增、五算法 id 齐全
+  const seqOk = tr.steps.every((st, i) => i === 0 || st.t > tr.steps[i - 1].t) &&
+    tr.estimatorIds.length === 5 && tr.estimatorIds.join(",") === "pure,comp,mahony,madg,kalman";
+  // ④ 门控事件不能是空的：剧烈机动下 gate-reject 必须被数到（旧实现 eventCounts 恒为 {}）
+  const violent = runTrace({ ...defaultExperimentConfig(), scenario: "violent", durationSec: 6, seed: 909 }, 5000);
+  const gateCounted = (violent.eventCounts["gate-reject"] ?? 0) > 0;
+  check(
+    "逐步 trace 契约：aligned 标在对准当步、dt/raw/consumed 齐备、时序严格、门控事件被计数",
+    alignAtRightStep && prevNotMarked && fieldsOk && seqOk && gateCounted,
+    `对准 ${tr.alignTimes.length} 次（t=${tr.alignTimes.map((t) => t.toFixed(3)).join(",")}），` +
+      `标注步 ${alignedSteps.map((st) => st.t.toFixed(3)).join(",")}；前一步未被误标=${prevNotMarked}；` +
+      `步数字段齐备=${fieldsOk}（${tr.steps.length} 步）、时序/算法 id=${seqOk}；` +
+      `剧烈机动 gate-reject=${violent.eventCounts["gate-reject"] ?? 0}`,
+  );
+}
+
+// 75. 校准的拟合/验证分离：残差只用没参与拟合的点；独立姿态验证能看到"方向偏没偏"
+{
+  // 合成带硬铁 + 非对称软铁 + 噪声的点云（与文档一致的世界磁场合成）
+  const trueField: V3 = [22.5, 0, 43.4];
+  const g = new Gauss(mulberry32(0xfeed));
+  const hardIron: V3 = [8, -5, 6];
+  const soft: V3 = [1.08, 0.94, 1.02];
+  // 验证集与拟合集严格不重叠：按同一函数 splitFitValidate 的确定性交错划分
+  const points: Array<{ qTrue: { w: number; x: number; y: number; z: number }; magRaw: V3 }> = [];
+  const records = Array.from({ length: 320 }, () => {
+    const q = qNorm({ w: g.next(), x: g.next(), y: g.next(), z: g.next() });
+    const mBody = qRotInv(q, trueField);
+    const magRaw: V3 = [
+      mBody[0] * soft[0] + hardIron[0] + 0.25 * g.next(),
+      mBody[1] * soft[1] + hardIron[1] + 0.25 * g.next(),
+      mBody[2] * soft[2] + hardIron[2] + 0.25 * g.next(),
+    ];
+    return { qTrue: q, magRaw };
+  });
+  const { fit: fitRecords, validate: validateRecords } = splitFitValidate(records, 4);
+  const samples = fitRecords.map((r: { magRaw: V3 }) => r.magRaw);
+  points.push(...validateRecords);
+  const cal = calibrateMagWithValidation(samples, "diag", 4);
+  const verify = verifyMagCalibration(cal, points, trueField);
+  // 未参与拟合的验证残差应当与拟合残差同量级（比值 ~1，允许 2 倍内的采样波动）
+  const ratio = cal?.validation?.ratio ?? NaN;
+  const okStat =
+    cal !== null &&
+    Number.isFinite(cal.validation!.residual) &&
+    cal.validation!.count === 60 &&
+    ratio > 0.3 && ratio < 3 &&
+    verify.count === points.length;
+  // 绝对阈值按同一数据生成器的独立噪声留出余量（实测 1.19° → 2°，不能压成 1° 赌样本）。
+  const okHeading =
+    verify.afterMeanDeg < verify.beforeMeanDeg / 3 && verify.afterMeanDeg < 2 && verify.beforeMeanDeg > 3;
+  check(
+    "磁校准独立验证：验证集残差与拟合残差同量级、标定后航向误差显著下降",
+    okStat && okHeading,
+    `拟合残差 ${(cal?.residual ?? NaN).toFixed(4)}、验证残差 ${(cal?.validation?.residual ?? NaN).toFixed(4)}` +
+      `（比值 ${ratio.toFixed(2)}、验证 ${cal?.validation?.count ?? 0} 点）；` +
+      `航向误差 平均 ${verify.beforeMeanDeg.toFixed(2)}° → ${verify.afterMeanDeg.toFixed(2)}°、最大 ${verify.beforeMaxDeg.toFixed(2)}° → ${verify.afterMaxDeg.toFixed(2)}°`,
+  );
+
+  // 加计：留一朝向验证 + 独立样本验证（用另一组噪声种子合成）
+  const M = [1.02, 0.02, -0.01, -0.015, 0.98, 0.03, 0.02, -0.012, 1.01];
+  const bias: V3 = [0.05, -0.03, 0.08];
+  const accelSamples = synthesizeAccelSamples(M, bias, 0.02, 99);
+  const accelCal = calibrateAccel(accelSamples);
+  const loo = accelCal ? validateAccelCalibration(accelSamples) : undefined;
+  const fresh = synthesizeAccelSamples(M, bias, 0.02, 2025);
+  const accelVerify = verifyAccelCalibration(accelCal, fresh);
+  const okAccel =
+    accelCal !== null && loo !== undefined &&
+    loo.heldOutFaces === 6 && loo.meanNormErrMs2 < 0.05 && loo.maxNormErrMs2 < 0.1 &&
+    accelVerify.afterMeanMs2 < accelVerify.beforeMeanMs2 / 3 && Number.isFinite(accelVerify.afterMaxMs2);
+  check(
+    "加计六面留一验证 + 独立样本验证：没见过的朝向上模长误差仍小、校准后前/后对比可见",
+    okAccel,
+    `留一：平均 ${(loo?.meanNormErrMs2 ?? NaN).toFixed(4)} m/s²、最大 ${(loo?.maxNormErrMs2 ?? NaN).toFixed(4)}（${loo?.heldOutFaces ?? 0} 朝向）；` +
+      `新样本：模长误差 ${accelVerify.beforeMeanMs2.toFixed(4)} → ${accelVerify.afterMeanMs2.toFixed(4)} m/s²`,
+  );
+}
+
+// 75b2. 后段留出：能发现「随时间变化」的畸变，而交错验证发现不了
+{
+  const trueField: V3 = [22.5, 0, 43.4];
+  const g = new Gauss(mulberry32(0xfeed));
+  const soft: V3 = [1.08, 0.94, 1.02];
+  const n = 400;
+  const hardStart: V3 = [8, -5, 6];
+  const hardEnd: V3 = [14, -9, 11]; // 后 25% 期间硬铁在漂（温漂/结构应力）
+  const driftAt = (i: number): V3 => {
+    const k = i < n * 0.75 ? 0 : (i - n * 0.75) / (n * 0.25);
+    return [0, 1, 2].map((a) => hardStart[a] + (hardEnd[a] - hardStart[a]) * k) as V3;
+  };
+  const samples: V3[] = [];
+  for (let i = 0; i < n; i++) {
+    const q = qNorm({ w: g.next(), x: g.next(), y: g.next(), z: g.next() });
+    const m = qRotInv(q, trueField);
+    const b = driftAt(i);
+    samples.push([
+      m[0] * soft[0] + b[0] + 0.1 * g.next(),
+      m[1] * soft[1] + b[1] + 0.1 * g.next(),
+      m[2] * soft[2] + b[2] + 0.1 * g.next(),
+    ]);
+  }
+  const cal = calibrateMagWithValidation(samples, "diag", 4);
+  const interleaved = cal?.validation?.residual ?? NaN;
+  const late = cal?.validation?.late?.residual ?? NaN;
+  // 后段残差必须明显更大（漂移被看见），而交错验证几乎看不到
+  check(
+    "后段留出验证：随时间漂移的硬铁只在「后段留出」上暴露（交错验证看不到）",
+    cal !== null && Number.isFinite(late) && late > interleaved * 1.5 && cal!.validation!.late!.ratio > 1.5,
+    `交错验证残差 ${(interleaved * 100).toFixed(2)}%、后段留出 ${(late * 100).toFixed(2)}%` +
+      `（后段/拟合比值 ${(cal?.validation?.late?.ratio ?? NaN).toFixed(2)}）`,
+  );
+}
+
+// 75c. 校准器件指纹与失效提示：参数变了要说，没变不吵
+{
+  const fp = fingerprintOf({ accelCrossAxis: 0.005, accelNonlin: 0, accelNoise: 0.1 }, "full", new Date("2026-10-31T00:00:00Z"));
+  const same = calibrationStaleness(fp, { accelCrossAxis: 0.005, accelNonlin: 0, accelNoise: 0.1 }, "mag", "full");
+  const crossChanged = calibrationStaleness(fp, { accelCrossAxis: 0.01, accelNonlin: 0, accelNoise: 0.1 }, "accel");
+  const modelChanged = calibrationStaleness(fp, { accelCrossAxis: 0.005, accelNonlin: 0, accelNoise: 0.1 }, "mag", "diag");
+  const noiseIgnoredForAccel = calibrationStaleness(fp, { accelCrossAxis: 0.005, accelNonlin: 0, accelNoise: 0.9 }, "accel");
+  const legacy = calibrationStaleness(undefined, { accelCrossAxis: 1, accelNonlin: 1, accelNoise: 1 }, "mag", "diag");
+  const fpFull = fingerprintOf({ accelCrossAxis: 0, accelNonlin: 0, accelNoise: 0.1, magNoise: 0.8 }, "full", new Date("2026-10-31T00:00:00Z"), 50);
+  const targetChanged = calibrationStaleness(fpFull, { accelCrossAxis: 0, accelNonlin: 0, accelNoise: 0.1, magNoise: 0.8 }, "mag", "full", 25);
+  const noiseChanged = calibrationStaleness(fpFull, { accelCrossAxis: 0, accelNonlin: 0, accelNoise: 0.1, magNoise: 1.5 }, "mag", "full", 50);
+  check(
+    "校准器件指纹：参数/模型变化时报「基于旧模型」，未变化与旧档案不误报",
+    same === null && legacy === null &&
+      Boolean(crossChanged?.includes("交叉轴")) &&
+      Boolean(modelChanged?.includes("拟合模型")) &&
+      noiseIgnoredForAccel === null &&
+      Boolean(targetChanged?.includes("目标场强")) && Boolean(noiseChanged?.includes("磁噪声")),
+    `未变=${same === null}、旧档案=${legacy === null}；交叉轴变化「${crossChanged?.slice(0, 24)}…」；` +
+      `模型变化「${modelChanged?.slice(0, 24)}…」；加计不看噪声=${noiseIgnoredForAccel === null}；` +
+      `目标场强变化「${targetChanged?.slice(0, 30)}…」、磁噪声变化「${noiseChanged?.slice(0, 24)}…」`,
+  );
+}
+
+// 75h. 大角误差分解必须精确（log 旋转向量，而非 2vec 小角近似）
+{
+  const cases: Array<[number, number]> = [[7, 7], [90, 90], [180, 180]];
+  const rows = cases.map(([inputDeg]) => {
+    const rel = qFromAxisAngle([0, 0, 1], inputDeg * RAD);
+    const s = so3ErrorSplit(rel, [0, 0, 1]);
+    return { inputDeg, total: s.tiltDeg + s.yawDeg, yaw: s.yawDeg, tilt: s.tiltDeg };
+  });
+  const exactOk = rows.every(
+    (r) => Math.abs(r.yaw - r.inputDeg) < 1e-6 && r.tilt < 1e-6 && Math.abs(r.total - r.inputDeg) < 1e-6,
+  );
+  // 倾角轴同理（垂直重力方向）
+  const tilt180 = so3ErrorSplit(qFromAxisAngle([1, 0, 0], 180 * RAD), [0, 0, 1]);
+  const tiltOk = Math.abs(tilt180.tiltDeg - 180) < 1e-6 && tilt180.yawDeg < 1e-6;
+  check(
+    "大角误差分解精确：90°/180° 的偏航与倾角都按 log 旋转向量给出真值",
+    exactOk && tiltOk,
+    rows.map((r) => `${r.inputDeg}°→yaw ${r.yaw.toFixed(4)}°/+tilt ${r.tilt.toFixed(1)}e-7`).join("、") +
+      `；180° 倾角轴 → ${tilt180.tiltDeg.toFixed(4)}°`,
+  );
+}
+
+// 75g. 复核反例回归：留出真独立、合成同构生产、退化/朝向/水平拒绝、克隆深隔离
+{
+  const rand = new Gauss(mulberry32(0xfeed));
+  const cloud: V3[] = Array.from({ length: 400 }, () => {
+    const q = qNorm({ w: rand.next(), x: rand.next(), y: rand.next(), z: rand.next() });
+    return qRotInv(q, [22.5, 0, 43.4]);
+  });
+  // ① 后段留出必须「前段训练、后段评分」：只改末段数据不得改变用于打分的模型，
+  //    且训练/后段样本集合交集为零（用「末段加 20μT 后前段拟合参数不变」间接验证）
+  // 判据：报告的「后段残差」必须等于「只用前段训练的模型」在后段上的残差；
+  // 若它等于「含后段训练的交错模型」的残差，就说明后段样本参与了训练（旧缺陷）。
+  const drift = cloud.map((p, i) => [p[0] + (i >= 300 ? 20 : 0), p[1], p[2]] as V3);
+  const lateBlock = drift.slice(300);
+  const calDrift = calibrateMagWithValidation(drift, "diag", 4)!;
+  const earlyOnly = calibrateMag(drift.slice(0, 300))!;
+  const interleavedOnDrift = calibrateMag(splitFitValidate(drift, 4).fit)!;
+  const reportedLate = calDrift.validation!.late!.residual;
+  const lateFromEarlyOnly = magFieldResidual(earlyOnly, lateBlock).residual;
+  const lateFromInterleaved = magFieldResidual(interleavedOnDrift, lateBlock).residual;
+  const lateLeakFixed =
+    Math.abs(reportedLate - lateFromEarlyOnly) < 1e-12 &&
+    Math.abs(lateFromEarlyOnly - lateFromInterleaved) > 1e-6 &&
+    Math.abs(earlyOnly.offset[0]) < 1e-9; // 前段独立拟合不被后段污染
+
+  // ② 合成验证与生产 accelChannel 同构：同一模型下 +z 读数逐位一致
+  const model = { accelCrossAxis: 0.005, accelNonlin: 0.02, accelNoise: 0 };
+  const prod = accelChannel([0, 0, 9.80665], { ...model, accelNoise: 0 }, new Gauss(mulberry32(7)));
+  const synth = synthesizeAccelVerification(model, 0x1234, 1)[4].raw; // "+z"，1 点窗口=单点
+  const modelMirrorOk =
+    prod.every((v, i) => Math.abs(v - synth[i]) < 1e-9) &&
+    Math.abs(prod[0] - 0.005 * 9.80665) < 1e-9;
+
+  // ③ 退化/朝向/水平拒绝：同一读数六面、freefall、2g 全部必须返回 null
+  const faces: AccelCalibrationSample["face"][] = ["+x", "-x", "+y", "-y", "+z", "-z"];
+  const sameReading = faces.map((face) => ({ face, raw: [0, 0, 9.80665] as V3 }));
+  const freefall = faces.map((face) => ({ face, raw: [0, 0, 0] as V3 }));
+  const twoG = faces.map((face) => ({ face, raw: [0, 0, 19.6133] as V3 }));
+  const degenerateOk =
+    calibrateAccel(sameReading) === null && calibrateAccel(freefall) === null && calibrateAccel(twoG) === null;
+  // 静止判据：两点窗口、freefall、2g 都必须拒绝；合格窗口通过
+  const win = (n: number, accel: V3) => Array.from({ length: n }, () => ({ gyro: [0, 0, 0] as V3, accel }));
+  const staticOk =
+    assessStaticWindow(win(2, [0, 0, 9.80665])).ok === false &&
+    assessStaticWindow(win(250, [0, 0, 0])).ok === false &&
+    assessStaticWindow(win(250, [0, 0, 19.6133])).ok === false &&
+    assessStaticWindow(win(250, [0, 0, 9.80665])).ok === true;
+  // 档案解析拒绝退化矩阵
+  const degenerateArchiveRejected =
+    parseAccelCalibration({ M: new Array(9).fill(0), bias: [0, 0, 0], rmse: [0, 0, 0], count: 6, faces: ["+x"] }) === null;
+
+  // ④ 克隆深隔离：改克隆的 validation.late 不得污染原配置
+  const cfg = defaultExperimentConfig();
+  cfg.magCalibration = calDrift;
+  const cloned = cloneExperimentConfig(cfg);
+  const before = cfg.magCalibration!.validation!.late!.residual;
+  cloned.magCalibration!.validation!.late!.residual = 123;
+  const cloneOk = cfg.magCalibration!.validation!.late!.residual === before;
+
+  check(
+    "复核反例回归：留出前段训练独立、合成同构生产、退化/朝向/水平拒绝、克隆深隔离",
+    lateLeakFixed && modelMirrorOk && degenerateOk && staticOk && degenerateArchiveRejected && cloneOk,
+    `后段独立=${lateLeakFixed}（报告 ${reportedLate.toFixed(6)} = 前段模型 ${lateFromEarlyOnly.toFixed(6)} ≠ 交错模型 ${lateFromInterleaved.toFixed(6)}）；` +
+      `合成镜像生产=${modelMirrorOk}；退化矩阵拒绝=${degenerateOk}；静止判据=${staticOk}；` +
+      `档案拒绝退化=${degenerateArchiveRejected}；克隆深隔离=${cloneOk}`,
+  );
+}
+
+// 76b. 复核 ROUND8 P1-E：错朝向/病态矩阵必须被拒；档案不静默丢模型；Applied 不能无模型
+{
+  const g = G_ACCEL;
+  // ① +z 的真实读数被记成 +x 面：整组拟合必须失败（旧实现拟合成功、RMSE≈2.31）
+  const wrongFace: AccelCalibrationSample[] = [
+    { face: "+x", raw: [0, 0, g] },            // 错标：实际是 +z 朝下
+    { face: "-x", raw: [-g, 0, 0] },
+    { face: "+y", raw: [0, g, 0] },
+    { face: "-y", raw: [0, -g, 0] },
+    { face: "+z", raw: [0, 0, g] },            // 与 +x 重复
+    { face: "-z", raw: [0, 0, -g] },
+  ];
+  const wrongFaceRejected = calibrateAccel(wrongFace) === null && !faceMatchesReading(wrongFace[0]);
+  // 正常的六面读数必须通过面一致性检查（交叉轴 0.5% 不应被误杀）
+  const cleanFaces: AccelCalibrationSample[] = (["+x", "-x", "+y", "-y", "+z", "-z"] as const).map((face) => {
+    const t = faceTrueVector(face);
+    const raw: V3 = [
+      t[0] + 0.005 * (t[1] + t[2]),
+      t[1] + 0.005 * (t[0] + t[2]),
+      t[2] + 0.005 * (t[0] + t[1]),
+    ];
+    return { face, raw };
+  });
+  const cleanAccepted = cleanFaces.every(faceMatchesReading) && calibrateAccel(cleanFaces) !== null;
+  // 单个朝向错标也要在**采集时**被拦下（faceMatchesReading 直接问）
+  const faceGateOk =
+    faceMatchesReading({ face: "+z", raw: [0, 0, g] }) &&
+    !faceMatchesReading({ face: "+z", raw: [g, 0, 0] }) &&
+    !faceMatchesReading({ face: "-y", raw: [0, g, 0] }) &&
+    faceMatchesReading({ face: "-y", raw: [0, -0.99 * g, 0.05 * g] });
+
+  // ② 病态矩阵：diag(1,1,2e-6)（条件数 ≈5e5）必须被拒（旧实现靠 det>1e-6 蒙过去了）
+  const illM = [1, 0, 0, 0, 1, 0, 0, 0, 2e-6];
+  const condIll = conditionNumber3(illM);
+  const illRejected =
+    !(conditionNumber3(illM) <= ACCEL_MAX_COND) &&
+    parseAccelCalibration({ M: illM, bias: [0, 0, 0], rmse: [0, 0, 0], count: 6, faces: ["+x", "-x", "+y", "-y", "+z", "-z"] }) === null &&
+    parseMagCalibration({ offset: [0, 0, 0], scale: [1, 1, 1], field: 50, residual: 0, count: 10, kind: "full", matrix: illM }) === null;
+  // 镜像矩阵（det<0）也要被拒：它不是合法标定
+  const mirrorRejected = parseAccelCalibration({ M: [1, 0, 0, 0, -1, 0, 0, 0, 1], bias: [0, 0, 0], rmse: [0, 0, 0], count: 6, faces: [] }) === null;
+  // 正常矩阵必须仍被接受
+  const okM = [1.001, 0.005, 0, 0.005, 0.999, 0.002, 0, 0.002, 1.002];
+  const okAccepted = conditionNumber3(okM) <= ACCEL_MAX_COND &&
+    parseAccelCalibration({ M: okM, bias: [0.01, -0.02, 0.03], rmse: [0.01, 0.01, 0.01], count: 6, faces: ["+x", "-x", "+y", "-y", "+z", "-z"] }) !== null;
+
+  // ③ 留一验证带方向误差：错配的标定在"方向"上暴露，而不只是模长
+  const loo = validateAccelCalibration(cleanFaces);
+  const looOk = loo !== undefined && loo.heldOutFaces >= 4 && Number.isFinite(loo.meanDirErrDeg ?? NaN) && (loo.meanDirErrDeg ?? 99) < 2;
+
+  // ④ 档案严格/迁移分流：当前 schema 的档案声明了退化模型 → 报错（不再 ok:true 静默丢模型）
+  const parsedCfg = defaultExperimentConfig();
+  const badArchive = {
+    schema: ARCHIVE_SCHEMA,
+    kind: ARCHIVE_KIND,
+    restore: "config-only" as const,
+    config: { ...parsedCfg, schemaVersion: EXPERIMENT_SCHEMA_VERSION, magCalibration: { offset: [0, 0, 0], scale: [1, 1, 1], field: 50, residual: 0, count: 5, kind: "full" as const, matrix: new Array(9).fill(0) } },
+    run: null,
+  };
+  const strictRejected = parseArchive(badArchive).ok === false;
+  // Applied=true 而模型为 null → 校验报错
+  const appliedNoModel = validateExperimentConfig({ ...parsedCfg, magCalibration: null, magCalibrationApplied: true });
+  const appliedNoModelOk = appliedNoModel.some((p) => p.path === "magCalibrationApplied");
+  // 旧 schema（无 schemaVersion）走迁移并把"丢了什么"记进 notes
+  const legacyArchive = {
+    schema: ARCHIVE_SCHEMA,
+    kind: ARCHIVE_KIND,
+    restore: "config-only" as const,
+    config: { seed: 7, durationSec: 5, magCalibration: { offset: [1, 2, 3], scale: [1, 1, 1], field: 50, residual: 0.01, count: 12 } },
+    run: null,
+  };
+  const migrated = parseArchive(legacyArchive);
+  const legacyMigrated = migrated.ok === true && (migrated.notes?.length ?? 0) > 0 && migrated.config.magCalibration !== null;
+
+  // ⑤ 克隆深隔离：initialAttitude.axis 与 accel 的 M 都必须独立
+  const axisCfg = defaultExperimentConfig();
+  axisCfg.initialAttitude = { kind: "fixed-axis", axis: [1, 0, 0], angleDeg: 30 };
+  const axisClone = cloneExperimentConfig(axisCfg);
+  axisClone.initialAttitude.axis![0] = 9;
+  const axisIsolated = axisCfg.initialAttitude.axis![0] === 1;
+  const accelCfg = defaultExperimentConfig();
+  accelCfg.accelCalibration = { M: [...okM], bias: [0, 0, 0], rmse: [0, 0, 0], count: 6, faces: ["+x"] };
+  const accelClone = cloneExperimentConfig(accelCfg);
+  accelClone.accelCalibration!.M[0] = 42;
+  const accelIsolated = accelCfg.accelCalibration!.M[0] === okM[0];
+
+  check(
+    "复核 ROUND8 校准契约：错朝向/病态/镜像拒绝、正常通过、档案严格分流、克隆深隔离",
+    wrongFaceRejected && cleanAccepted && faceGateOk && illRejected && mirrorRejected && okAccepted &&
+      looOk && strictRejected && appliedNoModelOk && legacyMigrated && axisIsolated && accelIsolated,
+    `+z 误标 +x 被拒=${wrongFaceRejected}、干净六面通过=${cleanAccepted}、面闸门=${faceGateOk}；` +
+      `病态(cond=${condIll.toExponential(2)})拒绝=${illRejected}、镜像拒绝=${mirrorRejected}、正常矩阵接受=${okAccepted}；` +
+      `留一方向误差=${(loo?.meanDirErrDeg ?? NaN).toFixed(3)}°（${loo?.heldOutFaces} 面）；` +
+      `档案严格拒绝=${strictRejected}、Applied 无模型报错=${appliedNoModelOk}、旧档迁移=${legacyMigrated}；` +
+      `clone.axis 隔离=${axisIsolated}、clone.M 隔离=${accelIsolated}`,
+  );
+}
+
+// 76c. SO(3) 世界系误差分解：倾斜真值下，绕世界重力轴的误差只能进偏航
+{
+  // q_true 含偏航+横滚：把「绕世界重力轴的 8°」与「绕机体 z 的 8°」区分开。
+  // 机体系小角向量直接按世界重力轴投影，会把前者错拆出 ~4° 倾角（ROUND5 实测）。
+  const truth = qMul(qFromAxisAngle([0, 0, 1], 40 * RAD), qFromAxisAngle([1, 0, 0], 30 * RAD));
+  const estWorldYaw = qMul(qFromAxisAngle([0, 0, 1], 8 * RAD), truth);
+  const worldRel = qMul(truth, qConj(estWorldYaw));
+  const splitWorldYaw = so3ErrorSplit(worldRel, [0, 0, 1]);
+  const estBodyYaw = qMul(truth, qFromAxisAngle([0, 0, 1], 8 * RAD));
+  const splitBodyYaw = so3ErrorSplit(qMul(truth, qConj(estBodyYaw)), [0, 0, 1]);
+  const worldHorizontal = qMul(qFromAxisAngle([1, 0, 0], 8 * RAD), truth);
+  const splitHorizontal = so3ErrorSplit(qMul(truth, qConj(worldHorizontal)), [0, 0, 1]);
+  check(
+    "SO(3) 世界系分解：倾斜真值下世界偏航/水平误差不混轴，机体 z 偏航按重力几何分解",
+    splitWorldYaw.tiltDeg < 1e-6 && Math.abs(splitWorldYaw.yawDeg - 8) < 0.02 &&
+      Math.abs(splitBodyYaw.tiltDeg - 4) < 0.02 && Math.abs(splitBodyYaw.yawDeg - Math.sqrt(48)) < 0.02 &&
+      Math.abs(splitHorizontal.tiltDeg - 8) < 0.02 && splitHorizontal.yawDeg < 1e-6,
+    `世界重力轴误差 → tilt ${splitWorldYaw.tiltDeg.toFixed(4)}° / yaw ${splitWorldYaw.yawDeg.toFixed(4)}°；` +
+      `机体 z 误差 → tilt ${splitBodyYaw.tiltDeg.toFixed(4)}° / yaw ${splitBodyYaw.yawDeg.toFixed(4)}°；` +
+      `世界水平轴误差 → tilt ${splitHorizontal.tiltDeg.toFixed(4)}° / yaw ${splitHorizontal.yawDeg.toFixed(4)}°`,
+  );
+}
+
+// 75b. 加计独立验证合成：当前器件参数与窗口均值模型，不能拿另一颗 IMU 打分
+{
+  const model = { accelCrossAxis: 0.005, accelNonlin: 0, accelNoise: 0 };
+  const samples = synthesizeAccelVerification(model);
+  const cal = calibrateAccel(samples);
+  const verify = verifyAccelCalibration(cal, samples);
+  // 生产模型 k=0.005 时，六面读数的模长偏离约 2.5e-4 m/s²（旧合成用 2k，偏大约 4 倍）
+  const nearZero =
+    verify.afterMeanMs2 < 1e-12 && verify.beforeMeanMs2 > 1e-4 &&
+    accelVerdict(verify.beforeMeanMs2, verify.afterMeanMs2).includes("有效");
+  const modelChanged = { ...model, accelCrossAxis: 0.002 };
+  const changedVerify = verifyAccelCalibration(cal, synthesizeAccelVerification(modelChanged));
+  const changedReported = changedVerify.afterMeanMs2 > changedVerify.beforeMeanMs2 &&
+    accelVerdict(changedVerify.beforeMeanMs2, changedVerify.afterMeanMs2).includes("未见改善");
+  void changedReported;
+  const noisy = synthesizeAccelVerification({ ...model, accelNoise: 0.1 });
+  const noisyOk = noisy.length === 6 && noisy.every((s) => s.raw.every(Number.isFinite));
+  check(
+    "加计独立验证合成（与生产 accelChannel 同构）：匹配模型恢复、模型漂移如实报未见改善",
+    nearZero && changedReported && noisyOk,
+    `匹配：${verify.beforeMeanMs2.toFixed(4)} → ${verify.afterMeanMs2.toExponential(1)} m/s²；` +
+      `漂移：${changedVerify.beforeMeanMs2.toFixed(4)} → ${changedVerify.afterMeanMs2.toFixed(4)} m/s²；噪声窗口=${noisyOk}`,
+  );
+}
+
+// 76. NIS/NEES 的尺度检验：指标必须对「R/Q 标定偏乐观」单调响应，而不是只保证有限
+{
+  // 静止 + 固定真值：同一份数据、只改滤波器**假定**的观测噪声 R（obsNoise）与过程噪声 Q（gyroNoiseDps）
+  const sweep = (obsNoise: number, gyroNoiseDps: number) => {
+    const cfg = defaultExperimentConfig();
+    cfg.scenario = "manual";
+    cfg.durationSec = 20;
+    cfg.estimators.kalman = { ...cfg.estimators.kalman, params: { gyroNoiseDps, obsNoise } };
+    const r = runExperiment(cfg);
+    const m = r.metrics.find((x) => x.id === "kalman")!;
+    return { nis: m.nisAccelMean ?? NaN, nees: m.neesThetaMean ?? NaN, rmse: m.rmse };
+  };
+  // R 越大 → 残差相对于假定噪声越小 → NIS 越小（单调）
+  const rSmall = sweep(0.02, 0.2);
+  const rMid = sweep(0.05, 0.2);
+  const rBig = sweep(0.2, 0.2);
+  // Q 越大 → 滤波器认为自己的姿态更不确定 → NEES（eᵀP⁻¹e）越小（单调）
+  const qSmall = sweep(0.05, 0.05);
+  const qBig = sweep(0.05, 0.8);
+  const nisMono = rSmall.nis > rMid.nis && rMid.nis > rBig.nis;
+  const neesMono = qSmall.nees > qBig.nees;
+  // 尺度感：R 放大 10 倍，NIS 应下降数倍以上（不是只差 1%）
+  const nisScale = rBig.nis < rSmall.nis / 3;
+  const finite = [rSmall, rMid, rBig, qSmall, qBig].every(
+    (x) => Number.isFinite(x.nis) && Number.isFinite(x.nees) && Number.isFinite(x.rmse),
+  );
+  check(
+    "NIS/NEES 尺度检验：R 越大 NIS 越小、Q 越大 NEES 越小（单调且量级敏感）",
+    nisMono && neesMono && nisScale && finite,
+    `NIS(R=0.02/0.05/0.2) = ${rSmall.nis.toFixed(2)} / ${rMid.nis.toFixed(2)} / ${rBig.nis.toFixed(2)}；` +
+      `NEES(Q=0.05/0.8) = ${qSmall.nees.toFixed(2)} / ${qBig.nees.toFixed(2)}`,
+  );
+}
+
+// 77. 抽出来的纯模块：实验档案构造/解析、批量表格与校准面板文案
+{
+  const cfg = defaultExperimentConfig();
+  cfg.seed = 4242;
+  cfg.magModel = "full";
+  cfg.magCalibration = {
+    offset: [1, 2, 3], scale: [1, 1, 1], field: 50, residual: 0.01, count: 100,
+    kind: "full", matrix: [1, 0, 0, 0, 1, 0, 0, 0, 1],
+    validation: { residual: 0.012, count: 25, maxErrUt: 1.5, ratio: 1.2 },
+  };
+  cfg.magCalibrationApplied = true;
+  const run: ArchiveRunInfo = {
+    elapsedSec: 12.5,
+    dataSource: "模拟",
+    reference: "groundTruth",
+    finishedAtIso: "2026-10-31T00:00:00.000Z",
+    metrics: [{ id: "mahony", n: 10, mean: 1, rmse: 1.2, max: 2, convergedAt: 1.5 }],
+  };
+  const archive = buildArchive(cfg, run);
+  // 往返：JSON → 解析 → 配置与运行信息都还原；坏格式/坏配置被明确拒绝
+  const roundTrip = parseArchive(JSON.parse(JSON.stringify(archive)));
+  const badKind = parseArchive({ ...archive, kind: "something-else" });
+  // 用「迁移不会修掉、但校验必须拦下」的坏值：零轴初始偏差
+  const badConfig = parseArchive({ ...archive, config: { ...cfg, initialAttitude: { kind: "fixed-axis", axis: [0, 0, 0], angleDeg: 30 } } });
+  const okRound =
+    roundTrip.ok === true &&
+    roundTrip.config.seed === 4242 &&
+    roundTrip.config.magModel === "full" &&
+    roundTrip.config.magCalibrationApplied === true &&
+    roundTrip.config.magCalibration?.kind === "full" &&
+    roundTrip.run?.elapsedSec === 12.5;
+  const describe = describeArchiveRun(run);
+  check(
+    "实验档案纯模块：构造→JSON→解析往返一致，坏格式/坏配置被拒，运行信息可读化",
+    okRound && badKind.ok === false && badConfig.ok === false && describe.includes("12.5") && describe.includes("模拟真值"),
+    `往返一致=${okRound}；坏 kind 被拒=${badKind.ok === false}；坏配置被拒=${badConfig.ok === false}；说明「${describe.slice(0, 28)}…」`,
+  );
+
+  // 批量表格：7 列口径 + SO(3) 指标优先 + 状态行把统计口径写在眼前
+  const rows = batchRowsHtml(
+    [{
+      id: "mahony", label: "Mahony", runs: 3, rmseP50: 1.234, rmseP95: 1.5, rmseMean: 1.3,
+      steadyRmseP50: 0.9, steadyRmseP95: 1.1, nonConvergedPct: 0,
+      tiltRmseP95: 9.9, yawRmseP95: 8.8, tiltSo3P95: 0.7, yawSo3P95: 0.6,
+    }],
+    [{ id: "mahony", label: "Mahony", color: "#58a6ff" }],
+  );
+  const cols = (rows.match(/<td>/g) ?? []).length;
+  const usesSo3 = rows.includes("0.70") && rows.includes("0.60") && !rows.includes("9.90");
+  const status = batchStatusText({
+    count: 10, durationSec: 10, baseSeed: 1, lastSeed: 9, steadyFromSec: null, mode: "worker",
+  });
+  check(
+    "批量表格纯模块：7 列、优先用 SO(3) 倾角/偏航、状态行写明 Worker 路径与稳态口径",
+    cols === 7 && usesSo3 && status.includes("末段 40%") && status.includes("Web Worker"),
+    `列数=${cols}（应 7）、用 SO(3) 指标=${usesSo3}；状态「${status.slice(0, 40)}…」`,
+  );
+
+  // 校准面板文案：拟合/验证/留一/独立验证四个读数分得清
+  const magState = magStatusText({
+    cal: null, applied: false, collecting: false, sampleCount: 0, message: "", verifyLine: "", target: 240,
+  });
+  const magHtml = magResultHtml(
+    cfg.magCalibration,
+    magVerifyLineHtml({ count: 100, beforeMeanDeg: 12.3, afterMeanDeg: 0.8, beforeMaxDeg: 30, afterMaxDeg: 2 }, [22.5, 0, 43.4]),
+  );
+  const accelHtml = accelResultHtml(
+    {
+      M: [1,0,0,0,1,0,0,0,1], bias: [0,0,0], rmse: [0.001,0.002,0.003], count: 6,
+      faces: ["+x","-x","+y","-y","+z","-z"],
+      validation: { meanNormErrMs2: 0.01, maxNormErrMs2: 0.02, heldOutFaces: 6 },
+    },
+    accelVerifyLineHtml({ count: 6, beforeMeanMs2: 0.16, afterMeanMs2: 0.008, beforeMaxMs2: 0.25, afterMaxMs2: 0.02 }, true),
+  );
+  // 另一侧分支：已应用状态、未采集状态、缺 SO(3) 字段时回退欧拉指标
+  const appliedText = magStatusText({
+    cal: cfg.magCalibration, applied: true, collecting: false, sampleCount: 280, message: "", verifyLine: "", target: 240,
+  });
+  const collectingText = magStatusText({
+    cal: null, applied: false, collecting: true, sampleCount: 12, message: "", verifyLine: "", target: 240,
+  });
+  const accelEmpty = accelStatusText({
+    cal: null, applied: false, sampleCount: 2, message: "", verifyLine: "", windowSeconds: 0.5,
+  });
+  const fallbackRows = batchRowsHtml(
+    [{
+      id: "comp", label: "互补滤波", runs: 1, rmseP50: NaN, rmseP95: NaN, rmseMean: NaN,
+      steadyRmseP50: NaN, steadyRmseP95: NaN, nonConvergedPct: NaN,
+      tiltRmseP95: 1.23, yawRmseP95: 4.56,
+    }],
+    [],
+  );
+  const branchesOk =
+    appliedText.startsWith("已应用") && collectingText.includes("采集中") &&
+    accelEmpty.includes("未采集") && fallbackRows.includes("1.23") && fallbackRows.includes("4.56") &&
+    fallbackRows.includes("—");
+
+  check(
+    "校准面板纯模块：状态文案与四个读数（拟合/验证/留一/独立验证）都在结果块里",
+    magState.includes("未校准") &&
+      magHtml.includes("验证残差") && magHtml.includes("独立验证") &&
+      magHtml.includes("0.80") && accelHtml.includes("留一验证") && accelHtml.includes("独立验证") &&
+      branchesOk,
+    `磁：${magHtml.replace(/<[^>]+>/g, "").slice(0, 60)}…；加计：${accelHtml.replace(/<[^>]+>/g, "").slice(0, 40)}…`,
   );
 }
 

@@ -1,11 +1,28 @@
 /** 机动剧本：给出时刻 t（秒）的目标欧拉角（°），机体以受限角速度跟踪 */
+import type { V3 } from "./quat";
 
 export interface Scenario {
   id: string;
   name: string;
   /** 机动线加速度加权（叠加在滑块之上） */
   accelFactor: number;
-  targetEulerDeg(t: number): [number, number, number];
+  /**
+   * 目标姿态（度）。`world` 可选：只有 manual 剧本需要它来读**实例**的手动目标，
+   * 其余剧本只用 t，保持纯函数（不依赖任何全局可变状态）。
+   */
+  targetEulerDeg(t: number, world?: { manual: ManualTarget }): [number, number, number];
+  /**
+   * **运动学一致模式**（可选）：直接规定真值姿态（欧拉角，ZYX，度）与世界系平动加速度，
+   * 由 World 解析求角速度并积分真值速度/位置。用于把「姿态、角速度、比力、位置真值」
+   * 接到同一条物理轨迹上，而不是姿态剧本与独立正弦扰动各走各的。
+   */
+  kinematic?: {
+    attitudeEulerDeg(t: number): [number, number, number];
+    /** 世界 NED 系平动加速度（m/s²） */
+    accelWorld(t: number): V3;
+    /** 初始速度（NED，m/s）；协调转弯需要 [V,0,0] 才走圆弧而不是从静止螺旋 */
+    initialVelocityNed?: V3;
+  };
 }
 
 type Key = [t: number, roll: number, pitch: number, yaw: number];
@@ -31,7 +48,11 @@ export interface ManualTarget {
   yawDeg: number;
 }
 
-/** 手动模式共享目标：UI 滑块直接写这里，World.manual 指向同一对象 */
+/**
+ * 手动模式的**默认**目标。仅为兼容旧调用（界面滑块历史上直接写这里）保留；
+ * 正确的数据流是：配置里的 `manualTargetDeg` → `World.setManualTarget()`，
+ * 这样「同配置 + 同 seed」才真的可复现（全局可变对象会让复现随进程状态漂移）。
+ */
 export const manualTarget: ManualTarget = { rollDeg: 0, pitchDeg: 0, yawDeg: 0 };
 
 export const scenarios: Record<string, Scenario> = {
@@ -49,7 +70,11 @@ export const scenarios: Record<string, Scenario> = {
     id: "manual",
     name: "手动控制",
     accelFactor: 0.5,
-    targetEulerDeg: () => [manualTarget.rollDeg, manualTarget.pitchDeg, manualTarget.yawDeg],
+    targetEulerDeg: (t, world) => {
+      const m = world?.manual ?? manualTarget;
+      void t;
+      return [m.rollDeg, m.pitchDeg, m.yawDeg];
+    },
   },
   roll360: {
     id: "roll360",
@@ -139,5 +164,48 @@ export const scenarios: Record<string, Scenario> = {
       [8.5, 0, 180, 0],
       [11.5, 0, 0, 0],
     ]),
+  },
+
+  /**
+   * 运动学一致 · 恒定加速度：姿态保持水平，世界北向恒定加速度 a。
+   * 加计真实读数 = Rᵀ(g−a)，位置真值 = ½at²；INS 面板应看到「真值轨迹」被理想编排精确跟踪，
+   * 而带噪声/零偏的算法逐渐分开——这是把「姿态误差 → 位置漂移」接到真实平动上的最简现场。
+   */
+  constantAccel: {
+    id: "constantAccel",
+    name: "平动·恒定加速度",
+    accelFactor: 0,
+    targetEulerDeg: () => [0, 0, 0],
+    kinematic: {
+      attitudeEulerDeg: () => [0, 0, 0],
+      accelWorld: () => [1.5, 0, 0],
+    },
+  },
+  /**
+   * 运动学一致 · 协调转弯：速度 V、偏航角速率 r，bank = atan(V·r/g)。
+   * 世界系加速度为向心加速度 V·r·[−sinψ, cosψ, 0]；姿态为 [bank, 0, ψ]。
+   * 真实飞行的「机动线加速度污染」在这里不再是一条独立正弦，而是与姿态/角速度同源。
+   */
+  coordinatedTurn: {
+    id: "coordinatedTurn",
+    name: "平动·协调转弯",
+    accelFactor: 0,
+    targetEulerDeg: () => [0, 0, 0],
+    kinematic: {
+      attitudeEulerDeg: (t) => {
+        const V = 8;
+        const r = 0.5;
+        const bank = Math.atan2(V * r, 9.80665) * (180 / Math.PI);
+        const yaw = ((r * t) % (2 * Math.PI)) * (180 / Math.PI);
+        return [bank, 0, yaw];
+      },
+      accelWorld: (t) => {
+        const V = 8;
+        const r = 0.5;
+        const psi = r * t;
+        return [-V * r * Math.sin(psi), V * r * Math.cos(psi), 0];
+      },
+      initialVelocityNed: [8, 0, 0],
+    },
   },
 };

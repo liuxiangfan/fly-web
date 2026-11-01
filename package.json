@@ -10,10 +10,14 @@
     "selftest": "tsx scripts/selftest.ts",
     "coverage": "c8 --include='src/**/*.ts' --reporter=text npx tsx scripts/selftest.ts",
     "scenecheck": "tsx scripts/scenecheck.ts",
-    "check": "npm run selftest && npm run scenecheck && npm run htmlcheck",
+    "check": "npm run selftest && npm run scenecheck && npm run htmlcheck && npm run doccheck && npm run statuscheck",
     "htmlcheck": "tsx scripts/htmlcheck.ts",
+    "doccheck": "tsx scripts/doccheck.ts",
+    "statuscheck": "tsx scripts/statuscheck.ts",
+    "benchmark": "tsx scripts/benchmark.ts",
     "icons": "node scripts/make-icons.mjs",
     "smoke": "node scripts/browser-smoke.mjs",
+    "soak": "node scripts/soak.mjs",
     "budget": "node scripts/distbudget.mjs"
   },
   "dependencies": {

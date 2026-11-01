@@ -1,0 +1,161 @@
+{
+  "schema": 1,
+  "generator": "scripts/benchmark.ts",
+  "notes": "所有数字由 npm run benchmark 复算生成；配置/窗口/种子都随记录保存。种子序列由 splitmix32 从 seed 派生，保证配对比较。",
+  "seedSequenceExample": [
+    1365145197,
+    2682685793,
+    40415518
+  ],
+  "records": {
+    "hover-default-30s": {
+      "config": {
+        "scenario": "hover",
+        "durationSec": 30,
+        "solveRateHz": 500,
+        "seed": 24301
+      },
+      "seeds": [
+        1365145197,
+        2682685793,
+        40415518,
+        863273770,
+        3951895519,
+        2066689950,
+        3811395989,
+        1312811519,
+        1941031831,
+        3235159734
+      ],
+      "window": {
+        "startSec": 0,
+        "endSec": 30
+      },
+      "samplesPerRun": 15000,
+      "metrics": [
+        {
+          "id": "pure",
+          "rmseP50": 17.177623,
+          "rmseP95": 17.242945,
+          "steadyRmseP95": 24.132804,
+          "nonConvergedPct": 0,
+          "tiltRmseP95": 16.012023,
+          "yawRmseP95": 7.85977
+        },
+        {
+          "id": "comp",
+          "rmseP50": 1.585512,
+          "rmseP95": 1.588372,
+          "steadyRmseP95": 1.625891,
+          "nonConvergedPct": 0,
+          "tiltRmseP95": 1.045584,
+          "yawRmseP95": 1.20396
+        },
+        {
+          "id": "mahony",
+          "rmseP50": 1.059526,
+          "rmseP95": 1.0632,
+          "steadyRmseP95": 0.787197,
+          "nonConvergedPct": 0,
+          "tiltRmseP95": 0.782353,
+          "yawRmseP95": 0.725829
+        },
+        {
+          "id": "madg",
+          "rmseP50": 1.363824,
+          "rmseP95": 1.377692,
+          "steadyRmseP95": 1.375925,
+          "nonConvergedPct": 0,
+          "tiltRmseP95": 0.990012,
+          "yawRmseP95": 0.964588
+        },
+        {
+          "id": "kalman",
+          "rmseP50": 1.197443,
+          "rmseP95": 1.205663,
+          "steadyRmseP95": 1.12604,
+          "nonConvergedPct": 0,
+          "tiltRmseP95": 1.078191,
+          "yawRmseP95": 0.542099
+        }
+      ]
+    },
+    "kalman-consistency-30s": {
+      "config": {
+        "scenario": "hover",
+        "durationSec": 30,
+        "seed": 4660,
+        "gate": "angle40"
+      },
+      "metrics": {
+        "rmse": 1.211832,
+        "neesThetaMean": 29.171811,
+        "neesBiasMean": 8.706264,
+        "nisAccelMean": 3.991384,
+        "nisMagMean": 0.068724,
+        "accelAcceptPct": 100
+      },
+      "note": "NEES 姿态自由度为 3、零偏自由度为 3；NIS 观测自由度为 3。严重大于自由度说明滤波器过度自信（协方差偏小或 R 偏小）。"
+    },
+    "coning-sweep": {
+      "config": {
+        "freqHz": 12,
+        "ampDps": 120,
+        "durationSec": 4,
+        "refHz": 20000
+      },
+      "points": [
+        {
+          "rateHz": 500,
+          "errDeg": 0.018549193682550327
+        },
+        {
+          "rateHz": 250,
+          "errDeg": 0.05756252054892676
+        },
+        {
+          "rateHz": 125,
+          "errDeg": 0.21055669728053966
+        },
+        {
+          "rateHz": 100,
+          "errDeg": 0.32596171449048134
+        },
+        {
+          "rateHz": 50,
+          "errDeg": 1.3198126490862447
+        }
+      ]
+    },
+    "wahba-clean": {
+      "config": {
+        "eulerDeg": [
+          25,
+          -35,
+          70
+        ],
+        "noiseDeg": [
+          0,
+          0
+        ]
+      },
+      "metrics": {
+        "triadErrDeg": 3.1805546814635168e-15,
+        "questErrDeg": 1.8062078524837297e-14
+      }
+    },
+    "accel-six-face": {
+      "config": {
+        "model": "raw=M·true+bias",
+        "noiseMs2": 0.02,
+        "seed": 99
+      },
+      "metrics": {
+        "rmseX": 0.0035049210903083158,
+        "rmseY": 0.0058250002387452956,
+        "rmseZ": 0.007399810067761466,
+        "faces": 6
+      }
+    }
+  }
+}

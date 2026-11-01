@@ -259,6 +259,33 @@ export const EXPERIMENTS: ExperimentSpec[] = [
     checks: { "telemetry-toggle": false },
     selects: { "solve-rate": "50", "scenario-select": "violent", "source-select": "madg" },
   },
+  {
+    id: "kinematicAccel",
+    name: "平动·恒定加速度",
+    tag: "运动学一致",
+    observe:
+      "本条剧本里姿态、角速度、加计比力、位置真值来自同一条物理轨迹：水平机体以 a=1.5 m/s² 向北加速，" +
+      "加计真实读数 = Rᵀ(g−a)。惯性导航面板会多画一条白色<b>真值轨迹</b>（½at²）；" +
+      "把零偏/噪声归零后选纯积分，它的位置积分应几乎贴住真值——误差完全来自解算而不是「独立扰动」。",
+    sliders: {
+      "imu-gyro-bias": 0, "imu-gyro-noise": 0, "imu-accel-noise": 0, "imu-mag-noise": 0,
+      "imu-lin-accel": 0, "imu-vibration": 0,
+    },
+    checks: { "telemetry-toggle": false },
+    selects: { "scenario-select": "constantAccel", "source-select": "pure" },
+  },
+  {
+    id: "coordinatedTurnExp",
+    name: "平动·协调转弯",
+    tag: "运动学一致",
+    observe:
+      "速度 8 m/s、偏航角速率 0.5 rad/s 的协调转弯：bank≈22°、向心加速度 4 m/s² 与姿态同源。" +
+      "白线是真值圆弧轨迹，五种算法逐渐分家；加计的横向污染不再是「一条独立正弦」。" +
+      "对照「方向门控救场」实验：门控在这里拒绝的是真实机动加速度，代价是短时只能用陀螺。",
+    sliders: { "imu-gyro-bias": 0.5, "imu-gyro-noise": 0.2, "imu-lin-accel": 0, "imu-vibration": 0.1, "imu-mag-noise": 0.8 },
+    checks: { "gate-toggle": true, "telemetry-toggle": true },
+    selects: { "scenario-select": "coordinatedTurn", "source-select": "mahony" },
+  },
 ];
 
 /** 按 id 查实验（未知 id 返回 undefined，便于 UI 安全处理） */

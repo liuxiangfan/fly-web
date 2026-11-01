@@ -1,0 +1,187 @@
+{
+  "generatedAt": "2026-11-01T11:20:31.984Z",
+  "url": "http://127.0.0.1:4173/",
+  "seconds": 30,
+  "intervalMs": 6000,
+  "withBatch": true,
+  "withReconnect": false,
+  "samples": [
+    {
+      "t": 4.331999999999745,
+      "logRows": 108,
+      "logRowsCap": 850,
+      "rawRows": 2166,
+      "rawRowsCap": 30000,
+      "charts": [
+        108,
+        108,
+        108
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 216,
+      "insTrailCap": 1800,
+      "serialQueue": 0,
+      "heapMb": 15.641472816467285,
+      "fps": "20 fps",
+      "serialFrames": 0,
+      "reconnects": 0,
+      "serialRunning": false,
+      "at": 1793532000896,
+      "drops": 0,
+      "opens": 0,
+      "batchGeneration": 0,
+      "reconnectPending": false,
+      "sourceKind": "simulation"
+    },
+    {
+      "t": 11.482000000000504,
+      "logRows": 287,
+      "logRowsCap": 850,
+      "rawRows": 5741,
+      "rawRowsCap": 30000,
+      "charts": [
+        287,
+        287,
+        287
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 574,
+      "insTrailCap": 1800,
+      "serialQueue": 0,
+      "heapMb": 18.379852294921875,
+      "fps": "20 fps",
+      "serialFrames": 0,
+      "reconnects": 0,
+      "serialRunning": false,
+      "at": 1793532011833,
+      "drops": 0,
+      "opens": 0,
+      "batchGeneration": 1,
+      "reconnectPending": false,
+      "sourceKind": "simulation"
+    },
+    {
+      "t": 17.03200000000144,
+      "logRows": 425,
+      "logRowsCap": 850,
+      "rawRows": 8516,
+      "rawRowsCap": 30000,
+      "charts": [
+        425,
+        425,
+        425
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 850,
+      "insTrailCap": 1800,
+      "serialQueue": 0,
+      "heapMb": 14.838815689086914,
+      "fps": "20 fps",
+      "serialFrames": 0,
+      "reconnects": 0,
+      "serialRunning": false,
+      "at": 1793532022021,
+      "drops": 0,
+      "opens": 0,
+      "batchGeneration": 2,
+      "reconnectPending": false,
+      "sourceKind": "simulation"
+    },
+    {
+      "t": 21.88199999999875,
+      "logRows": 547,
+      "logRowsCap": 850,
+      "rawRows": 10941,
+      "rawRowsCap": 30000,
+      "charts": [
+        547,
+        547,
+        547
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1094,
+      "insTrailCap": 1800,
+      "serialQueue": 0,
+      "heapMb": 13.266729354858398,
+      "fps": "20 fps",
+      "serialFrames": 0,
+      "reconnects": 0,
+      "serialRunning": false,
+      "at": 1793532031982,
+      "drops": 0,
+      "opens": 0,
+      "batchGeneration": 3,
+      "reconnectPending": false,
+      "sourceKind": "simulation"
+    }
+  ],
+  "batchLog": [
+    {
+      "index": 1,
+      "outcome": "completed",
+      "elapsedMs": 4926,
+      "genBefore": 0,
+      "genAfter": 1,
+      "generationAdvanced": true,
+      "rows": 5,
+      "seedsDeclared": true
+    },
+    {
+      "index": 2,
+      "outcome": "completed",
+      "elapsedMs": 4173,
+      "genBefore": 1,
+      "genAfter": 2,
+      "generationAdvanced": true,
+      "rows": 5,
+      "seedsDeclared": true
+    },
+    {
+      "index": 3,
+      "outcome": "completed",
+      "elapsedMs": 3929,
+      "genBefore": 2,
+      "genAfter": 3,
+      "generationAdvanced": true,
+      "rows": 5,
+      "seedsDeclared": true
+    }
+  ],
+  "verdict": {
+    "errorsOk": true,
+    "capped": true,
+    "heapOk": true,
+    "clockAdvanced": true,
+    "clockGrowthSec": 17.549999999999006,
+    "reconnectOk": true,
+    "heapMeasured": true,
+    "reconnectWithoutRecovery": 0,
+    "actualDrops": 0,
+    "expectedDrops": 3,
+    "opens": 0,
+    "stallPairs": 0,
+    "framesGrew": true,
+    "reconnectRecoveryOk": true,
+    "batchOk": true,
+    "heapGrowMb": -5.113122940063477,
+    "heapLimitMb": 24,
+    "consoleErrors": [],
+    "pass": true
+  }
+}

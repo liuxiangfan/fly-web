@@ -9,6 +9,8 @@ import { World } from "./core/world";
 import { scenarios } from "./core/scenarios";
 import type { ImuParams, ImuSample } from "./core/imu";
 import { G_ACC, MAG_WORLD_NED, simulateMag, softIronGains } from "./core/imu";
+import { accelVerdict, synthesizeAccelVerification } from "./core/calib-verify";
+import { calibrationStaleness, fingerprintOf } from "./core/calib-meta";
 import {
   ComplementaryEstimator,
   KalmanEstimator,
@@ -17,14 +19,13 @@ import {
   PureGyroEstimator,
   type Estimator,
 } from "./estimators";
-import { DEG, qAngleBetween, qFromAxisAngle, qFromEuler, qId, qMul, qNorm, qRotInv, qSlerp, qToAxisAngle, qToEuler, RAD, symmetricEigen3, type Quat, type V3 } from "./core/quat";
+import { DEG, qAngleBetween, qConj, qFromEuler, qId, qMul, qNorm, qRotInv, qSlerp, qToAxisAngle, qToEuler, RAD, symmetricEigen3, type Quat, type V3 } from "./core/quat";
 import { gimbalDemo, gimbalInnerQuat, toDisplayVec } from "./core/gimbal";
 import * as THREE from "three";
 import { applyViewDom, narrateGimbal, type UiView } from "./ui/mode";
-import { coarseAlign } from "./estimators";
 import { Gauss, mulberry32 } from "./core/rng";
 import {
-  frameDtSec,
+  frameIntervalSec,
   parseFrame,
   parseMavlinkFrame,
   parseTextLine,
@@ -32,7 +33,23 @@ import {
   type SerialImuFrame,
   type SerialProtocol,
 } from "./core/serial";
-import { applyMagCalibration, calibrateMag, type MagCalibration } from "./core/magcal";
+import {
+  applyMagCalibration,
+  calibrateMagWithValidation,
+  verifyMagCalibration,
+  type MagCalibration,
+} from "./core/magcal";
+import {
+  applyAccelCalibration,
+  assessStaticWindow,
+  calibrateAccel,
+  faceMatchesReading,
+  validateAccelCalibration,
+  verifyAccelCalibration,
+  type AccelCalibration,
+  type AccelCalibrationSample,
+  type AccelFace,
+} from "./core/accelcal";
 import { ErrorTracker } from "./core/stats";
 import { EXPERIMENTS, type ExperimentSpec } from "./ui/experiments";
 import { CHALLENGES, type ChallengeSpec } from "./ui/challenges";
@@ -40,9 +57,64 @@ import { fitInsetCanvas } from "./ui/canvas-util";
 import { drawInsMap } from "./ui/ins-view";
 import { b64urlDecode, b64urlEncode } from "./ui/b64";
 import { parseImuCsv, type ReplayFrame, type ReplayParseResult } from "./core/replay";
+import { SolveLoop } from "./core/solve-loop";
+import { ReplayPlayer } from "./core/replay-player";
+import { pushBounded } from "./core/serial-queue";
+import { ReconnectPolicy } from "./core/reconnect";
+import { RUN_H } from "./core/runner";
+import {
+  buildArchive as buildArchiveObject,
+  describeArchiveRun,
+  parseArchive,
+  type ArchiveRunInfo,
+  type ExperimentArchive,
+} from "./core/experiment-archive";
+import { batchRowsHtml, batchStatusText } from "./ui/batch-table";
+import {
+  accelResultHtml,
+  accelStatusText,
+  accelVerifyLineHtml,
+  magHistoryHtml,
+  magResultHtml,
+  magStatusText,
+  magVerifyLineHtml,
+} from "./ui/calib-panel";
 import { InsIntegrator } from "./core/ins";
-import { initDocDemos } from "./ui/doc-demos";
+import type { DocDemos } from "./ui/doc-demos";
 import { mountTour, TOUR_STEPS } from "./ui/tour";
+import {
+  DEFAULT_EXPERIMENT_CONFIG,
+  DEFAULT_ESTIMATOR_TUNING,
+  defaultExperimentConfig,
+  initialAttitudeOf,
+  validateExperimentConfig,
+  type ExperimentConfig,
+  type EstimatorId,
+  type EstimatorTuning,
+  type MagCalModel,
+} from "./core/experiment-config";
+import {
+  applyTuning,
+  resultDigest,
+  runExperiment,
+  runMonteCarlo,
+  runTrace,
+  seedSequence,
+  summarizeMetricsLists,
+  summarizeRuns,
+  type EstimatorRunMetrics,
+  type HeadlessRunResult,
+} from "./core/runner";
+import type { BatchRequest, BatchResponse } from "./core/batch-protocol";
+import {
+  hasPhysicalReference,
+  isExternalSource,
+  referenceKindOf,
+  sourceLabelOf,
+  type DataSourceKind,
+  type DataSourceState,
+  type ReferenceKind,
+} from "./core/data-source";
 
 const H = 1 / 500; // 仿真/解算步长
 const LOG_DT = 0.04; // 曲线记录间隔
@@ -72,7 +144,12 @@ function showSimError(err: unknown): void {
 }
 
 // ---------- 仿真状态 ----------
-const world = new World(scenarios.hover);
+/**
+ * 唯一的数值实验配置（P1）：滑块直接写 `experimentConfig.imu`，
+ * 估计器参数仍由 bindSlider 写实例（runner 批量评测时从界面同步成配置快照）。
+ */
+const experimentConfig: ExperimentConfig = defaultExperimentConfig();
+const world = new World(scenarios.hover, experimentConfig.seed);
 const ests: Estimator[] = [
   new PureGyroEstimator(),
   new ComplementaryEstimator(),
@@ -85,26 +162,61 @@ const mahony = ests[2] as MahonyEstimator;
 const madg = ests[3] as MadgwickEstimator;
 const kalman = ests[4] as KalmanEstimator;
 
-const imuParams: ImuParams = {
-  gyroBiasDps: 1,
-  gyroNoiseDps: 0.2,
-  gyroWalkDps: 0, gyroRangeDps: 0, sensorDelayMs: 0,  gyroScaleErr: 0, gyroMisalign: 0, 
-  accelNoise: 0.1,
-  accelCrossAxis: 0,
-  accelNonlin: 0,
-  linAccel: 1,
-  vibration: 0.3,
-  magNoise: 0.8, // 磁力计默认开启（教学主线路径），带小噪声
-  magQuantUts: 0,
-  hardIron: 0,
-  disturbMag: 0,
-  magSoftIron: 0, // 软铁畸变默认关（开了会让磁球变椭球，标定面板的软铁一半才有东西可校）
-};
+const imuParams: ImuParams = experimentConfig.imu;
 
 // ---------- 磁力计标定（硬铁球心 + 对角软铁缩放） ----------
 // 采集 → 拟合 → 应用。模拟模式可用「用当前磁模型自动采集」一步生成覆盖全姿态的
 // 样本（含当前硬铁/干扰/噪声参数）；真实模式则在用户翻滚机体时收集串口磁读数。
 const MAG_CAL_TARGET = 240;
+/** 磁校准历史（最近 5 次拟合，可恢复） */
+interface MagCalHistoryEntry {
+  id: number;
+  atText: string;
+  model: "diag" | "full";
+  sampleCount: number;
+  residual: number;
+  lateResidual: number | null;
+  cal: MagCalibration;
+}
+const magCalHistory: MagCalHistoryEntry[] = [];
+let magCalHistorySeq = 0;
+/** 当前生效的历史条目 id（0 = 不是历史里的任何一条：例如从档案导入的标定） */
+let activeMagCalHistoryId = 0;
+
+/** 校准对象深克隆：offset/scale/matrix/validation(含 late)/fittedWith 全部复制 */
+function cloneMagCalibration(cal: MagCalibration): MagCalibration {
+  return {
+    ...cal,
+    offset: [...cal.offset] as V3,
+    scale: [...cal.scale] as V3,
+    ...(cal.matrix ? { matrix: [...cal.matrix] } : {}),
+    ...(cal.validation
+      ? {
+          validation: {
+            ...cal.validation,
+            ...(cal.validation.late ? { late: { ...cal.validation.late } } : {}),
+          },
+        }
+      : {}),
+    ...(cal.fittedWith ? { fittedWith: { ...cal.fittedWith } } : {}),
+  };
+}
+
+function pushMagCalHistory(cal: MagCalibration, model: "diag" | "full"): void {
+  const id = ++magCalHistorySeq;
+  activeMagCalHistoryId = id;
+  magCalHistory.unshift({
+    id,
+    atText: new Date().toLocaleTimeString("zh-CN", { hour12: false }),
+    model,
+    sampleCount: cal.count,
+    residual: cal.residual,
+    lateResidual: cal.validation?.late?.residual ?? null,
+    cal: cloneMagCalibration(cal),
+  });
+  if (magCalHistory.length > 5) magCalHistory.length = 5;
+}
+
 const magCalState = {
   cal: null as MagCalibration | null,
   applied: false,
@@ -112,14 +224,126 @@ const magCalState = {
   samples: [] as V3[],
   /** 最近一次拟合失败的原因（UI 提示用） */
   message: "",
+  /**
+   * 最近一次「独立验证」的结果行。必须存在状态里由 updateMagCalUi 渲染，
+   * 不能直接 `result.innerHTML += ...`——面板每 2 Hz 重建一次 innerHTML，追加的行会被抹掉。
+   */
+  verifyLine: "" as string,
 };
+/** 回放旁路/未应用时原样返回；否则走对应标定 */
+function estimationValue(raw: V3, apply: (v: V3, cal: never) => V3, cal: unknown): V3 {
+  if (calibrationBypassed()) return [raw[0], raw[1], raw[2]];
+  return apply(raw, cal as never);
+}
 function magForEstimation(raw: V3): V3 {
-  return applyMagCalibration(raw, magCalState.applied ? magCalState.cal : null);
+  return estimationValue(raw, applyMagCalibration as never, magCalState.applied ? magCalState.cal : null);
 }
 function collectMagSample(raw: V3): void {
   if (!magCalState.collecting) return;
   if (magCalState.samples.length >= 2000) return;
   magCalState.samples.push([raw[0], raw[1], raw[2]]);
+}
+
+/* ---------- 加速度计六面校准（交互式采集 → 最小二乘拟合 → 应用） ---------- */
+const ACCEL_CAL_SECONDS = 0.5;
+const accelCalState = {
+  cal: null as AccelCalibration | null,
+  applied: false,
+  /** 最近一次独立验证的结果行（同 magCalState.verifyLine 的理由） */
+  verifyLine: "" as string,
+  /** 正在采集的朝向与窗口样本 */
+  pending: null as AccelFace | null,
+  window: [] as Array<{ t: number; accel: V3; gyro: V3 }>,
+  samples: [] as AccelCalibrationSample[],
+  message: "",
+};
+function accelForEstimation(raw: V3): V3 {
+  return estimationValue(raw, applyAccelCalibration as never, accelCalState.applied ? accelCalState.cal : null);
+}
+/** 主循环每帧调用：pending 时收集窗口，达到 0.5 s 就检查静止并写入一面样本 */
+function tickAccelCalibration(t: number, sample: ImuSample): void {
+  const pendingFace = accelCalState.pending;
+  if (!pendingFace) return;
+  const w = accelCalState.window;
+  // 时间戳必须**严格递增**（ROUND11 P1）：同一时刻连来 4000 帧时，"样本数够多"会被当成
+  // "静置了 0.5 s"——实测文案甚至写出"0.00 s 均值"。重复/倒退的时间戳直接判失败。
+  if (w.length && !(t > w[w.length - 1].t)) return void failFaceCapture(pendingFace, "时间戳未推进（同一时刻重复采样不算静置）");
+  w.push({ t, accel: [...sample.accel], gyro: [...sample.gyro] });
+  if (w.length < 2) return;
+  const span = w[w.length - 1].t - w[0].t;
+  // 时间覆盖优先于样本数：**装满了也不放过**（容量只用来防内存，不代替时长条件）
+  if (span < ACCEL_CAL_SECONDS) {
+    if (w.length >= 4000) {
+      failFaceCapture(pendingFace, `样本已达上限但只覆盖 ${span.toFixed(2)} s（需 ≥${ACCEL_CAL_SECONDS} s）`);
+    }
+    return;
+  }
+  const face: AccelFace = pendingFace;
+  accelCalState.pending = null;
+  const avg = (fn: (x: { accel: V3; gyro: V3 }) => V3): V3 => {
+    const out: V3 = [0, 0, 0];
+    for (const x of w) {
+      const v = fn(x);
+      out[0] += v[0]; out[1] += v[1]; out[2] += v[2];
+    }
+    return [out[0] / w.length, out[1] / w.length, out[2] / w.length];
+  };
+  const g = avg((x) => x.gyro);
+  const a = avg((x) => x.accel);
+  // 时间覆盖质量：最大间隙不能超过 0.15 s（中间断流说明这不是一段连续静置）
+  let maxGap = 0;
+  for (let i = 1; i < w.length; i++) maxGap = Math.max(maxGap, w[i].t - w[i - 1].t);
+  if (maxGap > 0.15) return void failFaceCapture(face, `最大采样间隙 ${(maxGap * 1000).toFixed(0)} ms（应 ≤150 ms）`);
+  // **时间加权密度**（ROUND12）：只看"最大间隙"会放过「49 点挤在开头 1 ms + 末端补一个点」的
+  // 稀疏窗口——那样等权均值其实由那一小簇决定，名义上的 0.5 s 并不成立。
+  // 这里把窗口均分成 10 段，每段至少要有 2 个样本；否则判失败。
+  {
+    const t0 = (w[0] as { t: number }).t;
+    const bins = new Array<number>(10).fill(0);
+    for (const x of w) bins[Math.min(9, Math.floor(((x.t - t0) / Math.max(span, 1e-9)) * 10))]++;
+    const empty = bins.findIndex((c) => c < 2);
+    if (empty >= 0) {
+      return void failFaceCapture(
+        face,
+        `窗口第 ${empty + 1}/10 段样本不足（${bins[empty]} 个，需 ≥2）——采样太不连续，均值不可信`,
+      );
+    }
+  }
+  const quality = assessStaticWindow(w);
+  if (!quality.ok) {
+    failFaceCapture(face, `平均 ${quality.meanGyroDps.toFixed(1)}°/s、最大 ${quality.maxGyroDps.toFixed(1)}°/s、σ‖a‖ ${quality.accelNormStd.toFixed(3)}（需 <3/<6/<0.15）`);
+    return;
+  }
+  // 朝向自洽检查：**采集时**就拒，别等到拟合。
+  // 复核反例（P1-E）：按钮写着「+x 朝下」、实际读数却是 [0,0,9.81]（+z 朝下）时，
+  // 旧实现照样记录成功；六面拟合也会"成功"，只是 RMSE 变成 2.31 m/s² 且标定是错的。
+  if (!faceMatchesReading({ raw: a, face })) {
+    const m = [0, 1, 2].reduce((best, i) => (Math.abs(a[i]) > Math.abs(a[best]) ? i : best), 0);
+    failFaceCapture(face, `读数主方向是 ${a[m] >= 0 ? "+" : "-"}${"xyz"[m]}，与「${face} 朝下」不符`);
+    return;
+  }
+  accelCalState.samples = accelCalState.samples.filter((s) => s.face !== face);
+  accelCalState.samples.push({ raw: a, face });
+  accelCalState.window = [];
+  accelCalState.message =
+    `已记录 ${face} 朝下：a = [${a.map((v) => v.toFixed(2)).join(", ")}] m/s² · ` +
+    `静止质量 平均 ${quality.meanGyroDps.toFixed(2)}°/s / 最大 ${quality.maxGyroDps.toFixed(2)}°/s / σ‖a‖ ${quality.accelNormStd.toFixed(3)} ` +
+    `（${accelCalState.samples.length}/6 面，${span.toFixed(2)} s 均值，陀螺均值 [${g.map((v) => v.toFixed(3)).join(", ")}] rad/s）`;
+  updateAccelCalUi();
+}
+/** 采面失败的统一出口：清窗口 + 写一次性文案 + 刷新面板 */
+function failFaceCapture(face: AccelFace, reason: string): void {
+  accelCalState.pending = null;
+  accelCalState.window = [];
+  accelCalState.message = `采集 ${face} 失败：${reason}——重新摆放后点一次`;
+  updateAccelCalUi();
+}
+
+function beginAccelCalFace(face: AccelFace): void {
+  accelCalState.pending = face;
+  accelCalState.window = [];
+  accelCalState.message = `正在采集 ${face} 朝下（${ACCEL_CAL_SECONDS}s）……保持静止`;
+  updateAccelCalUi();
 }
 
 const state = {
@@ -138,6 +362,8 @@ const state = {
   errVisible: [true, true, true, true, true, true],
   errVisibleB: [false, false, false, false],
   lastImu: null as ImuSample | null,
+  /** 离线日志携带的外部真值姿态（当前帧）；仅在 referenceKind=external 时作为误差基准 */
+  externalTruth: null as Quat | null,
   /** 视图：四轴姿态 / 万向节锁（不持久化，每次从四轴姿态开始） */
   view: "attitude" as UiView,
 };
@@ -161,7 +387,7 @@ function setSimControlsDisabled(disabled: boolean): void {
     el.disabled = disabled;
   }
   // 解算频率只对模拟模式有意义（真实模式跟固件 tick 走），真实模式下禁用免得误导
-  for (const id of ["solve-rate", "ghost-toggle", "loop-toggle", "init-offset-toggle", "btn-sandbox"]) {
+  for (const id of ["solve-rate", "ghost-toggle", "loop-toggle", "init-offset-toggle", "btn-sandbox", "btn-batch", "batch-runs", "experiment-seed"]) {
     const el = document.getElementById(id) as HTMLInputElement | HTMLButtonElement | null;
     if (el) el.disabled = disabled;
   }
@@ -174,7 +400,9 @@ function setSimControlsDisabled(disabled: boolean): void {
   const note = document.getElementById("real-mode-note");
   if (note) {
     note.textContent = replayActive()
-      ? "离线回放模式：剧本 / 模拟噪声 / 手动目标 / 幻影 / 闭环 / 初始偏差已停用——数据完全来自导入的日志（无真值，误差基准 = Mahony）。"
+      ? replayState.externalReference
+        ? "离线回放模式（带外部真值）：剧本 / 模拟噪声 / 手动目标 / 幻影 / 闭环 / 初始偏差已停用——数据来自日志，误差基准 = 日志真值；也可把「模型姿态来源」切到真实姿态查看真值。"
+        : "离线回放模式：剧本 / 模拟噪声 / 手动目标 / 幻影 / 闭环 / 初始偏差已停用——数据完全来自导入的日志（无真值，误差基准 = Mahony）。"
       : bleState.connected && !serialState.running
         ? "BLE IMU 模式：剧本 / 模拟噪声 / 手动目标 / 幻影 / 闭环 / 初始偏差已停用——数据完全来自蓝牙通知（无真值，误差基准 = Mahony）。"
         : "真实 IMU 模式：剧本 / 模拟噪声 / 手动目标 / 幻影 / 闭环 / 初始偏差已停用——数据完全来自串口帧。";
@@ -183,32 +411,58 @@ function setSimControlsDisabled(disabled: boolean): void {
 }
 
 /** 真实/模拟模式切换的连带语义（幻影、误差参照、UI 显隐） */
+/**
+ * 是否处于「断线重连的过渡态」：此刻数据源暂时不可用，但**不是**用户主动切回模拟。
+ * 这个区分很关键——否则每次掉线都会走到下面的「回到模拟模式」分支，
+ * 把本轮实验的时钟/曲线/统计全部清零（复核实测：拔线一次，24 s 的曲线全没了）。
+ */
+function reconnectPending(): boolean {
+  return (
+    serialReconnectPolicy.pending ||
+    bleReconnectPolicy.pending ||
+    serialReconnectState.reconnecting ||
+    bleReconnectState.reconnecting
+  );
+}
+
 function applyDataSourceSemantics(): void {
-  state.real = serialState.running || replayActive() || bleState.connected;
+  // 显式数据源语义：kind 决定「数据从哪来」，reference 决定「误差相对谁」。
+  // state.real 保留为兼容派生值（外部数据源），新代码应优先用 hasGroundTruth()/currentReferenceKind()。
+  state.real = isExternalSource(currentDataSource());
   document.body.dataset.imuMode = state.real ? "real" : "sim";
   setSimControlsDisabled(state.real);
+  syncLoopAvailability();
   updateMagCalUi();
-  $("err-title").textContent = state.real ? "姿态偏差（各算法 vs Mahony 基准）" : "姿态总误差（解算 vs 真实）";
+  $("err-title").textContent = hasGroundTruth()
+    ? "姿态总误差（解算 vs 真实）"
+    : `姿态偏差（各算法 vs ${currentReferenceKind() === "external" ? "外部参考" : "Mahony 基准"}）`;
   updateSourceChip(); // chip 上带「数据源：模拟/真实 IMU/离线回放」，切换时必须刷新
-  // 真实模式无真值：幻影与「真实姿态」来源失去意义，强制切到 Mahony 并隐藏幻影选项区
-  if (state.real) {
+  // 真实模式无真值：幻影与「真实姿态」来源失去意义，强制切到 Mahony 并隐藏幻影选项区。
+  // 例外：回放日志带 truth_q* 时 hasGroundTruth() 为 true，此时 truth 来源应保持可用。
+  if (state.real && !hasGroundTruth()) {
     if (state.source === "truth") {
       state.source = "mahony";
       sourceSelect.value = "mahony";
       updateSourceChip();
     }
-  } else {
+  } else if (!state.real) {
+    // 断线重连途中会短暂表现为「没有真实数据源」：这时**不能**重置本轮实验，
+    // 否则用户一拔线，曲线/统计/时钟就全丢——自动重连的意义也就没了。
+    if (reconnectPending()) return;
     for (const e of ests) e.reset();
     for (const c of abState.clones) c.reset();
     resetSim();
   }
-  // 真实模式没有真值：禁用「真实姿态」选项，防止选回后 3D 显示陈旧的模拟姿态
+  // 「真实姿态」选项：只要有物理真值（模拟或外部真值）就可用；只有 Mahony 基准时禁用
   const truthOpt = sourceSelect.querySelector<HTMLOptionElement>('option[value="truth"]');
-  if (truthOpt) truthOpt.disabled = state.real;
-  // 姿态曲线图例第一项随数据源改名：真实模式下它画的是 Mahony 基准，不是真值
+  if (truthOpt) truthOpt.disabled = !hasGroundTruth();
+  // 姿态曲线图例第一项随数据源改名：外部真值 / Mahony 基准 / 模拟真值
   const truthChip = attLegend?.chips[0];
   const truthName = truthChip?.children[1] as HTMLElement | undefined;
-  if (truthName) truthName.textContent = state.real ? "基准(Mahony)" : "真实";
+  if (truthName) {
+    const kind = currentReferenceKind();
+    truthName.textContent = kind === "groundTruth" ? "真实" : kind === "external" ? "外部真值" : "基准(Mahony)";
+  }
 }
 $("btn-serial").addEventListener("dblclick", (e) => e.preventDefault());
 
@@ -217,29 +471,54 @@ $("btn-serial").addEventListener("dblclick", (e) => e.preventDefault());
 // 误差图上 A 实线 / B 半透明虚线——调参前后谁好谁坏一眼可读。
 // 纯陀螺仪积分不进 B 组：它没有参数，B 永远与 A 逐点重合（也是「取消不掉」错觉的来源）。
 const AB_TARGETS = () => ests.filter((e) => e.id !== "pure");
-const abState = { on: false, clones: [] as Estimator[] };
-function cloneOf(e: Estimator): Estimator {
-  const c = e.id === "comp" ? new ComplementaryEstimator()
-    : e.id === "mahony" ? new MahonyEstimator()
-    : e.id === "madg" ? new MadgwickEstimator()
+const abState = {
+  on: false,
+  clones: [] as Estimator[],
+  /**
+   * B 组在快照时刻的算法配置快照（参数、门控、磁形态、卡尔曼门控/协方差重置）。
+   * 分叉后 A 的界面控件只改 A；B 永远读取这份冻结值，保证「单变量对比」。
+   */
+  frozenTuning: null as Record<string, EstimatorTuning> | null,
+};
+/**
+ * 由**冻结的配置快照**构造 B 组实例——与批量评测同一条装配路径（`applyTuning`）。
+ * 不再维护第二份手写的字段拷贝逻辑：`frozenTuning` 是 B 的唯一来源，
+ * 否则新增一个算法参数时极易漏拷（历史上 kalmanResetCov 就漏过一次）。
+ */
+function cloneFromTuning(id: EstimatorId, t: EstimatorTuning): Estimator {
+  const c = id === "pure" ? new PureGyroEstimator()
+    : id === "comp" ? new ComplementaryEstimator()
+    : id === "mahony" ? new MahonyEstimator()
+    : id === "madg" ? new MadgwickEstimator()
     : new KalmanEstimator();
-  c.setParams(e.getParams());
-  c.magEnabled = e.magEnabled;
-  if (e.id === "comp" || e.id === "mahony" || e.id === "madg") {
-    (c as ComplementaryEstimator | MahonyEstimator | MadgwickEstimator).accelGate =
-      (e as ComplementaryEstimator | MahonyEstimator | MadgwickEstimator).accelGate;
-  }
+  applyTuning(c, t);
   return c;
 }
 function snapshotAB(): void {
+  const fork = ($("ab-mode") as HTMLSelectElement)?.value === "online-fork";
+  // 先冻结配置快照，再由这份快照生成 B 组（唯一来源）
+  abState.frozenTuning = Object.fromEntries(AB_TARGETS().map((e) => [e.id, tuningOf(e)]));
   abState.clones = AB_TARGETS().map((e) => {
-    const c = cloneOf(e);
-    c.reset({ ...e.q }); // 从 A 组当前姿态出发（参数冻结；卡尔曼零偏从头重学，见文档）
+    const c = cloneFromTuning(e.id as EstimatorId, abState.frozenTuning![e.id]);
+    // online-fork：把 A 的**运行期状态**（q、积分器、门控窗口、协方差/零偏）复制过来，
+    // 参数仍取快照；A 继续保持原轨迹不中断，B 从分叉点开始走。
+    if (fork && c.copyRuntimeFrom) c.copyRuntimeFrom(e);
     return c;
   });
+  // 共享调度必须拿到**新的** B 组数组（它按住的是引用，不是 by-name 查询）
+  solveLoop?.setSecondary(abState.clones);
+  // 此后 A 的控件变化只作用于 A（applyAccelGate/applyMagMode/applyKalmanGate 都不再碰 clones）
   metricsB = abState.clones.map(() => new ErrorTracker({ thresholdDeg: 2, holdSec: 1 }));
+  if (fork) metricsB.forEach((m) => m.reset(state.simTime)); // 收敛时刻相对分叉点
   state.errVisibleB.fill(true); // 快照后默认显示 B 组虚线（否则用户只看到 A，以为 A/B 没生效）
   applyVisibility();
+  if (fork) {
+    toast(`A/B 已在线分叉：B 复制当前状态并冻结参数继续跑（A 不中断）`, "#7ee787");
+  } else {
+    // same-start：A/B 一起复位，保证两组从相同初值、相同估计器状态起跑
+    resetSim();
+    toast("A/B 已配对起跑：两组参数从相同初态对比", "#7ee787");
+  }
 }
 function abAlpha(color: string): string {
   return color + "99"; // B 曲线约 60% 不透明：与 A 同色系但层次可分，重合也不完全遮挡
@@ -249,10 +528,25 @@ $("ab-toggle").addEventListener("change", () => {
   ($("btn-ab-snapshot") as HTMLButtonElement).disabled = !abState.on;
   document.body.dataset.ab = abState.on ? "on" : "off";
   if (abState.on) snapshotAB();
-  else abState.clones = [];
+  else {
+    abState.clones = [];
+    solveLoop?.setSecondary(abState.clones);
+  }
 });
 $("btn-ab-snapshot").addEventListener("click", () => {
   if (abState.on) snapshotAB();
+});
+/** 切换起跑方式时若 A/B 正在运行，立即按新模式重新分叉（否则要等下一次手动快照） */
+$("ab-mode")?.addEventListener("change", () => {
+  if (abState.on) snapshotAB();
+});
+/** 卡尔曼协方差重置开关：同时作用于 A/B 两组 */
+$("kalman-reset-cov")?.addEventListener("change", () => {
+  const on = ($("kalman-reset-cov") as HTMLInputElement).checked;
+  // 只改 A；B 的协方差重置配置在快照时冻结。
+  for (const e of ests) {
+    if (e.id === "kalman") (e as KalmanEstimator).resetCovOnInject = on;
+  }
 });
 
 // ---------- 场景 ----------
@@ -326,13 +620,74 @@ interface LogRow {
    *  尤其在万向节锁附近——锁点欧拉三元组不唯一，必须原样记录） */
   quats: Quat[];
   qTrue: Quat;
-  /** 该时刻最近一帧原始 IMU（可选导出；也是「导入回放」能闭环的前提） */
+  /** 该时刻最近一帧**源** IMU（可选导出；也是「导入回放」能闭环的前提） */
   imu: ImuSample | null;
+  /**
+   * 该时刻**实际喂给估计器**的读数（= 源读数经过「当时」的校准链）。
+   *
+   * 为什么必须逐行存：导出的「校准后 IMU 列」以前是**按导出时的当前标定重算**的，
+   * 于是同一批历史数据在改过标定之后再导出，数值会变（复核实测：磁行 30 → 25）。
+   * 导出必须是「序列化记录」，不是「按现在的参数重算历史」——记录追加不可变。
+   */
+  imuConsumed: ImuSample | null;
+  /** `imuConsumed` 对应的解算时刻（秒）；NaN = 该行没有可用的消费快照 */
+  consumedSolveT: number;
+  /** 该行的源读数是否**本来就是**校准后读数（回放 `# imu=calibrated` 的日志） */
+  sourceCalibrated: boolean;
 }
 const logRows: LogRow[] = [];
 /** 记录窗口上限与一次裁剪量（导出弹窗会据此提示「更早的行已丢弃」） */
 const LOG_ROW_CAP = 850;
 const LOG_ROW_TRIM = 100;
+
+/* ---------- 全帧源 IMU 记录（默认关，用于导出→回放与逐帧分析） ---------- */
+interface RawRow {
+  t: number;
+  gyro: V3;
+  accel: V3;
+  mag: V3;
+}
+const RAW_ROW_CAP = 30000; // ≈ 60 s @500 Hz
+const RAW_ROW_TRIM = 5000;
+/** `sourceCalibrated`：本段全帧记录里的读数是否本来就是校准后读数（回放校准日志时为真） */
+const rawRecord = { on: false, rows: [] as RawRow[], sourceCalibrated: false };
+function recordRaw(t: number, sample: ImuSample): void {
+  if (!rawRecord.on) return;
+  // 语义中途变化（例如记录中导入了一份 `# imu=calibrated` 的日志）：一份文件里混着
+  // 「原始」和「校准后」两种读数，回放时无论标哪个都是错的。清空重记，只保留一种语义。
+  const calibrated = sourceReadingsCalibrated();
+  if (calibrated !== rawRecord.sourceCalibrated) {
+    rawRecord.rows.length = 0;
+    rawRecord.sourceCalibrated = calibrated;
+    toast(`读数语义变为「${calibrated ? "校准后" : "原始"}」——记录清空重记，避免混语义`, "#fbbf24");
+  }
+  rawRecord.rows.push({
+    t,
+    gyro: [...sample.gyro],
+    accel: [...sample.accel],
+    mag: [...sample.mag],
+  });
+  if (rawRecord.rows.length > RAW_ROW_CAP) rawRecord.rows.splice(0, RAW_ROW_TRIM);
+}
+/** 当前源读数是否已是校准后读数（只有「日志声明 imu=calibrated 的回放」是） */
+function sourceReadingsCalibrated(): boolean {
+  return replayActive() && replayState.imuCalibrated === true;
+}
+$("raw-record-toggle")?.addEventListener("change", () => {
+  const on = ($("raw-record-toggle") as HTMLInputElement).checked;
+  rawRecord.on = on;
+  if (on) {
+    // 每次开启都重新标定语义：中途切换数据源（模拟→校准日志回放）时，同一个开关
+    // 记录的东西已经不是同一类读数了，导出标注必须跟着变。
+    rawRecord.sourceCalibrated = sourceReadingsCalibrated();
+  }
+  if (on && rawRecord.rows.length === 0) {
+    toast(
+      `已开启全帧记录（上限 30000 帧）${sourceReadingsCalibrated() ? "，标注 # imu=calibrated" : ""}`,
+      "#7ee787",
+    );
+  }
+});
 // 解卷绕历史：按 数据源×通道 分开记录
 const attPrev = new Array<number | undefined>(18).fill(undefined);
 
@@ -352,7 +707,7 @@ function unwrap(slot: number, v: number): number {
 
 function eulerTriples(): number[][] {
   // 真实模式无真值：第一行（「真实」系列）改为 Mahony 参照基准
-  const refQ = state.real ? (ests[2] as MahonyEstimator).q : world.q;
+  const refQ = referenceQ();
   const truthE = qToEuler(refQ);
   const rows: number[][] = [[truthE.roll, truthE.pitch, truthE.yaw].map((a) => a * DEG)];
   for (const e of ests) {
@@ -386,17 +741,21 @@ function channelValues(row: LogRow, ch: number): number[] {
 }
 
 function logRow(): void {
-  const refQ = state.real ? (ests[2] as MahonyEstimator).q : world.q;
+  const refQ = referenceQ();
   const errA = ests.map((e) => qAngleBetween(e.q, refQ) * DEG);
+  const src = state.lastImu;
   const row: LogRow = {
     t: state.simTime,
     euler: eulerTriples(),
     err: errA,
     quats: ests.map((e) => ({ ...e.q })),
     qTrue: { ...refQ },
-    imu: state.lastImu
-      ? { gyro: [...state.lastImu.gyro], accel: [...state.lastImu.accel], mag: [...state.lastImu.mag] }
-      : null,
+    imu: src ? { gyro: [...src.gyro], accel: [...src.accel], mag: [...src.mag], times: src.times } : null,
+    // 逐行冻结「当时实际喂给估计器的读数」：取自 onSolve 快照，导出只序列化，绝不事后重算标定
+    imuConsumed: consumedSnapshotFor(state.simTime),
+    /** 该消费值对应的解算时刻（秒）：与行时刻之差说明「这一行复用了几十毫秒前的解算输入」 */
+    consumedSolveT: Number.isFinite(lastSolveInput.t) ? lastSolveInput.t : NaN,
+    sourceCalibrated: sourceReadingsCalibrated(),
   };
   logRows.push(row);
   if (logRows.length > LOG_ROW_CAP) logRows.splice(0, LOG_ROW_TRIM);
@@ -410,19 +769,60 @@ function logRow(): void {
   // 与曲线同源喂统计（A 组常驻；B 组随快照重建）
   errA.forEach((v, i) => metricsA[i].add(v, state.simTime));
   if (abState.on) errB.forEach((v, i) => metricsB[i]?.add(v, state.simTime));
-  // IMU 原始波形 18 通道：三组实测 + 模拟模式三组真值对照（真实模式真值 = NaN 不画）
+  // IMU 原始波形 18 通道：三组实测 + 真值对照（模拟 = 世界真值；外部真值回放 = 日志真值）
   const imu = state.lastImu;
   if (imu) {
-    const truthGyro = state.real ? [NaN, NaN, NaN] : world.omega.map((v) => v * DEG);
-    const truthAccel = state.real ? [NaN, NaN, NaN] : qRotInv(world.q, [0, 0, G_ACC]);
-    const truthMag = state.real ? [NaN, NaN, NaN] : qRotInv(world.q, MAG_WORLD_NED);
+    const truth = truthWaveforms();
     imuChart.push(state.simTime, [
       imu.gyro[0] * DEG, imu.gyro[1] * DEG, imu.gyro[2] * DEG,
       imu.accel[0], imu.accel[1], imu.accel[2],
       imu.mag[0], imu.mag[1], imu.mag[2],
-      ...truthGyro, ...truthAccel, ...truthMag,
+      ...truth.gyro, ...truth.accel, ...truth.mag,
     ]);
   }
+}
+
+/**
+ * 「真值波形」的三个来源，绝不把模拟世界冒充成日志真值：
+ *  - `groundTruth`（模拟）：世界真值姿态与角速度；
+ *  - `external`（回放带 truth_q*）：由日志真值四元数投影重力/磁场，角速度由相邻真值姿态差分得到；
+ *  - 其它（真实串口 / 无真值回放）：NaN，曲线不画——Mahony 基准不是物理真值。
+ */
+const NAN3: [number, number, number] = [NaN, NaN, NaN];
+/** 差分角速度用的上一条日志真值姿态（只在外部真值回放时维护） */
+let truthPrevQ: Quat | null = null;
+let truthPrevT = 0;
+
+function truthWaveforms(): { gyro: [number, number, number]; accel: [number, number, number]; mag: [number, number, number] } {
+  const kind = currentReferenceKind();
+  if (kind === "groundTruth") {
+    return {
+      gyro: world.omega.map((v) => v * DEG) as [number, number, number],
+      accel: qRotInv(world.q, [0, 0, G_ACC]) as [number, number, number],
+      mag: qRotInv(world.q, MAG_WORLD_NED) as [number, number, number],
+    };
+  }
+  if (kind === "external" && state.externalTruth) {
+    const q = state.externalTruth;
+    let gyro: [number, number, number] = NAN3;
+    if (truthPrevQ && state.simTime > truthPrevT) {
+      // ω ≈ 2·vec(q_{k-1}^{-1} ⊗ q_k)/Δt（小角差分；与四元数运动学 q̇ = ½ q⊗ω 一致）
+      const dq = qMul(qConj(truthPrevQ), q);
+      const dt = state.simTime - truthPrevT;
+      const sign = dq.w < 0 ? -1 : 1; // q 与 −q 同姿态：取短弧
+      gyro = [2 * sign * dq.x / dt * DEG, 2 * sign * dq.y / dt * DEG, 2 * sign * dq.z / dt * DEG];
+    }
+    truthPrevQ = { ...q };
+    truthPrevT = state.simTime;
+    return {
+      gyro,
+      accel: qRotInv(q, [0, 0, G_ACC]) as [number, number, number],
+      mag: qRotInv(q, MAG_WORLD_NED) as [number, number, number],
+    };
+  }
+  // 真实串口或无真值回放：不清空前一条差分状态，但要保证不画出假真值
+  truthPrevQ = null;
+  return { gyro: NAN3, accel: NAN3, mag: NAN3 };
 }
 
 function rebuildAttChart(): void {
@@ -680,9 +1080,14 @@ function bindSlider(
   };
 }
 
-const manRoll = bindSlider("man-roll", (v) => (world.manual.rollDeg = v), (v) => `${v.toFixed(0)}°`);
-const manPitch = bindSlider("man-pitch", (v) => (world.manual.pitchDeg = v), (v) => `${v.toFixed(0)}°`);
-const manYaw = bindSlider("man-yaw", (v) => (world.manual.yawDeg = v), (v) => `${v.toFixed(0)}°`);
+// 手动目标同时写进 World 实例与实验配置：前者驱动仿真，后者让「同配置 + 同 seed」
+// 在 runner/Worker/档案里也能复现（此前只写全局对象，配置里没有这三个角）。
+const syncManualTarget = (): void => {
+  experimentConfig.manualTargetDeg = [world.manual.rollDeg, world.manual.pitchDeg, world.manual.yawDeg];
+};
+const manRoll = bindSlider("man-roll", (v) => { world.manual.rollDeg = v; syncManualTarget(); }, (v) => `${v.toFixed(0)}°`);
+const manPitch = bindSlider("man-pitch", (v) => { world.manual.pitchDeg = v; syncManualTarget(); }, (v) => `${v.toFixed(0)}°`);
+const manYaw = bindSlider("man-yaw", (v) => { world.manual.yawDeg = v; syncManualTarget(); }, (v) => `${v.toFixed(0)}°`);
 void manRoll;
 void manPitch;
 void manYaw;
@@ -741,8 +1146,27 @@ const IMU_PRESETS: Record<string, ImuPreset> = {
 let presetApplying = false;
 
 /** 手动碰任一预设管理的滑块 → 回到「自定义」 */
+/**
+ * 器件参数变化后，若已有标定基于旧模型，**主动**提示一次（面板里那行小字要用户点开校准面板才看得到）。
+ * 每个标定只提示一次：改动参数是常见操作，反复弹提示会变成噪音。
+ */
+let staleWarnedFor: MagCalibration | AccelCalibration | null = null;
+function warnIfCalibrationStale(): void {
+  const magStale = calibrationStaleness(magCalState.cal?.fittedWith, imuParams, "mag", currentMagCalModel());
+  const accelStale = calibrationStaleness(accelCalState.cal?.fittedWith, imuParams, "accel");
+  const stale = magCalState.cal && magStale ? magCalState.cal : accelCalState.cal && accelStale ? accelCalState.cal : null;
+  if (!stale) return;
+  if (staleWarnedFor === stale) return;
+  staleWarnedFor = stale;
+  toast(
+    "器件参数已变，已有标定基于旧模型（残差与验证读数不再代表当前配置）——建议重新采集拟合",
+    "#fbbf24",
+  );
+}
+
 function onImuManual(): void {
   if (presetApplying) return;
+  warnIfCalibrationStale();
   const sel = document.getElementById("imu-preset") as HTMLSelectElement | null;
   if (sel && sel.value !== "custom") {
     sel.value = "custom";
@@ -819,6 +1243,13 @@ bindSlider("kalman-obs", (v) => (kalman.obsNoise = v), (v) => v.toFixed(3) + "g"
 bindSlider("imu-gyro-scale", (v) => { imuParams.gyroScaleErr = v / 100; onImuManual(); }, (v) => (v < 0.05 ? "关" : `${v.toFixed(1)}%`));
 bindSlider("imu-gyro-misalign", (v) => { imuParams.gyroMisalign = v / 100; onImuManual(); }, (v) => (v < 0.05 ? "关" : `${v.toFixed(1)}%`));
 bindSlider("imu-delay", (v) => (imuParams.sensorDelayMs = v), (v) => (v < 0.5 ? "关" : `${v.toFixed(0)} ms`));
+bindSlider("imu-bandwidth", (v) => (imuParams.sensorBandwidthHz = v), (v) => (v < 1 ? "关" : `${v.toFixed(0)} Hz`));
+bindSlider("imu-delay-skew", (v) => (imuParams.sensorDelaySkewMs = v), (v) => (v < 0.25 ? "同步" : `±${v.toFixed(1)} ms`));
+bindSlider(
+  "imu-sample-rate",
+  (v) => (imuParams.sensorSampleHz = v),
+  (v) => (v < 10 || v >= 500 ? "跟随仿真" : `${v.toFixed(0)} Hz`),
+);
 $("imu-gyro-range").addEventListener("change", () => {
   imuParams.gyroRangeDps = Number($<HTMLSelectElement>("imu-gyro-range").value);
   onImuManual();
@@ -829,8 +1260,9 @@ $("imu-gyro-range").addEventListener("change", () => {
 // 曾经只靠 change 同步，导致默认状态下 UI 显示「MARG 开」而估计器实际没用磁力计。
 function applyMagEnable(): void {
   const on = ($("mag-enable") as HTMLInputElement).checked;
+  // A/B 开启时 B 的配置已冻结：这里只改 A，避免「改 A 的开关悄悄改到 B」破坏单变量对比。
   for (const e of ests) e.magEnabled = on;
-  for (const c of abState.clones) c.magEnabled = on;
+  solveLoop?.setMagEnabled(on); // 粗对准的观测姿态是否含磁，与估计器口径保持一致
   updateMagLegend();
 }
 $("mag-enable").addEventListener("change", applyMagEnable);
@@ -846,7 +1278,8 @@ function applyAccelGate(): void {
   const deg = $<HTMLInputElement>("gate-deg").valueAsNumber;
   const magPct = $<HTMLInputElement>("gate-mag").valueAsNumber / 100;
   const recovery = ($("gate-recovery") as HTMLInputElement).checked;
-  for (const e of [...ests, ...abState.clones]) {
+  // A/B 开启时 B 的配置在快照时刻冻结：这里只改 A；要改 B 请重新点「存入 B 组」。
+  for (const e of ests) {
     if (e.id === "comp" || e.id === "mahony" || e.id === "madg") {
       const g = e as ComplementaryEstimator | MahonyEstimator | MadgwickEstimator;
       g.accelGate = on;
@@ -871,13 +1304,24 @@ $("gate-recovery").addEventListener("change", applyAccelGate);
  */
 function applyMagMode(): void {
   const mode = $<HTMLSelectElement>("mag-mode").value as "yaw" | "full";
-  for (const e of [...ests, ...abState.clones]) {
+  // 只改 A：B 的磁形态在快照时冻结（见 applyAccelGate 注释）。
+  for (const e of ests) {
     if (e.id === "mahony" || e.id === "madg") {
       (e as MahonyEstimator | MadgwickEstimator).magMode = mode;
     }
   }
 }
 $("mag-mode").addEventListener("change", applyMagMode);
+
+/** 卡尔曼野值门控形态：固定 40° 夹角（基线）或 χ² 马氏距离（按 P/R 自适应） */
+function applyKalmanGate(): void {
+  const mode = $<HTMLSelectElement>("kalman-gate").value as "angle" | "mahalanobis";
+  // 只改 A：B 的门控形态在快照时冻结。
+  for (const e of ests) {
+    if (e.id === "kalman") (e as KalmanEstimator).gateMode = mode;
+  }
+}
+$("kalman-gate").addEventListener("change", applyKalmanGate);
 
 // ---------- 解算频率（降采样：仿真仍 500 Hz，算法按 N 分之一节拍更新） ----------
 /**
@@ -892,7 +1336,7 @@ $("solve-rate").addEventListener("change", () => {
   // （真值还在动、误差曲线一路涨，界面上却毫无报错，只有下拉框空白）。深链写入非法值时踩到过。
   const hz = Number($<HTMLSelectElement>("solve-rate").value);
   solveState.hz = Number.isFinite(hz) && hz >= 1 ? hz : 500;
-  solveState.acc = 0;
+  solveLoop.setSolveRate(solveState.hz);
   resetSim();
 });
 
@@ -1392,16 +1836,61 @@ function enterSandbox(): void {
  * 完整 MARG、25 ms 群延迟）会悄悄污染下一条实验的因果链——
  * 「一键复现」的可信度就靠这一步。（早期实验只声明自己关心的控件，基线保证一致性。）
  */
+/** 控件在 HTML 里声明的初始值（实验基线的权威默认；select 用 defaultSelected 选项） */
+const baselineDefaults = new WeakMap<HTMLElement, string | boolean>();
+function baselineDefaultOf(el: HTMLInputElement | HTMLSelectElement): string | boolean {
+  const cached = baselineDefaults.get(el);
+  if (cached !== undefined) return cached;
+  let v: string | boolean;
+  if (el instanceof HTMLSelectElement) {
+    const opt = [...el.options].find((o) => o.defaultSelected) ?? el.options[0];
+    v = opt?.value ?? "";
+  } else if (el.type === "checkbox" || el.type === "radio") {
+    v = el.defaultChecked;
+  } else {
+    v = el.defaultValue;
+  }
+  baselineDefaults.set(el, v);
+  return v;
+}
+
 function resetExperimentBaseline(): void {
-  setSelectValue("mag-mode", "yaw");
-  setSelectValue("solve-rate", "500");
-  setSelectValue("imu-gyro-range", "0");
-  setSliderValue("imu-gyro-scale", 0);
-  setSliderValue("imu-gyro-misalign", 0);
-  setSliderValue("imu-delay", 0);
-  setSliderValue("gate-deg", 20);
-  setSliderValue("gate-mag", 35);
-  setCheckValue("gate-recovery", false);
+  const baselineSelector = [
+    ".section-scenario input[type=range]",
+    ".section-scenario select",
+    ".section-imu input[type=range]",
+    ".section-imu select",
+    "#mag-mode",
+    "#solve-rate",
+    "#gate-deg",
+    "#gate-mag",
+    "#gate-recovery",
+    "#kalman-gate",
+    "#ab-mode",
+    "#kalman-reset-cov",
+    "#mag-enable",
+    "#gate-toggle",
+    "#init-offset-toggle",
+    "#ab-toggle",
+    "#loop-toggle",
+  ].join(", ");
+  const els = [...document.querySelectorAll<HTMLInputElement | HTMLSelectElement>(baselineSelector)];
+  // 先写回默认值，再统一派发事件：避免中途事件回调互相看到半复位状态
+  for (const el of els) {
+    const d = baselineDefaultOf(el);
+    if (el instanceof HTMLInputElement && (el.type === "checkbox" || el.type === "radio")) {
+      el.checked = Boolean(d);
+    } else {
+      el.value = String(d);
+    }
+  }
+  for (const el of els) el.dispatchEvent(new Event(el instanceof HTMLSelectElement ? "change" : "input", { bubbles: true }));
+  // 复选框的语义监听器挂在 change 上；input 事件不会触发它们，这里补一次 change
+  for (const el of els) {
+    if (el instanceof HTMLInputElement && (el.type === "checkbox" || el.type === "radio")) {
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+  }
 }
 
 function applyExperiment(spec: ExperimentSpec): void {
@@ -1410,6 +1899,7 @@ function applyExperiment(spec: ExperimentSpec): void {
     return;
   }
   // 顺序：基线复位 → 剧本 → 滑块 → 开关（A/B 快照需在参数就位后）→ 视图 → 重置
+  const abWasOn = abState.on; // 基线会把 A/B 复位为关闭：必须明说，否则"参数对比中"的实验语义含混
   resetExperimentBaseline();
   for (const [id, v] of Object.entries(spec.selects ?? {})) setSelectValue(id, v);
   for (const [id, v] of Object.entries(spec.sliders ?? {})) setSliderValue(id, v);
@@ -1418,7 +1908,11 @@ function applyExperiment(spec: ExperimentSpec): void {
   if (spec.reset !== false) resetSim();
   const note = document.getElementById("experiment-note");
   if (note) {
-    note.innerHTML = `<b>${spec.name}</b> · ${spec.tag}<br />${spec.observe}`;
+    note.innerHTML =
+      `<b>${spec.name}</b> · ${spec.tag}<br />${spec.observe}` +
+      (abWasOn
+        ? '<br /><span class="dim">本次基线把 A/B 对比关闭了（实验只声明单组参数）；要做单变量对比请重新勾选 A/B 并点「快照参数」。</span>'
+        : "");
     note.classList.remove("hidden");
   }
   document.querySelectorAll<HTMLButtonElement>("#experiment-list button").forEach((b) => {
@@ -1466,6 +1960,7 @@ function startChallenge(c: ChallengeSpec): void {
     toast("真实 IMU / 回放模式下挑战停用——那时没有真值，评分口径不成立", "#f85149");
     return;
   }
+  const abWasOn = abState.on; // 基线会关闭 A/B：挑战评分读的是 A 组「本轮评测」，必须说清
   resetExperimentBaseline();
   for (const [id, v] of Object.entries(c.selects ?? {})) setSelectValue(id, v);
   for (const [id, v] of Object.entries(c.sliders ?? {})) setSliderValue(id, v);
@@ -1479,7 +1974,10 @@ function startChallenge(c: ChallengeSpec): void {
       `<b>${c.name}</b> · ${c.goal}<br />` +
       `<span class="dim">现场：</span>${c.scene}<br />` +
       `<span class="dim">提示：</span>${nlToBr(c.hint)}<br />` +
-      `<span class="dim">跑够 15 秒后点「结算」。</span>`;
+      `<span class="dim">跑够 15 秒后点「结算」。</span>` +
+      (abWasOn
+        ? '<br /><span class="dim">本次装载关闭了 A/B 对比（评分只看 A 组「本轮评测」）。</span>'
+        : "");
   }
   toast(`挑战已装载：${c.name} —— 调参数，跑够 15 秒后结算`);
 }
@@ -1573,24 +2071,34 @@ function updateMagCalUi(): void {
   const synth = document.getElementById("magcal-synthetic") as HTMLButtonElement | null;
   if (!status) return;
   const n = magCalState.samples.length;
-  if (magCalState.collecting) {
-    status.textContent = `采集中：${n} 点——缓慢翻滚机体，让磁点云铺满球面（至少 ${MAG_CAL_TARGET} 点）`;
-  } else if (n > 0 && !magCalState.cal) {
-    status.textContent = `已采 ${n} 点——点「拟合并应用」解出硬铁/软铁`;
-  } else if (magCalState.cal) {
-    status.textContent = magCalState.applied
-      ? `已应用：${n} 点拟合 · 残差 ${(magCalState.cal.residual * 100).toFixed(1)}%`
-      : `已拟合（未应用）：${n} 点 · 残差 ${(magCalState.cal.residual * 100).toFixed(1)}%`;
-  } else {
-    status.textContent = "未校准。模拟模式可一键生成样本；真实模式需缓慢翻滚机体采集。";
-  }
+  status.textContent = magStatusText({
+    cal: magCalState.cal,
+    applied: magCalState.applied,
+    collecting: magCalState.collecting,
+    sampleCount: n,
+    message: "",
+    verifyLine: magCalState.verifyLine,
+    target: MAG_CAL_TARGET,
+  });
   if (result) {
-    result.innerHTML = magCalState.cal
-      ? `<div>硬铁 offset [${magCalState.cal.offset.map((v) => v.toFixed(1)).join(", ")}] μT</div>` +
-        `<div>软铁 scale [${magCalState.cal.scale.map((v) => v.toFixed(3)).join(", ")}]</div>` +
-        `<div>场强 ${magCalState.cal.field.toFixed(1)} μT · 样本 ${magCalState.cal.count}</div>`
-      : "";
+    // 器件参数可能在拟合之后被改（交叉轴/非线性/拟合模型）→ 提示标定基于旧模型
+    const stale = calibrationStaleness(magCalState.cal?.fittedWith, imuParams, "mag", currentMagCalModel());
+    result.innerHTML =
+      magResultHtml(magCalState.cal, magCalState.verifyLine, stale) +
+      magHistoryHtml(
+        magCalHistory.map((h) => ({
+          id: h.id,
+          atText: h.atText,
+          model: h.model,
+          sampleCount: h.sampleCount,
+          residual: h.residual,
+          lateResidual: h.lateResidual,
+          // 用历史条目 id 判「当前」：快照是深拷贝，按引用比较永远不相等（冒烟实测 5 条全带恢复按钮）
+          active: h.id === activeMagCalHistoryId,
+        })),
+      );
   }
+
   if (apply) {
     apply.disabled = magCalState.cal === null;
     apply.checked = magCalState.applied && magCalState.cal !== null;
@@ -1604,19 +2112,27 @@ function updateMagCalUi(): void {
 }
 
 function magCalFit(): void {
-  const cal = calibrateMag(magCalState.samples);
+  const model = ($<HTMLSelectElement>("magcal-model"))?.value === "full" ? "full" : "diag";
+  // 拟合集/验证集分离：75% 点拟合、25% 点验证（验证残差与拟合残差一起显示，防止"自评自"）
+  const cal = calibrateMagWithValidation(magCalState.samples, model, 4);
   if (!cal) {
     magCalState.message =
-      `拟合失败：样本 ${magCalState.samples.length} 点，覆盖度不足或数值退化——` +
+      `拟合失败（${model === "full" ? "完整椭球" : "对角"}）：样本 ${magCalState.samples.length} 点，覆盖度不足或数值退化——` +
       "请让三轴都转动起来（只绕一个轴转，球心在那两个方向不可观）";
     updateMagCalUi();
     return;
   }
+  cal.fittedWith = fingerprintOf(imuParams, model, new Date(), 50); // 记录拟合时磁模型与当前磁/加计参数（完整椭球默认目标场强 50 μT）
   magCalState.cal = cal;
+  pushMagCalHistory(cal, model);
   magCalState.applied = true;
   magCalState.collecting = false; // 拟合完成即停止采集，状态行切到「已应用」
+  magCalState.verifyLine = ""; // 换了一份标定，旧的验证结论失效
   updateMagCalUi();
-  toast(`磁校准完成：硬铁 |b| = ${Math.hypot(...cal.offset).toFixed(1)} μT，残差 ${(cal.residual * 100).toFixed(1)}%`);
+  toast(
+    `磁校准完成（${model === "full" ? "完整 3×3" : "对角"}）：硬铁 |b| = ${Math.hypot(...cal.offset).toFixed(1)} μT，` +
+      `残差 ${(cal.residual * 100).toFixed(1)}%`,
+  );
 }
 
 document.getElementById("magcal-start")?.addEventListener("click", () => {
@@ -1636,6 +2152,180 @@ document.getElementById("magcal-synthetic")?.addEventListener("click", () => {
   magCalFit();
 });
 document.getElementById("magcal-fit")?.addEventListener("click", () => magCalFit());
+
+/**
+ * 独立验证磁校准：**换一组新样本**（不同随机种子、独立姿态），
+ * 用真值姿态量出「标定前后磁航向误差」。它检验的是实际后果（航向偏多少），
+ * 而不是拟合残差——残差小但方向偏的情况只有这一步能看出来。
+ */
+function verifyMagCal(): void {
+  const result = document.getElementById("magcal-result");
+  if (state.real) {
+    toast("独立验证需要真值姿态：真实/回放模式下无法给出航向误差（只能看残差与点云覆盖）", "#fbbf24");
+    return;
+  }
+  if (!magCalState.cal) {
+    toast("先拟合出一份校准，再独立验证", "#fbbf24");
+    return;
+  }
+  // 独立采样：与拟合样本不同的高斯种子 + 不同姿态序列
+  const g = new Gauss(mulberry32(0x5a17c0de));
+  const points: Array<{ qTrue: Quat; magRaw: V3 }> = [];
+  for (let i = 0; i < 140; i++) {
+    const q = qNorm({ w: g.next(), x: g.next(), y: g.next(), z: g.next() });
+    points.push({ qTrue: q, magRaw: simulateMag(q, i * 0.37, imuParams, g) });
+  }
+  const v = verifyMagCalibration(magCalState.cal, points, MAG_WORLD_NED);
+  const line = magVerifyLineHtml(v, MAG_WORLD_NED);
+  magCalState.verifyLine = line;
+  if (result) result.innerHTML += line;
+  // 三种结论要分开说：有效 / 改善有限（点云覆盖或模型选错）/ 本就无需校准
+  const verdict =
+    v.afterMeanDeg < v.beforeMeanDeg * 0.5
+      ? "（校准有效）"
+      : v.afterMeanDeg <= v.beforeMeanDeg
+        ? "（改善有限：检查点云覆盖与拟合模型选择）"
+        : "（未见改善：这批数据本身可能就没有硬铁/软铁畸变，校准只会引入新的小误差）";
+  toast(
+    `磁校准独立验证：平均航向误差 ${v.beforeMeanDeg.toFixed(2)}° → ${v.afterMeanDeg.toFixed(2)}°` + verdict,
+    v.afterMeanDeg < v.beforeMeanDeg * 0.5 ? "#7ee787" : "#fbbf24",
+  );
+}
+document.getElementById("magcal-verify")?.addEventListener("click", verifyMagCal);
+// 历史快照恢复（事件委托：列表是每次刷新重建的）
+document.getElementById("magcal-result")?.addEventListener("click", (e) => {
+  const btn = (e.target as HTMLElement).closest<HTMLButtonElement>("button[data-cal-restore]");
+  if (!btn) return;
+  const id = Number(btn.dataset.calRestore);
+  const entry = magCalHistory.find((h) => h.id === id);
+  if (!entry) return;
+  // 恢复的是「当时那份标定」：模型下拉也切回它拟合时的模型，否则界面与对象不一致。
+  // 深克隆：历史条目是只读快照，不能与应用中的对象共享引用（否则后续编辑会改到历史）。
+  const restored = cloneMagCalibration(entry.cal);
+  setSelectValue("magcal-model", entry.model);
+  // 采集状态一并复位：否则「恢复历史」后仍在采集中，界面与数据流互相矛盾
+  magCalState.collecting = false;
+  magCalState.samples = [];
+  magCalState.message = "";
+  magCalState.cal = restored;
+  activeMagCalHistoryId = entry.id;
+  magCalState.applied = true;
+  magCalState.verifyLine = "";
+  updateMagCalUi();
+  toast(`已恢复 ${entry.atText} 的标定（${entry.model === "full" ? "完整椭球" : "对角"}，残差 ${(entry.residual * 100).toFixed(2)}%）`, "#7ee787");
+});
+
+/* ---------- 加速度计六面校准 UI ---------- */
+function updateAccelCalUi(): void {
+  const status = document.getElementById("accelcal-status");
+  const result = document.getElementById("accelcal-result");
+  const apply = document.getElementById("accelcal-apply") as HTMLInputElement | null;
+  if (status) {
+    status.textContent = accelStatusText({
+      cal: accelCalState.cal,
+      applied: accelCalState.applied,
+      sampleCount: accelCalState.samples.length,
+      message: accelCalState.message,
+      verifyLine: accelCalState.verifyLine,
+      windowSeconds: ACCEL_CAL_SECONDS,
+    });
+  }
+  if (result) {
+    const stale = calibrationStaleness(accelCalState.cal?.fittedWith, imuParams, "accel");
+    result.innerHTML = accelResultHtml(accelCalState.cal, accelCalState.verifyLine, stale);
+  }
+  if (apply) {
+    apply.disabled = accelCalState.cal === null;
+    apply.checked = accelCalState.applied && accelCalState.cal !== null;
+  }
+  accelCalState.message = "";
+}
+function fitAccelCal(): void {
+  const cal = calibrateAccel(accelCalState.samples);
+  if (!cal) {
+    accelCalState.message =
+      `拟合失败：已记录 ${accelCalState.samples.length} 面（至少 4 个不同朝向）——六个面都记录后重试`;
+    updateAccelCalUi();
+    return;
+  }
+  // 留一朝向验证：没参与拟合的那个朝向预测得准不准
+  cal.validation = validateAccelCalibration(accelCalState.samples);
+  cal.fittedWith = fingerprintOf(imuParams);
+  accelCalState.cal = cal;
+  accelCalState.verifyLine = ""; // 换了一份标定，旧的验证结论失效
+  accelCalState.applied = true;
+  updateAccelCalUi();
+  toast(
+    `加速度计六面校准完成：残差 RMS ${Math.max(...cal.rmse).toFixed(4)} m/s²` +
+      (cal.validation ? `，留一验证 ${cal.validation.meanNormErrMs2.toFixed(4)} m/s²` : "") +
+      "（已应用）",
+  );
+}
+for (const [id, face] of [
+  ["accelcal-face-px", "+x"],
+  ["accelcal-face-nx", "-x"],
+  ["accelcal-face-py", "+y"],
+  ["accelcal-face-ny", "-y"],
+  ["accelcal-face-pz", "+z"],
+  ["accelcal-face-nz", "-z"],
+] as const) {
+  document.getElementById(id)?.addEventListener("click", () => beginAccelCalFace(face));
+}
+document.getElementById("accelcal-fit")?.addEventListener("click", fitAccelCal);
+
+/**
+ * 独立验证加计校准：用**另一组噪声样本**（新种子，未参与拟合）核对六个朝向的模长是否都回到 g。
+ * 拟合残差是"训练集上的表现"，这里问的是"新数据上还行不行"。
+ */
+function verifyAccelCal(): void {
+  const result = document.getElementById("accelcal-result");
+  if (!accelCalState.cal) {
+    toast("先拟合并应用一份六面校准，再独立验证", "#fbbf24");
+    return;
+  }
+  let fresh: AccelCalibrationSample[];
+  if (state.real) {
+    // 真实模式没有"合成新样本"的语义：用已采集的六面读数作为验证集（会与拟合集重叠，明确说明）
+    fresh = accelCalState.samples;
+    if (!fresh.length) {
+      toast("真实模式下需要先采集六面读数", "#fbbf24");
+      return;
+    }
+  } else {
+    // 由 DOM-free 核心按当前器件模型生成，验证规则可在 Node 自检中独立验证。
+    fresh = synthesizeAccelVerification(imuParams);
+  }
+  const v = verifyAccelCalibration(accelCalState.cal, fresh);
+  const line = accelVerifyLineHtml(v, !state.real);
+  accelCalState.verifyLine = line;
+  if (result) result.innerHTML += line;
+  const verdict = accelVerdict(v.beforeMeanMs2, v.afterMeanMs2);
+  toast(
+    `加计校准独立验证：模长偏离 ${v.beforeMeanMs2.toFixed(4)} → ${v.afterMeanMs2.toFixed(4)} m/s²` + verdict,
+    v.afterMeanMs2 < v.beforeMeanMs2 * 0.5 ? "#7ee787" : "#fbbf24",
+  );
+}
+document.getElementById("accelcal-verify")?.addEventListener("click", verifyAccelCal);
+document.getElementById("accelcal-clear")?.addEventListener("click", () => {
+  accelCalState.cal = null;
+  accelCalState.applied = false;
+  accelCalState.samples = [];
+  accelCalState.window = [];
+  accelCalState.pending = null;
+  accelCalState.message = "";
+  accelCalState.verifyLine = "";
+  updateAccelCalUi();
+  toast("已清除加速度计校准");
+});
+document.getElementById("accelcal-apply")?.addEventListener("change", (e) => {
+  const on = (e.target as HTMLInputElement).checked;
+  if (on && !accelCalState.cal) {
+    (e.target as HTMLInputElement).checked = false;
+    return;
+  }
+  accelCalState.applied = on;
+  updateAccelCalUi();
+});
 document.getElementById("magcal-apply")?.addEventListener("change", (e) => {
   const on = (e.target as HTMLInputElement).checked;
   if (on && !magCalState.cal) {
@@ -1648,8 +2338,10 @@ document.getElementById("magcal-apply")?.addEventListener("change", (e) => {
 document.getElementById("magcal-clear")?.addEventListener("click", () => {
   magCalState.samples.length = 0;
   magCalState.cal = null;
+  activeMagCalHistoryId = 0;
   magCalState.applied = false;
   magCalState.collecting = false;
+  magCalState.verifyLine = "";
   updateMagCalUi();
 });
 updateMagCalUi();
@@ -1883,8 +2575,25 @@ $("view-seg")
 scenarioSelect.addEventListener("change", () => {
   world.setScenario(scenarioSelect.value);
   $("manual-group").classList.toggle("hidden", scenarioSelect.value !== "manual");
+  syncLoopAvailability();
   resetSim();
 });
+
+/**
+ * 闭环可用性：运动学一致剧本直接规定真值姿态与平动，`feedbackQ` 不会进入轨迹；
+ * 真实/回放模式也没有模拟控制器。两种情况都禁用开关并解释，而不是让用户点了没反应。
+ */
+function syncLoopAvailability(): void {
+  const loop = $<HTMLInputElement>("loop-toggle");
+  const kinematic = Boolean(scenarios[scenarioSelect.value]?.kinematic);
+  loop.disabled = state.real || kinematic;
+  if (kinematic && loop.checked) loop.checked = false;
+  loop.title = kinematic
+    ? "运动学一致剧本直接规定真值姿态与平动，闭环控制不适用"
+    : state.real
+      ? "真实/回放模式没有模拟控制器"
+      : "闭环演示：机体用所选解算结果控制";
+}
 
 sourceSelect.addEventListener("change", () => {
   state.source = sourceSelect.value as typeof state.source;
@@ -2090,13 +2799,15 @@ function updatePanelSummaries(): void {
     if (el) el.textContent = text;
   };
   const scenarioName = scenarioSelect.selectedOptions[0]?.textContent ?? "—";
-  set("scenario", `${scenarioName}${state.real ? ` · ${dataSourceLabel()}` : ""}`);
+  set("scenario", `${scenarioName}${!hasGroundTruth() ? ` · ${dataSourceLabel()}` : ""}`);
   const presets = $<HTMLSelectElement>("imu-preset").selectedOptions[0]?.textContent ?? "";
   const extras = [
     imuParams.gyroRangeDps > 0 ? `量程 ${imuParams.gyroRangeDps}°/s` : "",
     imuParams.gyroScaleErr > 0 ? `刻度 ${(imuParams.gyroScaleErr * 100).toFixed(1)}%` : "",
     imuParams.gyroMisalign > 0 ? `失准 ${(imuParams.gyroMisalign * 100).toFixed(1)}%` : "",
     imuParams.sensorDelayMs > 0 ? `延迟 ${imuParams.sensorDelayMs}ms` : "",
+    (imuParams.sensorDelaySkewMs ?? 0) > 0 ? `延迟差 ±${imuParams.sensorDelaySkewMs}ms` : "",
+    (imuParams.sensorSampleHz ?? 0) > 0 ? `采样 ${imuParams.sensorSampleHz}Hz` : "",
   ].filter(Boolean);
   set(
     "imu",
@@ -2174,17 +2885,103 @@ function setPlaying(p: boolean): void {
 $("btn-pause").addEventListener("click", () => setPlaying(!state.playing));
 $("btn-reset").addEventListener("click", resetSim);
 
+/**
+ * 单步推进：暂停后每次前进一个**解算步**（仿真仍是 500 Hz，解算频率低时内部走多步）。
+ * 真实/回放模式的时间由数据到达节奏决定，不在这里伪造——给提示而不是静默无效。
+ */
+function stepOnce(): void {
+  if (state.real) {
+    toast("单步用于模拟模式；真实/回放数据按帧到达推进，请用暂停/继续", "#fbbf24");
+    return;
+  }
+  if (state.playing) setPlaying(false);
+  let guard = 0;
+  do {
+    stepSim();
+    guard++;
+  } while (solveState.acc !== 0 && guard < 2000);
+  updateReadouts();
+  updateLegendValues();
+  attChart.render();
+  errChart.render();
+  imuChart.render();
+  drawIns();
+}
+$("btn-step")?.addEventListener("click", stepOnce);
+
+/* 三图共享时间游标：鼠标悬停/键盘方向键在暂停时查看任意历史帧 */
+const sharedCharts: RollingChart[] = [attChart, errChart, imuChart];
+const cursorChip = document.getElementById("chart-cursor");
+let cursorT: number | null = null;
+function cursorText(t: number): string {
+  const att = attChart.sampleAt(t);
+  const err = errChart.sampleAt(t);
+  const fmt = (v: number, d = 1): string => (Number.isFinite(v) ? v.toFixed(d) : "—");
+  const attText = att
+    ? att.values
+        .slice(0, 3)
+        .map((v, i) => `${["真实", ...ests.map((e) => e.label)][i] ?? `#${i}`} ${fmt(v)}°`)
+        .join(" · ")
+    : "—";
+  const errText = err
+    ? err.values
+        .slice(0, 3)
+        .map((v, i) => `${ests[i]?.label ?? `#${i}`} ${fmt(v, 2)}°`)
+        .join(" · ")
+    : "—";
+  return `t = ${t.toFixed(2)} s · ${attText}｜误差 ${errText}`;
+}
+function setSharedCursor(t: number | null): void {
+  cursorT = t;
+  for (const c of sharedCharts) c.setCursor(t);
+  if (!cursorChip) return;
+  if (t === null) {
+    cursorChip.classList.add("hidden");
+    return;
+  }
+  cursorChip.textContent = cursorText(t);
+  cursorChip.classList.remove("hidden");
+}
+for (const id of ["att-canvas", "err-canvas", "imu-canvas"]) {
+  const canvas = document.getElementById(id) as HTMLCanvasElement | null;
+  if (!canvas) continue;
+  canvas.addEventListener("mousemove", (e) => {
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width <= 0) return;
+    const frac = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+    const { t0, t1 } = attChart.timeRange();
+    setSharedCursor(t0 + frac * (t1 - t0));
+  });
+  canvas.addEventListener("mouseleave", () => setSharedCursor(null));
+}
+window.addEventListener("keydown", (e) => {
+  if (state.playing || (e.key !== "ArrowLeft" && e.key !== "ArrowRight")) return;
+  const target = e.target as HTMLElement | null;
+  if (target && /^(INPUT|SELECT|TEXTAREA)$/.test(target.tagName)) return;
+  const { t0, t1 } = attChart.timeRange();
+  const cur = cursorT ?? t1;
+  const next = Math.min(t1, Math.max(t0, cur + (e.key === "ArrowLeft" ? -0.04 : 0.04)));
+  setSharedCursor(next);
+  e.preventDefault();
+});
+
 function resetSim(): void {
-  world.reset();
-  // 「初始姿态偏差」演示：勾选后重置时给所有算法同一个随机初始姿态（20–35°，真值仍从水平出发）——
+  // 确定性复位：World 用同一 seed 重新播种，传感器噪声序列从实验起点完整重放
+  world.reset(experimentConfig.seed);
+  // 「初始姿态偏差」演示：勾选后给所有算法同一个**由 seed 决定**的随机初值（20–35°，真值仍从水平出发）——
   // 观察幻影（真值）不动、各算法从错误初值收敛：互补/Mahony/Madgwick 靠启动增益 ramp 加速，
   // 卡尔曼靠大初始协方差；偏航 40° 门控的边界效应见文档·控制项手册。
-  // 真实模式没有「演示用初始偏差」的意义：始终从水平出发
-  const q0 = !state.real && ($("init-offset-toggle") as HTMLInputElement).checked ? randomInitOffset() : undefined;
+  // 真实模式没有「演示用初始偏差」的意义：始终从水平出发。
+  const wantOffset = !state.real && ($("init-offset-toggle") as HTMLInputElement).checked;
+  experimentConfig.initialAttitude = wantOffset ? { kind: "random" } : { kind: "level" };
+  const q0 = wantOffset ? initialAttitudeOf(experimentConfig) : undefined;
   for (const e of ests) e.reset(q0);
-  for (const c of abState.clones) c.reset(q0); // B 组保持冻结参数，只同步初值
-  still.seconds = 0;
-  still.lastAlignT = -1e9;
+  for (const c of abState.clones) c.reset(q0); // B 组保持冻结参数，只同步初值（fork 复位后即变为同起点配对）
+  solveLoop.reset();
+  solveRunId++; // 新的一轮：消费快照随之作废（旧消费值不得出现在新轮记录里）
+  clearSolveInput();
+  replayBacklog.length = 0; // 回放待积分队列属于上一轮
+  still.chipUntil = -1;
   state.simTime = 0;
   simAcc = 0;
   logAcc = 0;
@@ -2196,26 +2993,32 @@ function resetSim(): void {
   imuChart.clear();
   attPrev.fill(undefined);
   logRows.length = 0;
+  rawRecord.rows.length = 0;
   resetIns(); // 位置积分与轨迹属于「本轮」，一并归零
   state.lastImu = null;
+  state.externalTruth = null;
+  truthPrevQ = null; // 日志真值差分角速度不能跨轮沿用
+  truthPrevT = 0;
   if (state.real) serialState.queue.length = 0; // 重置后不要把重置前的帧再回放一遍
   clearSimError(); // 连同那条红字横幅一起摘掉（只复位标志会让它一直挂在屏幕上）
+  setSharedCursor(null); // 时间游标属于本轮记录
   updateMetricsTable();
 }
 
-/** 随机初始姿态偏差：均匀球面随机轴 + 20–35° 转角（上限留在卡尔曼 40° 新息门控之内） */
-function randomInitOffset(): Quat {
-  const az = Math.random() * 2 * Math.PI;
-  const pol = Math.acos(2 * Math.random() - 1);
-  const axis: V3 = [
-    Math.sin(pol) * Math.cos(az),
-    Math.sin(pol) * Math.sin(az),
-    Math.cos(pol),
-  ];
-  return qFromAxisAngle(axis, (20 + 15 * Math.random()) * RAD);
-}
-
 $("init-offset-toggle").addEventListener("change", resetSim);
+
+/** 实验种子：同一配置 + 同一种子 = 同一噪声序列、同一随机初值；改变种子即换一组实验样本 */
+const seedInput = document.getElementById("experiment-seed") as HTMLInputElement | null;
+if (seedInput) {
+  seedInput.value = String(experimentConfig.seed >>> 0);
+  const applySeed = (): void => {
+    const v = Number(seedInput.value);
+    experimentConfig.seed = Number.isFinite(v) && v >= 0 ? Math.floor(v) >>> 0 : DEFAULT_EXPERIMENT_CONFIG.seed;
+    resetSim();
+    toast(`实验种子 = ${experimentConfig.seed}（重置后噪声与随机初值随之可复现）`);
+  };
+  seedInput.addEventListener("change", applySeed);
+}
 
 // ---------- 读数 ----------
 const fmtSigned = (v: number, d = 1): string => {
@@ -2225,9 +3028,9 @@ const fmtSigned = (v: number, d = 1): string => {
 const fmtVec = (v: [number, number, number]): string =>
   `[${v.map((a) => fmtSigned(a, 1)).join(", ")}]`;
 
-/** 当前「模型姿态来源」对应的四元数；真实模式下真值不存在，回退到 Mahony 基准 */
+/** 当前「模型姿态来源」对应的四元数；真实模式且无外部真值时回退到 Mahony 基准 */
 function selectedQ(): Quat {
-  if (state.source === "truth") return state.real ? (ests[2] as MahonyEstimator).q : world.q;
+  if (state.source === "truth") return referenceQ();
   return ests.find((e) => e.id === state.source)!.q;
 }
 
@@ -2235,18 +3038,22 @@ function updateReadouts(): void {
   const q = selectedQ();
   const eu = qToEuler(q);
   // 真实模式无真值：这一行显示 Mahony 参照基准（图例里的「真实」即基准）
-  const refQ = state.real ? (ests[2] as MahonyEstimator).q : world.q;
+  const refQ = referenceQ();
   const te = qToEuler(refQ);
   $("readout-quat").textContent = `q = [${[q.w, q.x, q.y, q.z].map((a) => a.toFixed(4)).join(", ")}]`;
   $("readout-euler").innerHTML = `φ ${fmtSigned(eu.roll * DEG)}° &nbsp; θ ${fmtSigned(eu.pitch * DEG)}° &nbsp; ψ ${fmtSigned(eu.yaw * DEG)}°`;
-  $("readout-true").innerHTML = state.real
-    ? `<span style="color:#e6edf3">基准(Mahony)</span> φ ${fmtSigned(te.roll * DEG)}° θ ${fmtSigned(te.pitch * DEG)}° ψ ${fmtSigned(te.yaw * DEG)}°`
+  $("readout-true").innerHTML = !hasGroundTruth()
+    ? `<span style="color:#e6edf3">基准(${currentReferenceKind() === "external" ? "外部" : "Mahony"})</span> φ ${fmtSigned(te.roll * DEG)}° θ ${fmtSigned(te.pitch * DEG)}° ψ ${fmtSigned(te.yaw * DEG)}°`
     : `真实 φ ${fmtSigned(te.roll * DEG)}° θ ${fmtSigned(te.pitch * DEG)}° ψ ${fmtSigned(te.yaw * DEG)}°`;
   const imu = state.lastImu;
   if (imu) {
     const gyroDps: [number, number, number] = [imu.gyro[0] * DEG, imu.gyro[1] * DEG, imu.gyro[2] * DEG];
+    // 三路延迟不同步时，把「各通道滞后多少毫秒」直接写出来（来自流水线的通道时间戳）
+    const lag = imu.times
+      ? ` <span class="dim">滞后 陀螺 ${((state.simTime - imu.times.gyro) * 1000).toFixed(1)} / 加计 ${((state.simTime - imu.times.accel) * 1000).toFixed(1)} / 磁 ${((state.simTime - imu.times.mag) * 1000).toFixed(1)} ms</span>`
+      : "";
     $("readout-imu").innerHTML =
-      `陀螺仪 ${fmtVec(gyroDps)} °/s<br />加速度计 ${fmtVec(imu.accel)} m/s²`;
+      `陀螺仪 ${fmtVec(gyroDps)} °/s<br />加速度计 ${fmtVec(imu.accel)} m/s²${lag}`;
   }
   $("clock").textContent = `t = ${state.simTime.toFixed(1)} s`;
 }
@@ -2329,6 +3136,492 @@ function updateMetricsTable(): void {
     meta.textContent = `本轮 ${n} 个样本（25 Hz）· 收敛 = 连续 1 s 总误差 < 2°`;
   }
 }
+
+/* ==========================================================================
+   批量评测（P2）：同一批 seed 下五种算法配对比较，报告 P50/P95 与未收敛率
+   --------------------------------------------------------------------------
+   复用 core/runner 的无 DOM 内核（与在线仿真同一套 World/IMU/估计器/统计）。
+   每跑完一个 seed 让出一次事件循环，避免长时间冻结页面。
+   ========================================================================== */
+let batchRunning = false;
+/** Worker 多久没有任何消息就判为卡死（心跳间隔 2 s，留足余量） */
+const WORKER_STALL_MS = 15_000;
+
+/** 从当前实例提取完整算法配置（批量评测的输入快照） */
+function tuningOf(e: Estimator): EstimatorTuning {
+  const base = structuredCloneTuningSafe(DEFAULT_ESTIMATOR_TUNING[e.id as EstimatorId]);
+  base.enabled = true;
+  base.magEnabled = e.magEnabled;
+  base.params = e.getParams();
+  if (e.id === "comp" || e.id === "mahony" || e.id === "madg") {
+    const g = e as ComplementaryEstimator | MahonyEstimator | MadgwickEstimator;
+    base.accelGate = g.accelGate;
+    base.gateDeg = g.gateDeg;
+    base.gateMagPct = g.gateMagPct;
+    base.gateRecovery = g.gateRecovery;
+    base.rampEnabled = g.rampEnabled;
+    if (e.id === "mahony" || e.id === "madg") {
+      base.magMode = (e as MahonyEstimator | MadgwickEstimator).magMode;
+    }
+  }
+  if (e.id === "kalman") {
+    const k = e as KalmanEstimator;
+    base.kalmanGate = k.gateMode;
+    base.kalmanChi2 = k.gateChi2;
+    base.kalmanResetCov = k.resetCovOnInject;
+  }
+  return base;
+}
+function structuredCloneTuningSafe(t: EstimatorTuning): EstimatorTuning {
+  return { ...t, params: { ...t.params } };
+}
+
+/** 当前界面状态的完整数值配置（批量评测/实验档案共用） */
+function currentMagCalModel(): MagCalModel {
+  return ($<HTMLSelectElement>("magcal-model"))?.value === "full" ? "full" : "diag";
+}
+
+function currentExperimentConfig(durationSec: number): ExperimentConfig {
+  const c = defaultExperimentConfig();
+  c.seed = experimentConfig.seed;
+  c.scenario = scenarioSelect.value;
+  c.durationSec = durationSec;
+  c.solveRateHz = solveState.hz;
+  c.imu = { ...imuParams };
+  c.initialAttitude = ($<HTMLInputElement>("init-offset-toggle")).checked ? { kind: "random" } : { kind: "level" };
+  c.magModel = currentMagCalModel();
+  // 校准对象与「是否应用」分开记录：只保存对象不足以复现同一输入
+  c.magCalibration = magCalState.cal;
+  c.magCalibrationApplied = magCalState.applied && magCalState.cal !== null;
+  c.magTargetUts = magCalState.cal?.field;
+  c.accelCalibration = accelCalState.cal;
+  c.accelCalibrationApplied = accelCalState.applied && accelCalState.cal !== null;
+  c.autoCoarseAlign = true;
+  c.manualTargetDeg = [world.manual.rollDeg, world.manual.pitchDeg, world.manual.yawDeg];
+  c.ab = { mode: ($<HTMLSelectElement>("ab-mode"))?.value === "online-fork" ? "online-fork" : "same-start" };
+  for (const e of ests) c.estimators[e.id as EstimatorId] = tuningOf(e);
+  return c;
+}
+
+
+/**
+ * 连接世代：串口/BLE 的**在途连接**与回放导入都受它保护。
+ * 任何会改变「当前数据来源意图」的操作（断开、连另一种、导入回放）都会 +1，
+ * 于是尚未完成的 await 在返回时能发现「我这一代已经作废了」，不提交状态。
+ */
+let connectionGeneration = 0;
+
+/**
+ * 数据源**意图**：用户显式选择的来源，与「传输层此刻是否活着」分开。
+ *
+ * 复核反例（P1-D）：断线重连期间 `serialState.running` / `bleState.connected` 都是 false，
+ * 于是 `currentDataSource()` 退回 `simulation`——记录被标成「模拟」、误差基准被当成模拟真值；
+ * 更糟的是 `applyDataSourceSemantics()` 还会顺手把本轮实验清零。
+ * 因此来源身份由本变量持有：只有「用户主动换源 / 彻底放弃重连」才改它。
+ */
+let sourceIntent: DataSourceKind = "simulation";
+
+/** 批量评测的执行路径（自检/冒烟用来确认走的是哪一条） */
+let batchLastMode: "worker" | "main" | null = null;
+
+/**
+ * Worker 路径：把 N 个种子的评测整体搬出主线程。
+ * 返回 null 表示 Worker 不可用或失败（调用方回退到主线程分片路径）。
+ */
+/** 批量评测任务号：单调递增。旧任务的消息一律丢弃，避免连点两次时旧结果覆盖新表格。 */
+let batchJobSeq = 0;
+/** 当前在跑的 Worker（取消时要能给它发 cancel 并终止） */
+let batchWorker: Worker | null = null;
+/** 当前任务号（0 = 没有在跑） */
+let activeBatchJob = 0;
+/**
+ * **批次世代**：每次「启动」或「取消」都 +1。所有异步回写（进度、看门狗回退、表格、
+ * 主线程分片完成）都必须先确认自己的世代仍然是最新的。
+ *
+ * 为什么不能只看 `batchRunning`：取消后把 `batchRunning=false`，但**已经排队的定时器/
+ * 已挂起的 await 仍会继续跑**。复核反例：取消旧批后 15 s 看门狗到期，仍会启动主线程回退、
+ * 跑完旧 seed100…109 并把旧表格写上去（此时 `running=false`、新 job=2 正在跑）。
+ */
+let batchGeneration = 0;
+/** 当前 Worker Promise 的结算函数：取消时必须调用它，否则 `runBatch` 的 await 永远不返回 */
+let settleBatchWorker: ((v: EstimatorRunMetrics[][] | null) => void) | null = null;
+
+/** 批量评测的取消请求：由按钮或新批次触发 */
+function cancelBatch(reason: string): void {
+  // 取消要覆盖两条路径：Worker 还在跑时终止它；Worker 已挂/不存在时正在跑主线程分片，
+  // 此时 activeBatchJob 可能已经是 0——只看它会把「取消」吃掉（复核实测过这条）。
+  if (!batchRunning && !activeBatchJob && !settleBatchWorker) return;
+  // 世代 +1：此后所有排队的定时器、已挂起的 await、旧 Worker 消息都属于「上一代」，
+  // 一律不得再写界面或启动回退（这是修掉「旧看门狗复活旧任务」的关键）。
+  batchGeneration++;
+  const jobId = activeBatchJob;
+  activeBatchJob = 0;
+  try {
+    batchWorker?.postMessage({ type: "cancel", jobId } satisfies BatchRequest);
+  } catch {
+    /* 已经死了 */
+  }
+  // 结算挂起的 Promise（清看门狗 + terminate + resolve null），否则 runBatch 的 await 悬挂
+  settleBatchWorker?.(null);
+  settleBatchWorker = null;
+  // 立即终止：Worker 会在下一个种子结束后退出，但长时长单次运行可能要等很久；
+  // 用户点取消就该立刻停，不能等「跑到一半」。
+  batchWorker?.terminate();
+  batchWorker = null;
+  batchRunning = false;
+  const btn = $<HTMLButtonElement>("btn-batch");
+  btn.disabled = false;
+  btn.textContent = "运行批量评测";
+  const status = $("batch-status");
+  status.textContent = `已取消批量评测（${reason}）`;
+  batchCancelCount++;
+}
+/** 取消次数（自动化验收用） */
+let batchCancelCount = 0;
+
+/**
+ * Worker 路径：把 N 个种子的评测整体搬出主线程。
+ * 返回 null 表示 Worker 不可用/失败/被取消（调用方回退或直接结束）。
+ *
+ * 与旧实现的差别（第五轮复核的 P2）：
+ *  - 每条消息都核对 `jobId`，过期消息直接丢弃（连点两次不会互相覆盖）；
+ *  - 支持取消（`cancelBatch`）；
+ *  - 超时判据改为「多久没收到**任何**消息」，而不是按种子数×时长线性外推
+ *    （旧公式在 30×30 档会算出 22 分钟，等于没有保护）。
+ */
+function runBatchInWorker(
+  config: ExperimentConfig,
+  seeds: number[],
+  onProgress: (done: number, total: number, seed: number, viaHeartbeat: boolean) => void,
+): Promise<EstimatorRunMetrics[][] | null> {
+  return new Promise((resolve) => {
+    const jobId = ++batchJobSeq;
+    activeBatchJob = jobId;
+    let worker: Worker;
+    try {
+      worker = new Worker(new URL("./workers/batch.worker.ts", import.meta.url), { type: "module" });
+    } catch {
+      activeBatchJob = 0;
+      resolve(null);
+      return;
+    }
+    batchWorker = worker;
+    let settled = false;
+    const finish = (v: EstimatorRunMetrics[][] | null): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(stallTimer);
+      worker.terminate();
+      if (batchWorker === worker) batchWorker = null;
+      if (activeBatchJob === jobId) activeBatchJob = 0;
+      if (settleBatchWorker === finish) settleBatchWorker = null;
+      resolve(v);
+    };
+    // 把结算函数登记出去：cancelBatch 必须能立刻结算它（否则 await 悬挂）
+    settleBatchWorker = finish;
+    // 停滞看门狗：只要 Worker 还在发 progress/heartbeat 就一直续期。
+    // 单次运行很久（例如 30 s 时长 + 高解算率）时，心跳保证它不会被误判为卡死。
+    let stallTimer: ReturnType<typeof setTimeout>;
+    const armStall = (): void => {
+      clearTimeout(stallTimer);
+      stallTimer = setTimeout(() => {
+        console.warn(`批量评测 Worker 超过 ${WORKER_STALL_MS / 1000} s 没有任何消息，回退主线程路径`);
+        finish(null);
+      }, WORKER_STALL_MS);
+    };
+    armStall();
+    worker.onmessage = (ev: MessageEvent<BatchResponse>): void => {
+      const msg = ev.data;
+      if (!msg || msg.jobId !== jobId) return; // 过期任务的消息：丢弃
+      armStall();
+      if (msg.type === "progress") onProgress(msg.done, msg.total, msg.seed, false);
+      else if (msg.type === "heartbeat") onProgress(msg.done, msg.total, -1, true);
+      else if (msg.type === "cancelled") finish(null);
+      else if (msg.type === "done") finish(msg.metricsList);
+      else if (msg.type === "error") {
+        console.warn("批量评测 Worker 报错：", msg.message);
+        finish(null);
+      }
+    };
+    worker.onerror = () => {
+      console.warn("批量评测 Worker 启动/运行失败，回退主线程路径");
+      finish(null);
+    };
+    worker.postMessage({ type: "start", jobId, config, seeds } satisfies BatchRequest);
+  });
+}
+
+async function runBatch(): Promise<void> {
+  const btn = $<HTMLButtonElement>("btn-batch");
+  const status = $("batch-status");
+  const body = $("batch-body");
+  if (batchRunning) {
+    // 再点一次 = 取消（30×30 档要跑几十秒，此前只能刷新页面）
+    cancelBatch("用户取消");
+    return;
+  }
+  if (state.real) {
+    toast("真实 IMU / 回放模式没有真值，批量 RMSE 评测不适用", "#f85149");
+    return;
+  }
+  const spec = $<HTMLSelectElement>("batch-runs").value;
+  const [runCount, durText] = spec === "30x30" ? [30, 30] : [Number(spec), 10];
+  const config = currentExperimentConfig(durText);
+  const problems = validateExperimentConfig(config);
+  if (problems.length) {
+    toast(`配置不合法：${problems[0].path} ${problems[0].message}`, "#f85149");
+    return;
+  }
+  batchRunning = true;
+  btn.disabled = false; // 保持可点：运行期间它是「取消」
+  btn.textContent = "取消本次评测";
+  body.innerHTML = "";
+  status.classList.remove("hidden");
+  status.textContent = `批量评测准备中：${runCount} 个种子 × ${durText} s…`;
+  const seeds = seedSequence(config.seed, runCount);
+  // 本批次的世代：任何回写前都要确认它仍是最新（取消/新批次会让它过期）
+  const myGen = ++batchGeneration;
+  const stale = (): boolean => batchGeneration !== myGen;
+
+  const finishBatch = (res: ReturnType<typeof summarizeRuns>, count: number, mode: "worker" | "main"): void => {
+    // 过期批次绝不写表格：取消后旧 Worker 的回调/看门狗仍可能走到这里
+    if (stale()) return;
+    batchLastMode = mode;
+    // 表格与状态文案在 ui/batch-table.ts（纯函数，可被 Node 断言"7 列口径/口径措辞"）
+    body.innerHTML = batchRowsHtml(
+      res.summary,
+      ests.map((e) => ({ id: e.id, label: e.label, color: e.color, isRef: state.real && e.id === "mahony" })),
+    );
+    status.textContent = batchStatusText({
+      count,
+      durationSec: durText,
+      baseSeed: config.seed,
+      lastSeed: seeds[count - 1],
+      steadyFromSec: config.steadyFromSec,
+      mode,
+      approximate: res.approximate,
+    });
+    batchRunning = false;
+    btn.disabled = false;
+    btn.textContent = "运行批量评测";
+    toast(`批量评测完成：${count} 次配对运行`, "#7ee787");
+  };
+
+  // ① Worker 路径（页面保持可用）；② 失败则回退主线程分片路径（行为与旧版一致）
+  const metricsList = await runBatchInWorker(config, seeds, (done, total, seed, viaHeartbeat) => {
+    if (stale()) return; // 过期批次的进度不得改写状态行
+    status.textContent = viaHeartbeat
+      ? `批量评测进行中（Worker）：${done} / ${total}（心跳正常，仍在计算本轮…）`
+      : `批量评测进行中（Worker）：${done} / ${total}（当前 seed ${seed}）`;
+  });
+  // 取消会立刻结算 Promise（null）并把世代推进：这里必须直接结束，不能再走回退路径
+  if (stale()) return;
+  if (metricsList) {
+    finishBatch(summarizeMetricsLists(config, seeds, metricsList), metricsList.length, "worker");
+    return;
+  }
+
+  const runs: HeadlessRunResult[] = [];
+  const next = (): void => {
+    if (stale() || !batchRunning) return; // 已被取消/被新批次替换
+    if (runs.length >= seeds.length) {
+      finishBatch(summarizeRuns(config, seeds, runs), runs.length, "main");
+      return;
+    }
+    // 让出一帧再跑下一个种子：浏览器主线程不会被长循环完全冻结
+    setTimeout(() => {
+      // 世代 + 取消标志双重检查：取消后已排队的定时器不得再跑旧种子的计算
+      if (stale() || !batchRunning) return;
+      runs.push(runExperiment({ ...config, seed: seeds[runs.length] }, {
+        progressEverySec: 0.5,
+        onProgress: () => !stale() && batchRunning, // 取消 → 当前种子立刻提前终止
+      }));
+      if (stale()) return;
+      status.textContent = `批量评测进行中（主线程）：${runs.length} / ${seeds.length}（当前 seed ${seeds[runs.length - 1]}）`;
+      next();
+    }, 0);
+  };
+  next();
+}
+$("btn-batch")?.addEventListener("click", () => void runBatch());
+
+/* ==========================================================================
+   实验档案（P3）：完整数值配置 + seed + 校准 + 本轮统计的可复现 JSON
+   --------------------------------------------------------------------------
+   档案的**格式与校验规则**在 core/experiment-archive.ts（纯逻辑、有独立自检）；
+   这里只负责「读控件 → 构造档案」与「把档案写回控件」。
+   ========================================================================== */
+function buildArchive(): ExperimentArchive {
+  const elapsedSec = state.simTime;
+  // 时长取实际已跑时间（至少 5 s）；导入后从 seed 起点重跑同样长度的配置
+  const config = currentExperimentConfig(Math.max(5, Math.round(elapsedSec) || 30));
+  const run: ArchiveRunInfo = {
+    elapsedSec,
+    dataSource: dataSourceLabel(),
+    reference: currentReferenceKind(),
+    finishedAtIso: new Date().toISOString(),
+    metrics: ests.map((e, i) => {
+      const s = metricsA[i]?.summary();
+      return {
+        id: e.id,
+        n: s?.n ?? 0,
+        mean: s?.mean ?? NaN,
+        rmse: s?.rmse ?? NaN,
+        max: s?.max ?? NaN,
+        convergedAt: s?.convergedAt ?? null,
+      };
+    }),
+  };
+  return buildArchiveObject(config, run);
+}
+
+function exportArchive(): void {
+  const archive = buildArchive();
+  const blob = new Blob([JSON.stringify(archive, null, 2)], { type: "application/json;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `attitude-config-${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}.json`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  toast(`已导出配置档案（seed ${archive.config.seed}，实际跑 ${archive.run.elapsedSec.toFixed(1)} s；导入将从 seed 起点复现配置）`);
+}
+
+/** IMU 参数 → 主界面控件（导入档案时逐项还原；没有 UI 的字段不会出现） */
+const ARCHIVE_IMU_CONTROLS: Array<[keyof ImuParams, string, number]> = [
+  ["gyroBiasDps", "imu-gyro-bias", 1],
+  ["gyroNoiseDps", "imu-gyro-noise", 1],
+  ["gyroWalkDps", "imu-gyro-walk", 1],
+  ["accelNoise", "imu-accel-noise", 1],
+  ["accelCrossAxis", "imu-cross-axis", 100],
+  ["accelNonlin", "imu-accel-nonlin", 100],
+  ["linAccel", "imu-lin-accel", 1],
+  ["vibration", "imu-vibration", 1],
+  ["magNoise", "imu-mag-noise", 1],
+  ["magQuantUts", "imu-mag-quant", 1],
+  ["disturbMag", "imu-mag-disturb", 1],
+  ["hardIron", "imu-hard-iron", 1],
+  ["magSoftIron", "imu-soft-iron", 1],
+  ["sensorDelayMs", "imu-delay", 1],
+  ["gyroScaleErr", "imu-gyro-scale", 100],
+  ["gyroMisalign", "imu-gyro-misalign", 100],
+  ["sensorBandwidthHz", "imu-bandwidth", 1],
+  ["sensorDelaySkewMs", "imu-delay-skew", 1],
+  ["sensorSampleHz", "imu-sample-rate", 1],
+];
+
+/** 把档案配置写回界面（走与用户操作相同的 setter；非法值在 validate 阶段已拦下） */
+function applyArchiveConfig(cfg: ExperimentConfig): void {
+  resetExperimentBaseline();
+  const s = (id: string, v: number): void => setSliderValue(id, v);
+  for (const [key, id, scale] of ARCHIVE_IMU_CONTROLS) s(id, (cfg.imu[key] ?? 0) * scale);
+  if (cfg.imu.gyroRangeDps > 0) setSelectValue("imu-gyro-range", String(cfg.imu.gyroRangeDps));
+  setSelectValue("scenario-select", cfg.scenario);
+  setSelectValue("solve-rate", String(cfg.solveRateHz));
+  if (cfg.estimators.comp.params.alpha !== undefined) s("comp-alpha", cfg.estimators.comp.params.alpha);
+  if (cfg.estimators.mahony.params.kp !== undefined) s("mahony-kp", cfg.estimators.mahony.params.kp);
+  if (cfg.estimators.mahony.params.ki !== undefined) s("mahony-ki", cfg.estimators.mahony.params.ki);
+  if (cfg.estimators.madg.params.beta !== undefined) s("madg-beta", cfg.estimators.madg.params.beta);
+  if (cfg.estimators.kalman.params.gyroNoiseDps !== undefined) s("kalman-proc", cfg.estimators.kalman.params.gyroNoiseDps);
+  if (cfg.estimators.kalman.params.obsNoise !== undefined) s("kalman-obs", cfg.estimators.kalman.params.obsNoise);
+  const trio = cfg.estimators.comp;
+  setCheckValue("mag-enable", trio.magEnabled);
+  setCheckValue("gate-toggle", trio.accelGate);
+  setCheckValue("gate-recovery", trio.gateRecovery);
+  s("gate-deg", trio.gateDeg);
+  s("gate-mag", trio.gateMagPct * 100);
+  setSelectValue("mag-mode", cfg.estimators.mahony.magMode);
+  if (cfg.estimators.kalman.kalmanGate) setSelectValue("kalman-gate", cfg.estimators.kalman.kalmanGate);
+  setCheckValue("kalman-reset-cov", cfg.estimators.kalman.kalmanResetCov === true);
+  if (cfg.manualTargetDeg) {
+    world.setManualTarget(cfg.manualTargetDeg);
+    setSliderValue("man-roll", cfg.manualTargetDeg[0]);
+    setSliderValue("man-pitch", cfg.manualTargetDeg[1]);
+    setSliderValue("man-yaw", cfg.manualTargetDeg[2]);
+  }
+  if (cfg.ab?.mode) setSelectValue("ab-mode", cfg.ab.mode);
+  experimentConfig.seed = cfg.seed;
+  if (seedInput) seedInput.value = String(cfg.seed);
+  // 校准对象与模型：先把下拉切到目标模型，再装载对象与「是否应用」
+  const model = cfg.magCalibration?.kind ?? cfg.magModel ?? "diag";
+  setSelectValue("magcal-model", model);
+  // 深拷贝：把档案里的对象直接挂到活状态上，之后任何一次「重新拟合」都会把
+  // 历史记录/档案对象一起改写（复核反例：恢复后再改 clone.axis 污染了原配置）。
+  magCalState.cal = cfg.magCalibration ? cloneMagCalibration(cfg.magCalibration) : null;
+  // 档案导入会换掉标定：历史列表清空，避免「恢复」把用户带回到另一个实验的标定
+  magCalHistory.length = 0;
+  magCalHistorySeq = 0;
+  activeMagCalHistoryId = 0;
+  magCalState.applied = magCalState.cal !== null && cfg.magCalibrationApplied !== false;
+  // 磁采集状态也要停：档案里没有原始样本，继续采集会把**新数据**混进"另一个实验"的标定；
+  // 旧实现只清加计那一侧，磁的 collecting/samples/旧验证行都留着（复核 P1-E）。
+  magCalState.collecting = false;
+  magCalState.samples.length = 0;
+  magCalState.verifyLine = "";
+  updateMagCalUi();
+  accelCalState.cal = cfg.accelCalibration ? cloneAccelCalibration(cfg.accelCalibration) : null;
+  accelCalState.applied = accelCalState.cal !== null && cfg.accelCalibrationApplied !== false;
+  // 档案里**没有**保存六面原始样本（只有拟合结果），因此不能凭空造 [0,0,0] 训练数据：
+  // 那会让「再次拟合」得到 M=0 的假成功（复核反例）。这里清空采集状态，
+  // 想重新拟合就必须重新采六面；已有模型仍可直接应用。
+  accelCalState.samples = [];
+  accelCalState.pending = null;
+  accelCalState.window = [];
+  accelCalState.verifyLine = "";
+  accelCalState.message = "";
+  updateAccelCalUi();
+  resetSim();
+}
+
+/** 深拷贝六面加计校准（含 validation/fittedWith/faces） */
+function cloneAccelCalibration(cal: AccelCalibration): AccelCalibration {
+  return {
+    ...cal,
+    M: [...cal.M],
+    bias: [...cal.bias] as V3,
+    rmse: [...cal.rmse] as V3,
+    faces: [...cal.faces],
+    ...(cal.validation ? { validation: { ...cal.validation } } : {}),
+    ...(cal.fittedWith ? { fittedWith: { ...cal.fittedWith } } : {}),
+  };
+}
+
+async function importArchiveFile(file: File): Promise<void> {
+  try {
+    const parsed = parseArchive(JSON.parse(await file.text()));
+    if (!parsed.ok) {
+      toast(parsed.error, "#f85149");
+      return;
+    }
+    const cfg = parsed.config;
+    // 原子性（ROUND11 P1）：先把**全部**展示用的信息算出来（含 run 元数据），
+    // 再提交配置。旧实现先 apply 再 describe，run.elapsedSec 类型不对时会在
+    // 配置已经改过之后才抛错——界面提示失败，实际状态已经变了。
+    const extra = describeArchiveRun(parsed.run);
+    const note = parsed.notes?.length ? `；${parsed.notes.join("；")}` : "";
+    applyArchiveConfig(cfg);
+    toast(
+      `已导入配置档案（seed ${cfg.seed}）——将从 seed 起点按同一配置重新跑${extra}${note}`,
+      parsed.notes?.length ? "#fbbf24" : "#7ee787",
+    );
+    console.info("配置档案导入：仅复现配置，不还原当前时刻/曲线；需要逐帧回放请导入全帧源 IMU CSV。", {
+      run: parsed.run,
+      notes: parsed.notes ?? [],
+      migratedFrom: parsed.migratedFrom ?? null,
+    });
+  } catch (err) {
+    toast(`档案导入失败：${err instanceof Error ? err.message : String(err)}`, "#f85149");
+  }
+}
+
+$("btn-archive-export")?.addEventListener("click", exportArchive);
+$("btn-archive-import")?.addEventListener("click", () => $("archive-file")?.click());
+$("archive-file")?.addEventListener("change", (e) => {
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (file) void importArchiveFile(file);
+  input.value = "";
+});
 
 // ---------- 玻璃盒：算法内部量 ----------
 const telState = {
@@ -2436,12 +3729,15 @@ function detailRows(est: (typeof ests)[number]): string {
     }
     case "madg":
       return `<div class="tel-line"><span class="dim">目标残差 ‖f‖</span><span>${(d.residual ?? 0).toFixed(3)}</span></div>` +
-        `<div class="tel-line"><span class="dim">梯度步长</span><span>${((d.stepNorm ?? 0) * 1e3).toFixed(2)} m°/s⁻¹</span></div>` +
+        `<div class="tel-line"><span class="dim">本帧四元数增量</span><span>${((d.stepNorm ?? 0) * 1e3).toFixed(2)} ×10⁻³</span></div>` +
         gm + magRow;
     case "kalman":
       return `<div class="tel-line"><span class="dim">零偏估计 |b|</span><span>${(d.biasNormDps ?? 0).toFixed(3)}°/s</span></div>` +
         `<div class="tel-line"><span class="dim">零偏分量 x/y/z</span><span>${fmtSigned(d.biasXDps ?? 0, 2)} ${fmtSigned(d.biasYDps ?? 0, 2)} ${fmtSigned(d.biasZDps ?? 0, 2)}°/s</span></div>` +
         `<div class="tel-line"><span class="dim">重力新息角</span><span>${fmtSigned(d.innoAccelDeg ?? 0)}°</span></div>` +
+        `<div class="tel-line"><span class="dim">重力 NIS</span><span>${fmtMetric(d.nisAccel ?? NaN, 2)}${d.accelAccepted ? " ✓接受" : " ✗拒绝"}</span></div>` +
+        `<div class="tel-line"><span class="dim">磁 NIS</span><span>${fmtMetric(d.nisMag ?? NaN, 2)}${d.magAccepted ? " ✓接受" : " ✗拒绝"}</span></div>` +
+        `<div class="tel-line"><span class="dim">门控形态</span><span>${d.kalmanGateMode ? "χ² 马氏距离" : "新息夹角 40°"}</span></div>` +
         magRow;
     default:
       return "";
@@ -2453,7 +3749,8 @@ function detailRows(est: (typeof ests)[number]): string {
  *
  * 用 3×3 姿态协方差块 `P[0..2][0..2]`（rad²）做特征分解：
  * 特征向量给出椭球主轴在**机体系**里的方向，特征值 λᵢ 给出该方向的方差，
- * 半轴长度取 3√λᵢ（3σ 约定，与「约 99.7% 落在椭球内」对应）。
+ * 半轴长度取 3√λᵢ（各主轴 ±3σ）。注意 99.7% 是一维正态的 ±3σ 覆盖，
+ * 三维椭球的联合覆盖率更低（各向同性高斯约 97.1%），因此读数只说「主轴 ±3σ」。
  * 轴长夹在 [0.06, 0.85] 之间：太小看不见，太大穿出机身会误导。
  *
  * 观察点：静止收敛后椭球慢慢缩小并趋于球形；机动/观测被门控时它会沿某方向拉长
@@ -2563,8 +3860,8 @@ function updateTelemetry(): void {
   // 误差分解：逐轴欧拉分量之差 + 总角距。总角距用 qAngleBetween（与曲线/评测同源），
   // 逐轴差则回答「偏差主要在哪根轴上」——这两个数字回答的是不同问题，所以都给。
   // 偏航差包裹到 ±180°（否则跨 ±180° 时会显示 ±360 的假大值）。
-  const refQ = state.real ? (ests[2] as MahonyEstimator).q : world.q;
-  $("tel-err-ref").textContent = state.real ? "Mahony 基准" : "真值";
+  const refQ = referenceQ();
+  $("tel-err-ref").textContent = hasGroundTruth() ? "真值" : currentReferenceKind() === "external" ? "外部参考" : "Mahony 基准";
   const eEst = qToEuler(est.q);
   const eRef = qToEuler(refQ);
   const wrap180 = (d: number): number => {
@@ -2588,39 +3885,94 @@ let metricsAt = 0;
 let frames = 0;
 let fpsAcc = 0;
 
-// ---------- 三段式初始对准：静止检测 → 粗对准 → 滤波接管 ----------
-// Fusion 同款静止阈值（|ω| < 3°/s 持续 3s）；静止且估计明显偏离观测（>8°）时，
-// 粗对准直接把四家融合估计摆回「加计+磁力计观测姿态」——陀螺仪对静止偏航不可观，
-// 偏航只能来自磁场。纯积分不参与对准（它没有观测通道，保留作漂移对照）。
-const still = { seconds: 0, lastAlignT: -1e9, chipUntil: -1 };
+// ---------- 解算调度与静止粗对准：与 runner/Worker 共用 core/solve-loop.ts ----------
+// 这一段以前是主循环里自己写的一份（抽帧 + 静止检测 + 粗对准 + A/B 同步重置）。
+// 两份实现会各自漂移：复核实测过 runner 把对准放在解算之前、界面放在之后——差一帧遥测，
+// 批量结论就不再严格代表界面。现在两边都走同一个 SolveLoop，冒烟里用同 seed 逐帧比对守着。
+const still = { chipUntil: -1 }; // 只剩「对准完成」提示条的计时，判据与状态都在 SolveLoop 里
 /**
- * 静止检测按**真实经过时间**累计（而不是按 2 ms tick 数）：
- * 模拟模式每步 H、真实模式每帧 dt——两种数据源共用同一套 3 秒阈值。
+ * **最近一次解算真正喂给估计器的观测**（ROUND11 P1）。
+ *
+ * 为什么必须由 onSolve 写、而不是记录时重算：`logRow` 以前会用「当前」标定重算 observations，
+ * 于是「算法吃的是 25、日志写 20」这类不一致无法发现；视 15 Hz 解算时，某一行甚至早于
+ * 第一次解算却仍宣称有消费值。这里冻结「谁在什么时刻真正消费了什么」。
  */
-function stepStillness(sample: ImuSample, dt: number): void {
-  const wDps = Math.hypot(sample.gyro[0], sample.gyro[1], sample.gyro[2]) * DEG;
-  still.seconds = wDps < 3 ? still.seconds + dt : 0;
-  if (still.seconds < 3 || state.simTime - still.lastAlignT <= 5) return;
-  let maxAlign = 0;
-  for (const e of ests) {
-    if (e.id === "pure") continue;
-    maxAlign = Math.max(maxAlign, Number(e.telemetry.detail.alignErrorDeg ?? 0) || 0);
-  }
-  if (maxAlign <= 8) return; // 收敛良好：无需对准（零偏已由 Ki / 卡尔曼学走，不重置以免抹掉）
-  const magOn = ($("mag-enable") as HTMLInputElement).checked;
-  const q0 = coarseAlign(sample.accel, magForEstimation(sample.mag), magOn);
-  for (const e of ests) if (e.id !== "pure") e.reset(q0);
-  still.lastAlignT = state.simTime;
-  still.chipUntil = performance.now() / 1000 + 3;
+const lastSolveInput = {
+  /** 这一轮实验的世代（resetSim/换源都会 +1）：快照只在**同一轮**内有效（ROUND12） */
+  runId: 0,
+  /** 本次解算的输入时刻（估计器看到的 t） */
+  t: NaN,
+  /** 该时刻的源读数与校准后观测 */
+  gyro: [0, 0, 0] as V3,
+  accelRaw: [0, 0, 0] as V3,
+  magRaw: [0, 0, 0] as V3,
+  accel: [0, 0, 0] as V3,
+  mag: [0, 0, 0] as V3,
+};
+
+/** 当前实验轮次（resetSim 推进）：消费快照按轮隔离 */
+let solveRunId = 0;
+/** 清掉消费快照（换轮/换源/重置时调用） */
+function clearSolveInput(): void {
+  lastSolveInput.runId = solveRunId;
+  lastSolveInput.t = NaN;
+  lastSolveInput.gyro = [0, 0, 0];
+  lastSolveInput.accelRaw = [0, 0, 0];
+  lastSolveInput.magRaw = [0, 0, 0];
+  lastSolveInput.accel = [0, 0, 0];
+  lastSolveInput.mag = [0, 0, 0];
 }
 
-/** 一次估计器更新（A 组 + 可选 B 组），统一走磁校准后的数据 */
-function updateEstimators(sample: ImuSample, dt: number): void {
-  const mag = magForEstimation(sample.mag);
-  for (const e of ests) e.update(sample.gyro, sample.accel, mag, dt);
-  if (abState.on) for (const c of abState.clones) c.update(sample.gyro, sample.accel, mag, dt);
+/** 统一的 onSolve：INS 逐子步积分 + 冻结实际消费输入（trace 换钩子时必须复用同一个） */
+function onSolveDefault(ctx: { sample: ImuSample; dt: number; accel: V3; mag: V3; t: number }): void {
+  lastSolveInput.runId = solveRunId;
+  lastSolveInput.t = ctx.t;
+  lastSolveInput.gyro = [...ctx.sample.gyro];
+  lastSolveInput.accelRaw = [...ctx.sample.accel];
+  lastSolveInput.magRaw = [...ctx.sample.mag];
+  lastSolveInput.accel = [...ctx.accel];
+  lastSolveInput.mag = [...ctx.mag];
   // 位置积分与姿态同帧：喂的是各算法自己的姿态估计 + 同一份实测加计读数
-  stepIns(sample, dt);
+  stepIns(ctx.sample, ctx.dt, ctx.accel);
+}
+
+/**
+ * 一行记录对应的「实际消费」快照：取最近一次解算的输入。
+ * @returns null = 这一刻还没有任何解算发生过（例如回放首帧/极低解算率）——**不编造**
+ */
+function consumedSnapshotFor(rowT: number): ImuSample | null {
+  // 跨轮隔离：resetSim 会推进 runId 并把快照清成 null，这里的双重检查防住"重置后首个记录
+  // 拿到上一轮的消费值"（ROUND12 实测：旧值可跨 reset 泄漏到新轮首行）
+  if (lastSolveInput.runId !== solveRunId) return null;
+  if (!Number.isFinite(lastSolveInput.t)) return null;
+  // 解算时刻必须不晚于本行时刻（晚于说明是"未来的输入"，不可能被这一行消费）
+  if (lastSolveInput.t > rowT + 1e-9) return null;
+  return {
+    gyro: [...lastSolveInput.gyro],
+    accel: [...lastSolveInput.accel],
+    mag: [...lastSolveInput.mag],
+  };
+}
+
+const solveLoop = new SolveLoop({
+  estimators: ests,
+  secondary: abState.clones,
+  solveRateHz: solveState.hz,
+  // 校准链读**实时状态**（勾选框可随时旁路、回放可整体绕过），与 estimate 入口保持一致
+  calibrate: {
+    mag: (raw) => magForEstimation(raw),
+    accel: (raw) => accelForEstimation(raw),
+  },
+  magEnabled: ($("mag-enable") as HTMLInputElement).checked,
+  autoCoarseAlign: true,
+  onAlign: () => {
+    still.chipUntil = performance.now() / 1000 + 3;
+  },
+  onSolve: onSolveDefault,
+});
+/** 界面侧的统一解算入口（真实/回放路径用）：每帧更新一次，长间隔拆子步 */
+function updateEstimatorsSubstepped(sample: ImuSample, intervalSec: number, t: number): void {
+  solveLoop.applyFrame(sample, intervalSec, t);
 }
 
 /** 模拟世界推进（固定步长 H）；估计器按「解算频率」抽帧更新 */
@@ -2632,15 +3984,11 @@ function stepSim(): void {
   const sample = world.step(H, imuParams, fb);
   state.simTime = world.t;
   state.lastImu = sample;
-  // 解算频率：仿真保持 500 Hz 不改，估计器每 1/f 秒才吃一次数据（dt = 累积时长）。
-  // 低频率下能同时看到「指数积分的精度优势」与「高速机动的跟踪损失」。
-  solveState.acc += H;
-  const step = 1 / solveState.hz;
-  if (solveState.acc + 1e-12 >= step) {
-    updateEstimators(sample, solveState.acc);
-    solveState.acc = 0;
-  }
-  stepStillness(sample, H);
+  recordRaw(world.t, sample);
+  tickAccelCalibration(world.t, sample);
+  // 解算抽帧 + 静止检测都在 SolveLoop 里（与 runner 同一实现）：
+  // 仿真保持 500 Hz 定步长，估计器每 1/f 秒才吃一次数据（dt = 累积时长）。
+  solveLoop.step(sample, H, world.t);
   collectMagSample(sample.mag);
   logAcc += H;
   if (logAcc >= LOG_DT) {
@@ -2663,11 +4011,12 @@ function stepSerialPlayback(): void {
   let processed = 0;
   while (queue.length > 0 && processed < 64) {
     const f = queue.shift()!;
-    const dt = serialState.lastTickMs >= 0
-      ? frameDtSec(serialState.lastTickMs, f.tickMs)
+    // 真实帧间隔（不再被 50 ms 夹紧）：总时间按它推进，积分拆子步
+    const interval = serialState.lastTickMs >= 0
+      ? frameIntervalSec(serialState.lastTickMs, f.tickMs)
       : 0.005;
     serialState.lastTickMs = f.tickMs;
-    serialState.lastDt = dt;
+    serialState.lastDt = interval;
     const RAD2 = Math.PI / 180;
     const sample: ImuSample = {
       gyro: [f.gyroDps[0] * RAD2, f.gyroDps[1] * RAD2, f.gyroDps[2] * RAD2],
@@ -2675,11 +4024,12 @@ function stepSerialPlayback(): void {
       mag: [...f.magUt],
     };
     state.lastImu = sample;
-    updateEstimators(sample, dt);
-    state.simTime += dt;
-    stepStillness(sample, dt);
+    state.simTime += interval;
+    updateEstimatorsSubstepped(sample, interval, state.simTime);
+    recordRaw(state.simTime, sample);
+    tickAccelCalibration(state.simTime, sample);
     collectMagSample(sample.mag);
-    logAcc += dt;
+    logAcc += interval;
     if (logAcc >= LOG_DT) {
       logAcc -= LOG_DT;
       logRow();
@@ -2718,7 +4068,7 @@ function frame(): void {
   const dt = Math.min(rawDt, 0.05);
   const dtAnim = Math.min(rawDt, 0.25);
   lastNow = now;
-  docDemos.step(dt); // 文档页动画演示（仅在对应页可见时运转）
+  docDemos?.step(dt); // 文档页动画演示（按需加载；未就绪时跳过）
 
   frames++;
   fpsAcc += dt;
@@ -2737,7 +4087,13 @@ function frame(): void {
   sceneHandles.gimbal.step(dtAnim);
 
   if (state.playing) {
-    if (state.real) {
+    if (reconnectPending()) {
+      // 断线重连的过渡态：**冻结**整条数据流。
+      // 复核反例：旧实现里断链让 `state.real=false`，主循环随即按 simulation 分支跑 `stepSim()`，
+      // 于是真实数据的记录里混进模拟 IMU，时钟也从 24 s 掉到 0.002 s。
+      // 这里什么都不推进（时钟/曲线/统计保持原样），直到重连成功或彻底放弃。
+      state.lastImu = null;
+    } else if (state.real) {
       // 真实数据有自己的时钟：按帧到达节奏推进，不再走 500 Hz 固定步长。
       // 离线回放走同一条路，只是数据来自文件且节奏由「倍速」缩放。
       if (replayActive()) stepReplayPlayback(dtAnim);
@@ -2758,6 +4114,7 @@ function frame(): void {
   const q = selectedQ();
   quad.group.quaternion.copy(toDisplay(q));
   // 真实模式无真值基准：幻影隐藏（它显示的是模拟剧本的姿态，与真实机体无关）
+  // 幻影显示的是模拟世界的真值姿态：只有模拟模式有意义（外部真值回放不画，用它只会显示陈旧模拟姿态）
   ghost.group.visible = !state.real && state.view === "attitude" && ($("ghost-toggle") as HTMLInputElement).checked;
   ghost.group.quaternion.copy(toDisplay(world.q));
 
@@ -2834,14 +4191,13 @@ const docPageEls = [...document.querySelectorAll<HTMLElement>(".doc-page")];
 const DOC_MODULE_OF: Record<string, string> = {
   manual: "manual",
   math: "math",
+  "math-topics": "math-topics",
   filters: "filters",
   "f-comp-detail": "filters",
   "f-mahony-detail": "filters",
   "f-madg-detail": "filters",
   "f-kalman-detail": "filters",
   labs: "labs",
-  teach: "labs", // 教师指南挂在「实验与练习」模块下（那本来就是给教与学用的）
-  cheatsheet: "glossary", // 公式速查放在「术语与符号索引」模块下（同一类「查阅」用途）
   guide: "guide",
   magcal: "guide", // 磁力计校准在「硬件与固件」模块下（真机接入流程的一部分）
   trouble: "trouble",
@@ -2889,7 +4245,7 @@ function showDocPage(id: string, restore = false): void {
   for (const b of docModuleBtns) b.classList.toggle("active", b.dataset.doc === docModuleOf(id));
   buildChapterToc(page);
   docPagesEl.scrollTop = restore ? (docScrollMemory.get(id) ?? 0) : 0;
-  docDemos.refresh();
+  void ensureDocDemos().then(() => docDemos?.refresh());
 }
 
 let docsPrevFocus: HTMLElement | null = null;
@@ -2910,7 +4266,7 @@ function setDocsOpen(open: boolean): void {
     back.focus();
     docsPrevFocus = null;
   }
-  docDemos.refresh();
+  void ensureDocDemos().then(() => docDemos?.refresh());
 }
 
 /** 文档对话框内的 Tab 循环（aria-modal 的配套实现） */
@@ -3295,9 +4651,35 @@ for (const p of docPageEls) {
    以及文档开合 / 翻页后的刷新钩子（docDemos.refresh）。
    ========================================================================== */
 
-const docDemos = initDocDemos({
-  isVisible: (page) => !docsOverlay.hidden && activeDocPage === page,
-});
+/**
+ * 文档页动画演示**按需加载**（ROUND12 的体积契约）。
+ *
+ * 它是主包里最大的一块纯展示代码（约 12.8 KB gzip），而模拟器本身完全不需要它：
+ * 只有打开文档层、翻到带演示画布的分页时才用得上。改成动态 import 之后，
+ * 首屏主包回到原来的体积线以内（详见 `npm run budget` 的「首屏主包」与
+ * 「全部 JS 合计」两条约束——后者保证按需 chunk 同样被封顶，不会让代码"溜出"预算）。
+ * 启动后空闲时预取一次，因此第一次打开文档时不会有等待感。
+ */
+let docDemos: DocDemos | null = null;
+let docDemosLoading: Promise<void> | null = null;
+function ensureDocDemos(): Promise<void> {
+  if (docDemos) return Promise.resolve();
+  if (!docDemosLoading) {
+    docDemosLoading = import("./ui/doc-demos")
+      .then(({ initDocDemos }) => {
+        docDemos = initDocDemos({ isVisible: (page) => !docsOverlay.hidden && activeDocPage === page });
+        void ensureDocDemos().then(() => docDemos?.refresh());
+      })
+      .catch(() => {
+        /* 按需 chunk 加载失败：演示画布保持空白，不影响解算与其它功能 */
+        docDemosLoading = null;
+      });
+  }
+  return docDemosLoading ?? Promise.resolve();
+}
+// 空闲预取：不抢占首屏关键路径，但第一打开文档时已就绪
+if (typeof requestIdleCallback === "function") requestIdleCallback(() => void ensureDocDemos());
+else setTimeout(() => void ensureDocDemos(), 1200);
 
 /* ==========================================================================
    引导课程：13 步顺序走完全部教学内容
@@ -3332,19 +4714,20 @@ const DEEP_KEYS = [
   "imu-accel-nonlin", "imu-lin-accel", "imu-vibration", "imu-mag-noise", "imu-mag-quant",
   "imu-mag-disturb", "imu-hard-iron", "imu-soft-iron", "mahony-kp", "mahony-ki", "madg-beta", "comp-alpha",
   "kalman-proc", "kalman-obs", "man-roll", "man-pitch", "man-yaw", "quat-t",
-  "gate-deg", "gate-mag", "imu-gyro-scale", "imu-gyro-misalign", "imu-delay",
+  "gate-deg", "gate-mag", "imu-gyro-scale", "imu-gyro-misalign", "imu-delay", "experiment-seed",
+  "imu-bandwidth", "imu-delay-skew", "imu-sample-rate",
   // 万向节锁演示的三个环角：分享「俯仰 90° 锁死」那一屏必须带上，否则同学打开是 0°/0°/0°
   "gim-roll", "gim-pitch", "gim-yaw",
 ];
 const DEEP_CHECKS = [
   "mag-enable", "gate-toggle", "gate-recovery", "ghost-toggle", "telemetry-toggle", "axis-toggle",
-  "init-offset-toggle", "ab-toggle", "loop-toggle", "palette-toggle", "ins-toggle",
+  "init-offset-toggle", "ab-toggle", "loop-toggle", "palette-toggle", "ins-toggle", "serial-autoreconnect",
   // q/−q 是四元数视图的一个独立子模式；MAVLink 取反开关决定三轴符号——都要跟着链接走
-  "quat-neg-toggle", "serial-invert",
+  "quat-neg-toggle", "serial-invert", "kalman-reset-cov", "raw-record-toggle",
 ];
 const DEEP_SELS = [
   "scenario-select", "source-select", "quat-mode", "quat-pair-select", "imu-preset",
-  "mag-mode", "solve-rate", "imu-gyro-range", "serial-baud", "serial-mounting", "ins-scale",
+  "mag-mode", "solve-rate", "imu-gyro-range", "serial-baud", "serial-mounting", "ins-scale", "kalman-gate", "batch-runs", "ab-mode", "magcal-model",
   // 协议最重要：同样的字节流，二进制/文本/MAVLink 解析结果完全不同，协议没带过去
   // 就不是「看起来不对」而是直接 0 帧或乱码
   "serial-protocol",
@@ -3395,6 +4778,8 @@ function applyDeepLink(): void {
       each(() => {
         el.value = String(v);
         el.dispatchEvent(new Event("input"));
+        // 实验种子监听 change（避免每敲一个数字就重置）；深链还原时补一次 change
+        if (k === "experiment-seed") el.dispatchEvent(new Event("change"));
       });
     }
     for (const k of DEEP_CHECKS) {
@@ -3480,7 +4865,7 @@ let exportIncludeImu = false;
 function openExportDialog(): void {
   const dlg = document.getElementById("export-dialog") as HTMLDialogElement | null;
   if (!dlg) return;
-  if (logRows.length === 0) {
+  if (logRows.length === 0 && rawRecord.rows.length === 0) {
     toast("还没有记录到数据——等一两秒再导出", "#fbbf24");
     return;
   }
@@ -3492,18 +4877,34 @@ function openExportDialog(): void {
     const capped = logRows.length >= LOG_ROW_CAP ? `（滚动窗口上限 ${LOG_ROW_CAP} 行，更早的已丢弃）` : "";
     meta.textContent =
       `已记录 ${logRows.length} 行（25 Hz，约 ${span.toFixed(1)} s）${capped} · ` +
-      `数据源：${dataSourceLabel()}${state.real ? "（基准 = Mahony）" : `（基准 = 真值，剧本 ${scenarioSelect.selectedOptions[0]?.textContent ?? "—"}）`}`;
+      `数据源：${dataSourceLabel()}${hasGroundTruth() ? `（基准 = 真值，剧本 ${scenarioSelect.selectedOptions[0]?.textContent ?? "—"}）` : `（基准 = ${currentReferenceKind() === "external" ? "外部参考" : "Mahony"}）`}`;
   }
+  // 单选组必须**恰好**选中一个：旧写法 `(value === "quat") === exportIncludeQuat`
+  // 在 exportIncludeQuat=false 时会把 "angles" 与 "raw" 同时选中（浏览器取最后一个 → 默认档变成全帧导出）。
+  const scopeWanted = exportIncludeQuat ? "quat" : "angles";
   for (const r of document.querySelectorAll<HTMLInputElement>('input[name="export-scope"]')) {
-    r.checked = (r.value === "quat") === exportIncludeQuat;
+    r.checked = r.value === scopeWanted;
   }
   ($("export-imu") as HTMLInputElement).checked = exportIncludeImu;
   updateExportCount();
   dlg.showModal();
 }
 
-function exportCsv(quatOn: boolean, imuOn: boolean): void {
-  const refLabel = state.real ? "mahony_ref" : "truth";
+function exportCsv(quatOn: boolean, imuOn: boolean, imuCalibratedCols = false): void {
+  /**
+   * 源列语义必须**逐行**判定（ROUND11 P1）：校准日志回放录下的源读数已经是校准后的，
+   * 旧实现无条件写 `# imu=raw`，于是这份文件再导入时会被二次校准（实测磁值 25 → 20）。
+   * 一份 CSV 的表头只能描述一种语义：混语义时明确拒绝，而不是挑一个标签骗下游。
+   */
+  const anyCalSrc = logRows.some((r) => r.sourceCalibrated);
+  const anyRawSrc = logRows.some((r) => !r.sourceCalibrated);
+  if (imuOn && !imuCalibratedCols && anyCalSrc && anyRawSrc) {
+    toast("这批记录混了「原始」与「已校准」两种源读数——表头只能标一种语义，请分段导出", "#f85149");
+    return;
+  }
+  const srcSemantics: "raw" | "calibrated" = anyCalSrc && !anyRawSrc ? "calibrated" : "raw";
+  const refKind = currentReferenceKind();
+  const refLabel = refKind === "groundTruth" ? "truth" : refKind === "external" ? "external_ref" : "mahony_ref";
   const header = [
     "t_s",
     ...[0, 1, 2].map((k) => `${refLabel}_${["roll", "pitch", "yaw"][k]}_deg`),
@@ -3529,9 +4930,13 @@ function exportCsv(quatOn: boolean, imuOn: boolean): void {
       vals.push(row.qTrue.w, row.qTrue.x, row.qTrue.y, row.qTrue.z);
     }
     if (imuOn) {
-      if (row.imu) {
-        const g = row.imu.gyro.map((v) => v * DEG);
-        vals.push(...g, ...row.imu.accel, ...row.imu.mag);
+      // 源列与校准列都取自**记录时刻**的快照：
+      //  · raw 档 = 当时收到的源读数；calibrated 档 = 当时喂给估计器的读数。
+      // 绝不是「拿现在的标定把历史重算一遍」——那会让同一批记录在改过标定后导出不同数值。
+      const acq = imuCalibratedCols ? row.imuConsumed : row.imu;
+      if (acq) {
+        const g = acq.gyro.map((v) => v * DEG);
+        vals.push(...g, ...acq.accel, ...acq.mag);
       } else {
         vals.push(...new Array<number>(IMU_EXPORT_COLUMNS.length).fill(NaN));
       }
@@ -3559,6 +4964,18 @@ function exportCsv(quatOn: boolean, imuOn: boolean): void {
       insScale: insState.scale,
     })}`,
     `# imu_params=${JSON.stringify(imuParams)}`,
+    // 三路滞后（各通道采样时刻与当前时刻之差）：有带宽/降采样/延迟时才存在
+    ...(state.lastImu?.times
+      ? [`# sensor_lag_ms=gyro:${((state.simTime - state.lastImu.times.gyro) * 1000).toFixed(2)},accel:${((state.simTime - state.lastImu.times.accel) * 1000).toFixed(2)},mag:${((state.simTime - state.lastImu.times.mag) * 1000).toFixed(2)}`]
+      : []),
+    // IMU 列语义：回放侧据此决定是否再次应用校准，避免「校准后导出 → 回放」被二次校准
+    // 源列不能恒写 raw——校准来源的源读数本来就是校准后的（ROUND11）
+    ...(imuOn ? [`# imu=${imuCalibratedCols ? "calibrated" : srcSemantics}`] : []),
+    ...(imuOn
+      ? [
+          "# imu_note=记录时刻快照，不随后续改标定变化",
+        ]
+      : []),
     `# note: reference = ${state.real ? "Mahony (real mode has no ground truth)" : "ground truth (simulation)"}`,
   ].join("\n");
   const csv = `${meta}\n${lines.join("\n")}\n`;
@@ -3569,10 +4986,52 @@ function exportCsv(quatOn: boolean, imuOn: boolean): void {
   a.download = `attitude-log-${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}.csv`;
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
-  toast(`已导出 ${logRows.length} 行 CSV（含每个算法的参数头部）`);
+  toast(`已导出 ${logRows.length} 行 CSV${imuOn ? `（IMU 列=${imuCalibratedCols ? "消费" : srcSemantics}）` : ""}`);
 }
 
 document.getElementById("btn-export")?.addEventListener("click", openExportDialog);
+
+/**
+ * 全帧源 IMU 导出：按数据源真实帧率写 t + 九轴；列名与回放识别规则一致，
+ * 因此这份文件可以直接用「导入 IMU 日志回放」喂回装置（与 25 Hz 记录导出的闭环互补）。
+ *
+ * 「源」而不是「原始」：记录点在校准链之前，所以模拟/串口来源写出的确实是原始读数；
+ * 但**回放一份声明了 `# imu=calibrated` 的日志**时，记录下来的本来就是校准后读数。
+ * 早期版本无条件写 `# imu=raw`，于是这种文件被再导入时会被**二次校准**（复核实测：
+ * 实际消费的磁值 25 → 20 → 20，多轮往返持续走偏）。
+ */
+function exportRawCsv(): void {
+  if (rawRecord.rows.length === 0) {
+    toast("全帧记录为空——先在 IMU 面板勾选「记录全帧源 IMU」，让它跑一会儿再导出", "#fbbf24");
+    return;
+  }
+  // 记录期间换过来源也不会混语义：recordRaw 在语义变化时已清空重记，这里直接读标注
+  const calibrated = rawRecord.sourceCalibrated;
+  const header = ["t_s", ...IMU_EXPORT_COLUMNS];
+  const lines = [header.join(",")];
+  for (const r of rawRecord.rows) {
+    const g = r.gyro.map((v) => v * DEG);
+    lines.push([r.t, ...g, ...r.accel, ...r.mag].map((v) => (Number.isFinite(v) ? v.toFixed(6) : "")).join(","));
+  }
+  const meta = [
+    "# quaternion-attitude-demo raw IMU export",
+    `# source=${dataSourceLabel()} scenario=${state.real ? "external" : scenarioSelect.value} seed=${experimentConfig.seed}`,
+    `# rows=${rawRecord.rows.length} duration_s=${(rawRecord.rows[rawRecord.rows.length - 1].t - rawRecord.rows[0].t).toFixed(3)}`,
+    // 语义标注：raw = 校准链之前的读数（回放时按需补校准）；calibrated = 已经是校准后读数（回放不得再校准）
+    `# imu=${calibrated ? "calibrated" : "raw"}`,
+    "# note: 列名与「导入 IMU 日志回放」的识别规则一致，导出后可直接回放",
+  ].join("\n");
+  const blob = new Blob([`\ufeff${meta}\n${lines.join("\n")}\n`], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `attitude-raw-imu-${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}.csv`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  toast(
+    `已导出 ${rawRecord.rows.length} 帧全帧源 IMU（可直接回放，标注 # imu=${calibrated ? "calibrated" : "raw"}）`,
+  );
+}
 document.getElementById("export-cancel")?.addEventListener("click", () => {
   (document.getElementById("export-dialog") as HTMLDialogElement | null)?.close();
 });
@@ -3580,23 +5039,38 @@ document.getElementById("export-cancel")?.addEventListener("click", () => {
 function updateExportCount(): void {
   const el = document.getElementById("export-count");
   if (!el) return;
-  const quat = document.querySelector<HTMLInputElement>('input[name="export-scope"]:checked')?.value === "quat";
+  const picked = document.querySelector<HTMLInputElement>('input[name="export-scope"]:checked')?.value;
+  if (picked === "raw") {
+    el.textContent = `将导出 ${1 + IMU_EXPORT_COLUMNS.length} 列全帧源 IMU（当前已记录 ${rawRecord.rows.length} 帧，标注 # imu=${rawRecord.sourceCalibrated ? "calibrated" : "raw"}，可直接回放）`;
+    return;
+  }
+  const quat = picked === "quat";
   const imu = ($("export-imu") as HTMLInputElement).checked;
+  const calBox = $<HTMLInputElement>("export-imu-calibrated");
+  if (calBox) calBox.disabled = !imu || picked === "raw";
   const cols = 24 + (quat ? 24 : 0) + (imu ? IMU_EXPORT_COLUMNS.length : 0);
-  el.textContent = `将导出 ${cols} 列${imu ? "（含原始 IMU，可再导入回放）" : ""}`;
+  const imuKind = imu ? (calBox?.checked ? "（含校准后 IMU 列，标注 # imu=calibrated）" : "（含原始 IMU，可再导入回放）") : "";
+  el.textContent = `将导出 ${cols} 列${imuKind}`;
 }
 document.querySelectorAll('input[name="export-scope"]').forEach((r) =>
   r.addEventListener("change", updateExportCount),
 );
 $("export-imu").addEventListener("change", updateExportCount);
+$("export-imu-calibrated").addEventListener("change", updateExportCount);
 
 document.getElementById("export-confirm")?.addEventListener("click", () => {
   const picked = document.querySelector<HTMLInputElement>('input[name="export-scope"]:checked');
-  exportIncludeQuat = picked?.value === "quat";
-  const imuOn = ($("export-imu") as HTMLInputElement).checked;
-  exportIncludeImu = imuOn;
+  const scope = picked?.value ?? "angles";
   (document.getElementById("export-dialog") as HTMLDialogElement | null)?.close();
-  exportCsv(exportIncludeQuat, imuOn);
+  if (scope === "raw") {
+    exportRawCsv();
+    return;
+  }
+  exportIncludeQuat = scope === "quat";
+  const imuOn = ($("export-imu") as HTMLInputElement).checked;
+  const imuCalCols = imuOn && ($("export-imu-calibrated") as HTMLInputElement).checked;
+  exportIncludeImu = imuOn;
+  exportCsv(exportIncludeQuat, imuOn, imuCalCols);
 });
 
 $("btn-share").addEventListener("click", async () => {
@@ -3647,9 +5121,9 @@ function resetIns(): void {
 }
 
 /** 每次估计器更新后推进一步（由 updateEstimators 调用，保证与姿态同帧） */
-function stepIns(sample: ImuSample, dt: number): void {
+function stepIns(sample: ImuSample, dt: number, accel: V3 = sample.accel): void {
   if (!insState.on) return;
-  for (const e of ests) insList.get(e.id)?.step(e.q, sample.accel, dt);
+  for (const e of ests) insList.get(e.id)?.step(e.q, accel, dt);
 }
 
 /** 25 Hz 记录一个轨迹点（与 logRow 同源，曲线与俯视图的采样节奏一致） */
@@ -3665,6 +5139,16 @@ function logInsTrail(): void {
     }
     t.push(ins.p[0], ins.p[1]);
     if (t.length > 2 * 900) t.splice(0, t.length - 2 * 900); // 约 36 s 轨迹
+  }
+  // 运动学一致剧本：把世界真值位置也画出来，作为「理想编排能跟住什么」的参照
+  if (world.scenario.kinematic) {
+    let tt = insTrails.get("truth");
+    if (!tt) {
+      tt = [];
+      insTrails.set("truth", tt);
+    }
+    tt.push(world.posNed[0], world.posNed[1]);
+    if (tt.length > 2 * 900) tt.splice(0, tt.length - 2 * 900);
   }
 }
 
@@ -3700,10 +5184,21 @@ function drawIns(): void {
   }
   insState.range = drawInsMap(
     canvas,
-    ests.map((e) => {
-      const ins = insList.get(e.id)!;
-      return { label: e.label, color: e.color, north: ins.p[0], east: ins.p[1], trail: insTrails.get(e.id) ?? [] };
-    }),
+    [
+      ...(world.scenario.kinematic
+        ? [{
+            label: "真值轨迹",
+            color: "#e6edf3",
+            north: world.posNed[0],
+            east: world.posNed[1],
+            trail: insTrails.get("truth") ?? [],
+          }]
+        : []),
+      ...ests.map((e) => {
+        const ins = insList.get(e.id)!;
+        return { label: e.label, color: e.color, north: ins.p[0], east: ins.p[1], trail: insTrails.get(e.id) ?? [] };
+      }),
+    ],
     insState.scale,
   );
 }
@@ -3755,8 +5250,10 @@ interface SerialPortLike {
 }
 declare global {
   interface Navigator {
-    readonly serial: {
+    readonly serial?: {
       requestPort(): Promise<SerialPortLike>;
+      /** 设备拔出/系统断开事件（Chrome/Edge 支持；可选，便于自动重连） */
+      addEventListener?(type: "disconnect", listener: (ev: Event) => void): void;
     };
   }
 }
@@ -3804,6 +5301,11 @@ const serialState = {
   connecting: false,
   port: null as SerialPortLike | null,
   reader: null as ReadableStreamDefaultReader<Uint8Array> | null,
+  /**
+   * 连接令牌：每次 read 循环启动 +1。旧 reader 的 finally 靠它判断
+   * 「我还是当前那条连接吗」——不是就不许收尾（否则会打死接替它的新连接）。
+   */
+  connToken: 0,
   running: false,
   buffer: new Uint8Array(0),
   /** 已解析、等待算法消费的帧队列（主循环按 rAF 节奏回放） */
@@ -3927,7 +5429,7 @@ function setConnectButtonsBusy(busy: boolean): void {
 }
 
 async function serialConnect(): Promise<void> {
-  if (!("serial" in navigator)) {
+  if (!navigator.serial) {
     setSerialStatus("此浏览器不支持 Web Serial（需要 Chrome/Edge 且 HTTPS 或 localhost）", true);
     return;
   }
@@ -3937,31 +5439,53 @@ async function serialConnect(): Promise<void> {
   if (serialState.running || serialState.connecting) return;
   serialState.connecting = true;
   setConnectButtonsBusy(true);
+  // 在途连接的世代：`requestPort()`/`open()` 都是长 await，期间用户可能点了「断开」、
+  // 导入了回放或又发起了 BLE 连接。完成时必须确认这条连接仍是「当前唯一意图」，
+  // 否则会出现 serial=true 与 replay=true 同时成立的互斥破坏（复核反例）。
+  const connectGen = ++connectionGeneration;
   try {
     const baud = serialBaud();
-    serialState.port = await navigator.serial.requestPort();
+    const requested = await navigator.serial.requestPort();
+    if (connectGen !== connectionGeneration) {
+      // 已被取消/被其它来源取代：把刚拿到的端口关掉，不提交任何状态
+      try {
+        await requested.close();
+      } catch {
+        /* 可能还没打开 */
+      }
+      return;
+    }
+    serialState.port = requested;
     await serialState.port.open({ baudRate: baud });
+    serialOpenPorts++;
+    if (connectGen !== connectionGeneration) {
+      // 过期：只有「这个端口仍是当前端口」时才关它——如果它已经被别人接管
+      // （例如用户随后又发起一次连接并复用了同一个已授权端口），关掉它等于砸别人的锅。
+      if (serialState.port === requested) {
+        releasePortHandle(requested);
+        serialState.port = null;
+      } else if (!serialState.running) {
+        releasePortHandle(requested);
+      }
+      return;
+    }
     serialState.running = true;
+    sourceIntent = "serial"; // 来源身份在此确立：此后断链重连不再退回「模拟」
+    // 记下端口句柄供断线自动重连复用（用户主动断开时清空）
+    cancelSerialReconnect();
+    serialReconnectPolicy.onSuccess();
+    serialReconnectState.lastPort = serialState.port;
     serialState.baud = baud;
     // 回放与串口是两条互斥的数据通路：主循环里回放优先，若不在这里退出回放，
     // 串口帧会一直排队堆积（被积压保护丢掉）而界面却还在放日志——看不出所以然。
     // 放在 open() 成功之后而不是之前：用户在选端口对话框上点取消时不该把回放停掉。
-    if (bleState.connected) {
-      // BLE 与串口同理互斥：先断开，避免两条通路互相打架
-      try {
-        bleState.device?.gatt?.disconnect();
-      } catch {
-        /* 已断开 */
-      }
-      bleState.connected = false;
-      bleState.char = null;
-      bleState.device = null;
-    }
+    //
+    // 关旧链一律走「不额外递增世代」的内部版（internal=true）：本次连接已经在上面
+    // 用 connectGen 占住了意图，旧链如果再加一次世代就会把**自己**作废
+    // （复核反例 P1-B：串口→BLE 切换后 ble=false / gatt=false / 通知数 0）。
+    if (bleState.connected || bleState.device) await bleDisconnect(true, "已断开 BLE，切到串口数据");
     if (replayActive()) {
-      replayState.frames = [];
-      replayState.idx = 0;
-      document.getElementById("btn-replay-stop")?.classList.add("hidden");
-      updateReplayStatus();
+      stopReplayData(); // 统一清理：replayState + 播放器 + 状态行（不再只清数组）
       toast("已退出离线回放，切到串口数据");
     }
     serialState.lastArrival = 0;
@@ -3982,16 +5506,237 @@ async function serialConnect(): Promise<void> {
   }
 }
 
-async function serialDisconnect(): Promise<void> {
-  serialState.running = false;
+/* ---------- 断线自动重连（真实硬件长时间演示的刚需） ----------
+   为什么需要：演示现场最怕「线被碰掉一次，接下来十分钟都在手动重连」。真实 USB-TTL
+   与蓝牙模块的断链是常态（供电抖动、手机热点切换、Windows 省电策略），
+   所以这里把「异常断开」与「用户主动断开」分开处理：
+   · 异常断开（拔线/读写报错/watchdog）→ 按 1s/2s/4s 退避自动重连，最多 3 次；
+   · 用户点「断开」→ 不重连（否则按钮就成了摆设）。
+   重连复用同一个已授权端口（serialState.lastPort），不需要再弹选择对话框；
+   若端口已被系统回收则重试失败，最后提示手动重连。 */
+const serialReconnectState = {
+  /** 是否允许自动重连（面板开关，串口与 BLE 共用；默认开） */
+  enabled: true,
+  /** 最近一次自动重连用的端口句柄（用户主动断开时清空） */
+  lastPort: null as SerialPortLike | null,
+  /** 是否正处于自动重连流程（避免与用户手动连接互相打架） */
+  reconnecting: false,
+  /** 断开时挂起的 reader：由下一次自动重连在**同一代内**结束/释放，避免误伤替代连接的 reader */
+  pendingReader: null as ReadableStreamDefaultReader<Uint8Array> | null,
+};
+const SERIAL_RECONNECT_MAX = 3;
+/** 自动重连成功次数（调试出口/冒烟断言用：状态条会被后续实时刷新覆盖，不能只看文案） */
+let serialReconnectCount = 0;
+/** 退避状态机在 core/reconnect.ts（串口与 BLE 各一份，不再共享 attempts/timer 字段） */
+const serialReconnectPolicy = new ReconnectPolicy({
+  maxAttempts: SERIAL_RECONNECT_MAX,
+  baseDelayMs: 1000,
+  enabled: () => serialReconnectState.enabled,
+});
+
+function cancelSerialReconnect(): void {
+  serialReconnectPolicy.cancel();
+  serialReconnectState.reconnecting = false;
+}
+
+/**
+ * 应用自己记的「仍处于已打开状态」的端口数。
+ *
+ * 为什么要有这个数：真实 Web Serial 里，**没有 close 的端口会一直占着设备**，
+ * 下次 open() 直接报 "already open"，用户只能重插/刷新页面（复核实测严格端口夹具：
+ * open=4 次、close=0 次）。这个计数让「有开必有关」变成可断言的量，
+ * 而不是靠读代码猜（plumbing().openPorts）。
+ */
+let serialOpenPorts = 0;
+
+/**
+ * 释放一个（可能已失效的）端口句柄。
+ *
+ * 记账必须**按实际结果**更新（ROUND11 P1）：旧实现在调用 close 之前就把计数减掉，
+ * 于是严格夹具里 close 因读锁未释放而失败、端口仍处于 open 状态，`openPorts` 却已经是 0——
+ * 「有开必有关」变成了自我安慰。失败次数单独计数并可从 plumbing() 读出来。
+ */
+let portCloseFailures = 0;
+function releasePortHandle(port: SerialPortLike | null | undefined): void {
+  if (!port) return;
   try {
-    await serialState.reader?.cancel();
-    await serialState.port?.close();
+    void Promise.resolve(port.close()).then(
+      () => {
+        serialOpenPorts = Math.max(0, serialOpenPorts - 1);
+      },
+      () => {
+        portCloseFailures++; // 仍是 open（例如 readable 被锁）
+      },
+    );
   } catch {
-    /* 端口可能已拔出 */
+    portCloseFailures++;
   }
+}
+
+/**
+ * 严肃关闭：先结束挂起的 read 并释放读锁，再 close；close 失败重试一次。
+ * Web Serial 规定「readable 被锁时不能 close」，所以顺序必须是 cancel → release → close。
+ * @returns 是否确认关闭（false = 两次都没关掉，已计入 portCloseFailures）
+ */
+async function closePortVerified(port: SerialPortLike | null | undefined): Promise<boolean> {
+  if (!port) return true;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      await port.close();
+      serialOpenPorts = Math.max(0, serialOpenPorts - 1);
+      return true;
+    } catch {
+      /* 第一次可能仍被锁：重试一次 */
+    }
+  }
+  portCloseFailures++;
+  return false;
+}
+
+/**
+ * 串口异常断开后的收尾：**先**进入「重连过渡态」，**再**刷新数据源语义。
+ * 顺序反了就会：running=false → applyDataSourceSemantics() 判定「回到模拟」→ resetSim()
+ * → 本轮曲线/统计/时钟全丢（复核实测：24 s 的曲线在第一次拔线后归零）。
+ * @returns 是否排程了重连（false 表示已放弃，会回到模拟模式）
+ */
+function handleSerialDrop(reason: string): void {
+  const willRetry = Boolean(serialReconnectState.lastPort) && serialReconnectState.enabled;
+  serialReconnectState.reconnecting = willRetry;
+  applyDataSourceSemantics();
+  if (willRetry) {
+    scheduleSerialReconnect(reason);
+  } else {
+    // 没有可复用端口或用户关掉了自动重连：这就是真正回到模拟模式，清零是对的
+    abandonSerialTransport();
+  }
+}
+
+/**
+ * 彻底放弃串口链路（重连次数用尽 / 无可复用端口 / 自动重连被关掉）：
+ * 三个状态必须一起清，否则 `reconnectPending()` 会永远为真，主循环**永久冻结**
+ * （复核反例 P1-C：1/3/7 秒连续失败后仍 reconnecting=true、timer 未排，画面从此不动）。
+ */
+function abandonSerialTransport(): void {
+  serialReconnectState.reconnecting = false;
+  serialReconnectPolicy.cancel(); // 清掉可能的挂起定时器（pending 也是 reconnectPending 的一项）
+  sourceIntent = "simulation"; // 来源身份确实变回模拟了
+  applyDataSourceSemantics();
+}
+
+/** 安排一次自动重连（多次失败后放弃并提示） */
+function scheduleSerialReconnect(reason: string): void {
+  if (!serialReconnectState.lastPort) return;
+  const plan = serialReconnectPolicy.onFailure(() => {
+    void serialAutoReconnect();
+  });
+  if (!plan) {
+    // 开关在这期间被关掉：不排程，也不能把过渡态挂着
+    abandonSerialTransport();
+    return;
+  }
+  if (plan.exhausted) {
+    setSerialStatus(
+      `${reason}——自动重连 ${SERIAL_RECONNECT_MAX} 次仍失败，检查线缆后点「连接真实 IMU」`,
+      true,
+    );
+    // 放弃重连 = 真正回到模拟模式：这时清零本轮实验是**对的**（数据源确实换了）
+    abandonSerialTransport();
+    return;
+  }
+  serialReconnectState.reconnecting = true;
+  setSerialStatus(
+    `${reason}——${(plan.delayMs / 1000).toFixed(0)} s 后自动重连（第 ${plan.attempt}/${SERIAL_RECONNECT_MAX} 次）…`,
+    true,
+  );
+}
+
+async function serialAutoReconnect(): Promise<void> {
+  const port = serialReconnectState.lastPort;
+  if (!port || serialState.running || !serialReconnectState.reconnecting) return;
+  // 捕获意图世代：`cancel()`/`open()` 都是 await，期间用户可能点「断开」、连 BLE 或导入回放。
+  // 过期时必须把**自己刚打开的端口**关回去，且不提交任何状态（否则会出现
+  // 「用户已断开、串口却自己活了 / 串口与回放同时成立」——复核反例 P1-A/C）。
+  const gen = connectionGeneration;
+  const stale = (): boolean =>
+    gen !== connectionGeneration ||
+    serialReconnectState.lastPort !== port ||
+    serialState.running ||
+    !serialReconnectState.reconnecting;
+  try {
+    // 上一轮 reader 可能还锁着 readable：先 cancel/release 再重开，
+    // 否则严格端口夹具实测 open=4 / close=0（每次都撞 already open）。
+    // 只处理**自己这一代**的 reader：期间用户可能已经断开并由新连接 B 接管，
+    // 用全局 serialState.reader 会把 B 的 reader 一起放掉（ROUND11 P1 隔离续体反例）。
+    const staleReader = serialReconnectState.pendingReader;
+    serialReconnectState.pendingReader = null;
+    if (staleReader) {
+      try {
+        await staleReader.cancel();
+      } catch {
+        /* 已断开 */
+      }
+      try {
+        staleReader.releaseLock();
+      } catch {
+        /* 未锁或已释放 */
+      }
+    }
+    if (serialState.reader === staleReader) serialState.reader = null;
+    if (serialState.running) return; // B 已接管：本次重连作废
+    // 重开前必须确认端口真的关着；关不掉就**不 open**（ROUND12：旧实现忽略返回值继续 open，
+    // 结果是每次重试都撞 already open，而 close 失败次数被悄悄吞掉）
+    if (!(await closePortVerified(port))) {
+      scheduleSerialReconnect("端口未能释放（读锁未解除）");
+      return;
+    }
+    await port.open({ baudRate: serialState.baud });
+    serialOpenPorts++;
+    if (stale()) {
+      // 只有这个端口没被别人接管时才关（否则会把接替它的那条连接一起关掉）
+      if (serialState.port !== port) releasePortHandle(port);
+      return;
+    }
+    serialState.port = port;
+    serialState.running = true;
+    sourceIntent = "serial";
+    serialReconnectState.reconnecting = false;
+    serialReconnectPolicy.onSuccess();
+    serialReconnectCount++;
+    serialState.queue.length = 0;
+    serialState.lastTickMs = -1;
+    serialState.lastSeq = -1;
+    serialState.buffer = new Uint8Array(0);
+    serialState.text = "";
+    setSerialBaudLocked(true);
+    setSerialStatus(`真实 IMU 已自动重连（${serialState.baud} 8N1）——等待数据帧…`);
+    applyDataSourceSemantics();
+    toast("串口已自动重连", "#7ee787");
+    serialReadLoop();
+  } catch {
+    if (gen !== connectionGeneration) return; // 已作废：不再排程，也不再报错
+    scheduleSerialReconnect("自动重连失败");
+  }
+}
+
+/**
+ * 断开串口。
+ * @param internal true = 由其它连接流程发起的「清旧链」，**不**递增世代、**不**改来源意图。
+ *   递增的责任留给调用方：它已经用一次 `++connectionGeneration` 占住了本次意图，
+ *   这里再递增会把调用方自己作废（复核反例 P1-B）。
+ */
+async function serialDisconnect(internal = false): Promise<void> {
+  if (!internal) {
+    connectionGeneration++; // 作废任何在途的 connect await
+    sourceIntent = "simulation";
+  }
+  // 用户主动断开：取消待执行的重连并忘掉端口，否则「断开」按钮会立刻把设备接回来
+  cancelSerialReconnect();
+  serialReconnectState.lastPort = null;
+  serialState.running = false;
+  serialState.connToken++; // 作废在途 reader：其 finally 不再对「新连接」收尾
+  releaseSerialReader();
+  releasePortHandle(serialState.port);
   serialState.port = null;
-  serialState.reader = null;
   serialState.buffer = new Uint8Array(0);
   serialState.queue.length = 0;
   serialState.lastTickMs = -1;
@@ -3999,16 +5744,41 @@ async function serialDisconnect(): Promise<void> {
   serialState.rate = 0;
   magCalState.collecting = false;
   setSerialBaudLocked(false);
-  setSerialStatus("真实 IMU 已断开——回到模拟模式");
+  if (!internal) setSerialStatus("真实 IMU 已断开——回到模拟模式");
+}
+
+/** 取消/释放当前 reader（尽力而为；句柄可能已被替换或已释放） */
+function releaseSerialReader(): void {
+  const r = serialState.reader;
+  serialState.reader = null;
+  serialReconnectState.pendingReader = r; // 交给自动重连在同一代内释放（不碰新连接的 reader）
+  if (!r) return;
+  try {
+    void r.cancel().catch(() => undefined);
+  } catch {
+    /* 已断开 */
+  }
+  try {
+    r.releaseLock();
+  } catch {
+    /* 已释放/被替换 */
+  }
 }
 
 async function serialReadLoop(): Promise<void> {
-  if (!serialState.port?.readable || !serialState.running) return;
-  const reader = serialState.port.readable.getReader();
+  const port = serialState.port;
+  if (!port?.readable || !serialState.running) return;
+  // 本次读循环自己的连接令牌 + 自己捕获的句柄：finally 只允许处理**自己这条连接**。
+  const token = ++serialState.connToken;
+  const reader = port.readable.getReader();
   serialState.reader = reader;
   try {
-    while (serialState.running) {
+    while (serialState.running && serialState.connToken === token) {
       const { value, done } = await reader.read();
+      // await 之后必须再验归属（ROUND11 P1）：旧连接在 read 挂起期间被断开、
+      // 新连接 B 已接管时，旧 reader 迟到的 value 会被解析进 **B 的队列**（实测 gyro=[7,0,0]）。
+      // 旧实现只在 await **前**检查过一次令牌，因此挡不住这种迟到。
+      if (serialState.connToken !== token) break;
       if (done) break;
       if (!value) continue;
       if (serialProtocol() === "text") {
@@ -4036,15 +5806,36 @@ async function serialReadLoop(): Promise<void> {
     } catch {
       /* 已被 cancel/close 或已替换，忽略 */
     }
+    // 归属检查：令牌已不是自己 → 说明这条连接的句柄已被断开/替换流程接管，
+    // 或者已经有更新的连接（B）在跑。此刻收尾会把 B 一起打死
+    // （复核反例：A.read 挂起 → 新 B 连接 → A 返回 done，旧 finally 将 B.running=false、B 队列清零）。
+    if (serialState.connToken !== token) return;
     if (serialState.running) {
-      // 异常断开（拔线）：回到 idle 并提示
+      // 异常断开（拔线）：回到 idle；若开着自动重连则排程重试（用户主动断开不会走到这里）
       serialState.running = false;
+      const droppedPort = serialState.port;
       serialState.port = null;
+      serialState.reader = null;
+      serialState.connToken++; // 本 reader 到此为止：后续任何路径都不再把它当成"当前"
+      // 顺序（ROUND11 P1）：cancel → 释放读锁 → close。旧实现先 close，严格夹具里
+      // 因为 readable 仍被锁而 close 失败（"stream locked"），端口一直占着，重连全撞 already open。
+      void (async (): Promise<void> => {
+        try {
+          await reader.cancel();
+        } catch {
+          /* 已断开 */
+        }
+        try {
+          reader.releaseLock();
+        } catch {
+          /* 已释放 */
+        }
+        await closePortVerified(droppedPort);
+      })();
       serialState.queue.length = 0;
       serialState.lastTickMs = -1;
       setSerialBaudLocked(false);
-      setSerialStatus("真实 IMU 连接中断（设备拔出或重置？）——点击「连接真实 IMU」重连", true);
-      applyDataSourceSemantics();
+      handleSerialDrop("真实 IMU 连接中断（设备拔出或重置？）");
     }
   }
 }
@@ -4073,11 +5864,7 @@ function serialPushFrame(frame: SerialImuFrame): void {
   serialState.lastSeq = frame.seq;
   serialState.frames++;
   serialState.lastArrival = performance.now();
-  serialState.queue.push(frame);
-  if (serialState.queue.length > SERIAL_QUEUE_MAX) {
-    serialState.queue.shift();
-    serialState.backlogDropped++;
-  }
+  if (pushBounded(serialState.queue, frame, SERIAL_QUEUE_MAX).dropped) serialState.backlogDropped++;
 }
 
 /** 文本行协议：按 
@@ -4130,12 +5917,8 @@ function serialDrainBinary(): void {
     serialState.lastSeq = frame.seq;
     serialState.frames++;
     serialState.lastArrival = performance.now();
-    serialState.queue.push(frame);
     // 主机侧积压保护：只保留最新的帧（旧帧对实时显示没有价值）
-    if (serialState.queue.length > SERIAL_QUEUE_MAX) {
-      serialState.queue.shift();
-      serialState.backlogDropped++;
-    }
+    if (pushBounded(serialState.queue, frame, SERIAL_QUEUE_MAX).dropped) serialState.backlogDropped++;
   }
 }
 
@@ -4243,19 +6026,69 @@ const replayState = {
   acc: 0,
   speed: 1,
   fileName: "",
+  /** 日志是否带外部真值姿态（truth_q*）；有真值时误差基准按物理真值而不是 Mahony */
+  externalReference: false,
+  /**
+   * 回放是否对日志读数应用当前磁/加计校准：
+   *  - 日志声明 `# imu=raw`（本装置导出默认）→ true：把校准补回来才等价于录制时的解算输入；
+   *  - 日志声明 `# imu=calibrated` → false：再校准就是二次校准；
+   *  - 无声明 → 默认 true，但用户可用回放面板的开关改成「按原样解算」。
+   */
+  applyCalibration: true,
+  /** 日志元数据声明的 IMU 语义（null = 未声明） */
+  imuCalibrated: null as boolean | null,
   /** 播完只提示一次 */
   announcedEnd: false,
 };
+
+/** 回放时是否绕过校准应用（校准后日志不能重复校准） */
+function calibrationBypassed(): boolean {
+  return replayActive() && !replayState.applyCalibration;
+}
 
 function replayActive(): boolean {
   return replayState.frames.length > 0;
 }
 
-/** 数据源的可读名字：模拟 / 真实串口 / 离线回放 */
+/** 数据源的可读名字：模拟 / 真实串口 / BLE / 离线回放 */
+function currentDataSource(): DataSourceState {
+  // 回放优先：导入日志即进入离线回放（回放与串口/BLE 互斥，见 startReplay）。
+  if (replayActive()) {
+    return { kind: "replay", externalReference: replayState.externalReference };
+  }
+  // 传输层活着 = 该来源正在供数；否则若仍在重连过渡态，保持**用户原来的来源身份**
+  // （P1-D：断链瞬间不得退回 simulation，否则真实记录被标成模拟、误差基准被当成真值）。
+  const kind: DataSourceKind = bleState.connected
+    ? "ble"
+    : serialState.running
+      ? "serial"
+      : reconnectPending() && sourceIntent !== "simulation"
+        ? sourceIntent
+        : "simulation";
+  return { kind, externalReference: false };
+}
 function dataSourceLabel(): string {
-  if (replayActive()) return "离线回放";
-  if (bleState.connected) return "BLE IMU";
-  return serialState.running ? "真实 IMU" : "模拟";
+  return sourceLabelOf(currentDataSource());
+}
+/** 当前误差基准是否有物理真值（模拟/未来外部真值才有；Mahony 基准只算算法间偏差） */
+function hasGroundTruth(): boolean {
+  return hasPhysicalReference(currentDataSource());
+}
+function currentReferenceKind(): ReferenceKind {
+  return referenceKindOf(currentDataSource());
+}
+
+/**
+ * 当前误差基准姿态：
+ *  - 模拟模式 = 世界真值；
+ *  - 回放且日志带 truth_q* = 外部真值；
+ *  - 其余真实数据 = Mahony（只表示算法间偏差，不是物理真值）。
+ */
+function referenceQ(): Quat {
+  const kind = currentReferenceKind();
+  if (kind === "groundTruth") return world.q;
+  if (kind === "external" && state.externalTruth) return state.externalTruth;
+  return (ests[2] as MahonyEstimator).q;
 }
 
 function replayDuration(): number {
@@ -4268,42 +6101,85 @@ function replayDuration(): number {
  * 每 rAF 推进回放：按「录制时间 × 倍速」消费帧，**逐帧用该帧自身的 dt** 更新估计器
  * （这正是离线回放的意义：算法看到的采样节奏与录制时一致）。
  */
+const replayPlayer = new ReplayPlayer();
+
+/**
+ * 回放的**待积分队列**（ROUND12 核心契约）。
+ *
+ * 为什么需要它：播放器按「录制时间 × 倍速」消费帧，遇到一段 300 s 的空洞时会一次把
+ * `dtSec=300` 交给积分；旧实现单拍最多积分 `maxSubsteps×50 ms = 200 s`，剩下 100 s
+ * 只记了个数就再也不处理——界面显示"回放完成"，估计器/INS 却少走了 1/3 的时间。
+ * 现在：本拍只从队首积分 `REPLAY_TICK_BUDGET`（0.5 s = 10 个 50 ms 子步），
+ * 余下的留在队列里，**后续每一拍继续补**，直到队列排空才允许宣告回放结束。
+ * 后到的帧只能排在队尾（FIFO），不会超车——时间轴因此严格单调。
+ */
+const replayBacklog: Array<{ sample: ImuSample; dt: number; truth: Quat | null }> = [];
+/**
+ * 每拍最多积分多少秒。取值权衡：5 s @500 Hz = 2500 个子步（几毫秒 CPU，不会卡帧），
+ * 同时"最快"档 4000 帧 / 40 s 的日志只要 8 拍就补完（旧值 0.5 s 要 80 拍，实测会超时）。
+ * 真正的安全约束是**子步 ≤50 ms**，这个预算只决定"分几拍做完"，不影响精度。
+ */
+const REPLAY_TICK_BUDGET = 5;
+/** 待积分总量上限（秒）：病态日志也不允许无界增长；超出丢最旧并计数 */
+const REPLAY_BACKLOG_MAX_SEC = 600;
+/** 队列条数上限（防内存）：4000 帧的最快档在预算内不会被丢 */
+const REPLAY_BACKLOG_MAX = 20000;
+/** 因队列上限被丢弃的帧数（>0 会显示在状态行里） */
+let replayBacklogDropped = 0;
+
+/** 还有多少秒没积分（状态行显示；>0 时不允许宣告回放完成） */
+function replayPendingSec(): number {
+  let sum = 0;
+  for (const it of replayBacklog) sum += it.dt;
+  return sum;
+}
+
 function stepReplayPlayback(dtAnim: number): void {
-  const rp = replayState;
-  const n = rp.frames.length;
-  if (!n || rp.idx >= n) return;
-  rp.acc += rp.speed === 0 ? Number.POSITIVE_INFINITY : dtAnim * rp.speed;
-  let prevTick = rp.idx > 0 ? rp.frames[rp.idx - 1].tMs : rp.frames[0].tMs;
-  let processed = 0;
+  const steps = replayPlayer.advance(dtAnim);
   const RAD2 = Math.PI / 180;
-  while (rp.idx < n && processed < 4000) {
-    const f = rp.frames[rp.idx];
-    const dt = frameDtSec(prevTick, f.tMs);
-    if (dt > rp.acc) break;
-    rp.acc -= dt;
-    prevTick = f.tMs;
-    rp.idx++;
-    processed++;
+  for (const { frame: f, dtSec } of steps) {
     const sample: ImuSample = {
       gyro: [f.gyroDps[0] * RAD2, f.gyroDps[1] * RAD2, f.gyroDps[2] * RAD2],
       accel: [...f.accelMs2],
       mag: [...f.magUt],
     };
-    state.lastImu = sample;
-    updateEstimators(sample, dt);
-    state.simTime += dt;
-    stepStillness(sample, dt);
-    collectMagSample(sample.mag);
-    logAcc += dt;
+    // 外部真值：只在日志帧自带 qTrue 且整份日志都有时启用（parseImuCsv 已保证）
+    if (replayBacklog.length >= REPLAY_BACKLOG_MAX || replayPendingSec() > REPLAY_BACKLOG_MAX_SEC) {
+      const droppedItem = replayBacklog.shift();
+      if (droppedItem) replayBacklogDropped++;
+    }
+    replayBacklog.push({ sample, dt: dtSec, truth: f.qTrue ? { ...f.qTrue } : null });
+  }
+  // 本拍只积分预算内的部分；剩余留在队列里等下一拍（时间不丢、步长不放大）
+  let budget = REPLAY_TICK_BUDGET;
+  while (replayBacklog.length && budget > 1e-12) {
+    const item = replayBacklog[0] as { sample: ImuSample; dt: number; truth: Quat | null };
+    const chunk = Math.min(item.dt, budget);
+    state.lastImu = item.sample;
+    state.externalTruth = item.truth;
+    state.simTime += chunk;
+    updateEstimatorsSubstepped(item.sample, chunk, state.simTime);
+    recordRaw(state.simTime, item.sample);
+    tickAccelCalibration(state.simTime, item.sample);
+    collectMagSample(item.sample.mag);
+    logAcc += chunk;
     if (logAcc >= LOG_DT) {
       logAcc -= LOG_DT;
       logRow();
     }
+    item.dt -= chunk;
+    budget -= chunk;
+    if (item.dt <= 1e-12) replayBacklog.shift();
   }
-  if (rp.idx >= n && !rp.announcedEnd) {
-    rp.announcedEnd = true;
+  // 完成条件：播放器到底 **且** 待积分队列排空（否则会提前宣称完成、少算一截时间）
+  if (replayPlayer.done && replayBacklog.length === 0 && !replayState.announcedEnd) {
+    replayState.announcedEnd = true;
     updateReplayStatus();
-    toast(`回放完成：${n} 帧 / ${replayDuration().toFixed(1)} s —— 曲线与评测表保留本轮结果`, "#7ee787");
+    toast(
+      `回放完成：${replayPlayer.frameCount} 帧 / ${replayPlayer.durationSec.toFixed(1)} s —— 曲线与评测表保留本轮结果` +
+        (replayBacklogDropped ? `（队列上限丢弃 ${replayBacklogDropped} 帧）` : ""),
+      "#7ee787",
+    );
   }
 }
 
@@ -4316,50 +6192,109 @@ function updateReplayStatus(): void {
     return;
   }
   const rp = replayState;
-  const total = replayDuration();
-  const done = rp.frames[Math.min(Math.max(rp.idx, 1), rp.frames.length) - 1].tMs / 1000 - rp.frames[0].tMs / 1000;
-  chip.classList.toggle("warn", rp.idx >= rp.frames.length);
+  const total = replayPlayer.durationSec;
+  const done = replayPlayer.playedSec;
+  rp.idx = replayPlayer.cursor; // 面板/自动化读到的进度与播放器一致
+  const ended = rp.idx >= rp.frames.length && replayBacklog.length === 0;
+  chip.classList.toggle("warn", ended || replayBacklogDropped > 0);
+  const calLabel = rp.imuCalibrated === true
+    ? "日志已校准"
+    : rp.applyCalibration
+      ? "补校准"
+      : "原样解算";
+  const pending = replayPendingSec();
   chip.textContent =
-    `${rp.idx >= rp.frames.length ? "回放结束" : "回放中"} · ${rp.fileName} · ` +
+    `${ended ? "回放结束" : "回放中"} · ${rp.fileName} · ` +
     `${done.toFixed(1)} / ${total.toFixed(1)} s · ${rp.speed === 0 ? "最快" : `${rp.speed}×`} · ` +
-    `${rp.idx}/${rp.frames.length} 帧`;
+    `${rp.idx}/${rp.frames.length} 帧 · IMU ${calLabel}` +
+    // 长空洞需要多拍补积分：把「还剩多少秒没算」如实显示出来，而不是提前报完成
+    (pending > 0.05 ? ` · 待积分 ${pending.toFixed(1)} s` : "") +
+    (replayBacklogDropped ? ` · 丢弃 ${replayBacklogDropped} 帧` : "");
   chip.classList.remove("hidden");
 }
 
 /** 进入回放模式：清掉串口状态，切到「无真值」语义 */
 function startReplay(res: ReplayParseResult, fileName: string): void {
-  if (serialState.running) void serialDisconnect();
+  connectionGeneration++; // 回放导入作废在途串口/BLE 连接
+  if (serialState.running || serialState.port) void serialDisconnect(true);
   // BLE 也要断：三条数据通路（串口 / BLE / 回放）互斥。漏掉 BLE 时，回放期间通知仍在往同一条
   // 队列里灌帧（状态条显示的还是 BLE 帧率），退出回放的瞬间这批积压帧会被打进估计器。
-  if (bleState.connected) {
-    try {
-      bleState.device?.gatt?.disconnect();
-    } catch {
-      /* 已断开 */
-    }
-    bleCleanup("已断开 BLE，切到离线回放");
-  }
+  // 内部版不递增世代：本次意图已由上面那次 ++ 占住。
+  if (bleState.connected || bleState.device) void bleDisconnect(true, "已断开 BLE，切到离线回放");
+  sourceIntent = "replay";
   replayState.frames = res.frames;
   replayState.idx = 0;
   replayState.acc = 0;
+  replayPlayer.load(res.frames, replayState.speed);
   replayState.fileName = fileName;
   replayState.announcedEnd = false;
+  replayState.externalReference = res.hasTruth;
+  replayState.imuCalibrated = res.imuCalibrated;
+  // 语义闭环：校准后的日志绝不再校准；原始日志把校准补回来（可用开关改）
+  replayState.applyCalibration = res.imuCalibrated !== true;
+  const applyBox = $<HTMLInputElement>("replay-apply-cal");
+  if (applyBox) {
+    applyBox.checked = replayState.applyCalibration;
+    // 声明为校准后读数的日志：把开关**锁住**（不只是默认关闭）——见 change 处理器
+    applyBox.disabled = res.imuCalibrated === true;
+    applyBox.title = res.imuCalibrated === true
+      ? "日志声明为校准后读数（# imu=calibrated）：已锁定关闭，禁止二次校准"
+      : "日志按原始读数处理：勾选则用当前磁/加计校准后的输入解算（与录制时一致）";
+  }
+  state.externalTruth = null;
   document.getElementById("btn-replay-stop")?.classList.remove("hidden");
   applyDataSourceSemantics();
   resetSim(); // 与串口连接同一套流程：数据源切换 = 新的一轮实验，曲线/统计/时钟全部归零
+  const calNote = res.imuCalibrated === true
+    ? "，日志为校准后读数：回放不再二次校准"
+    : res.imuCalibrated === false
+      ? "，日志为原始读数：回放按当前校准设置补充校准"
+      : "，日志未声明 IMU 语义：默认按原始读数 + 当前校准设置";
   toast(
     `已载入 ${res.frames.length} 帧（${replayDuration().toFixed(1)} s）——开始离线回放` +
-      (res.skipped ? `，跳过 ${res.skipped} 行` : ""),
+      (res.invalidRows ? `，拒绝坏样本 ${res.invalidRows} 行` : "") +
+      (res.hasTruth ? "，检测到外部真值：误差按真值评估" : "") +
+      (res.skipped ? `，跳过 ${res.skipped} 行` : "") +
+      calNote,
   );
   // 把识别到的列映射与单位/时间轴假设打到控制台：猜错单位不会报错，但会让数据「看起来不对」
-  console.info("IMU 回放已载入：", { 列映射: res.mapping, 推断: res.notes, 跳过行: res.skipped });
+  console.info("IMU 回放已载入：", {
+    列映射: res.mapping,
+    推断: res.notes,
+    跳过行: res.skipped,
+    拒绝坏样本: res.invalidRows,
+    外部真值: res.hasTruth,
+  });
 }
 
-function stopReplay(): void {
+/**
+ * 清理回放**数据**（不清 UI 语义）：`replayState.frames` 与 `replayPlayer` 必须一起清。
+ * 复核反例：串口连接只清 `replayState`，播放器仍 `loaded=true` 并持着 60 帧，
+ * 之后任何走播放器的路径都会消费到「已经不该存在」的日志。
+ */
+function stopReplayData(): void {
+  replayBacklog.length = 0;
+  replayBacklogDropped = 0;
   replayState.frames = [];
   replayState.idx = 0;
   replayState.acc = 0;
+  replayState.announcedEnd = false;
+  replayPlayer.clear();
+  document.getElementById("btn-replay-stop")?.classList.add("hidden");
+  updateReplayStatus();
+}
+
+function stopReplay(): void {
+  sourceIntent = "simulation"; // 用户显式退出回放 = 回到模拟
+  stopReplayData();
   replayState.fileName = "";
+  replayState.imuCalibrated = null;
+  replayState.applyCalibration = true;
+  const applyBox = $<HTMLInputElement>("replay-apply-cal");
+  if (applyBox) {
+    applyBox.disabled = false; // 解除「校准后日志」的锁定，否则退出回放后开关永远是灰的
+    applyBox.checked = true;
+  }
   document.getElementById("btn-replay-stop")?.classList.add("hidden");
   updateReplayStatus();
   applyDataSourceSemantics();
@@ -4397,6 +6332,25 @@ document.getElementById("btn-replay-stop")?.addEventListener("click", () => stop
 document.getElementById("replay-speed")?.addEventListener("change", () => {
   const v = Number(($("replay-speed") as HTMLSelectElement).value);
   replayState.speed = Number.isFinite(v) ? v : 1;
+  replayPlayer.setSpeed(replayState.speed);
+  updateReplayStatus();
+});
+document.getElementById("replay-apply-cal")?.addEventListener("change", (e) => {
+  const box = e.target as HTMLInputElement;
+  // 日志自己声明了 `# imu=calibrated`：它的读数**已经**是校准后的，
+  // 再「应用校准」就是对同一份数据校准两次。这个开关此时必须是禁用的——
+  // 否则「避免二次校准」只是默认行为，用户一点就破（复核实测：勾回去后消费的磁值继续被压小）。
+  if (replayState.imuCalibrated === true) {
+    box.checked = false;
+    replayState.applyCalibration = false;
+    toast("这份日志声明为校准后读数（# imu=calibrated）：回放不再二次校准，开关已锁定", "#fbbf24");
+    updateReplayStatus();
+    return;
+  }
+  replayState.applyCalibration = box.checked;
+  if (box.checked && !magCalState.applied && !accelCalState.applied) {
+    toast("回放设置：勾选「应用校准」，但当前没有已应用的磁/加计校准——输入与原始读数相同", "#fbbf24");
+  }
   updateReplayStatus();
 });
 
@@ -4493,8 +6447,20 @@ function syncBleUi(): void {
   document.getElementById("ble-custom-row")?.classList.toggle("hidden", !custom);
 }
 
-/** 订阅某个特征的通知；先退订旧的 */
-async function bleSubscribe(char: BleCharacteristicLike): Promise<void> {
+/**
+ * 订阅某个特征的通知；先退订旧的。
+ * @param gen 当前连接世代。给了就在每个 await 之后校验；一旦过期（用户断开/切源），
+ *   撤掉自己刚挂上的监听并退订，返回 false —— 不提交 `bleState.char`。
+ *   复核反例 P1-A：只在 `bleSubscribe` **之前**检查世代时，`startNotifications()` 期间
+ *   切到回放，完成后仍会提交 ble=true，于是回放与 BLE 同时活、旧通知继续往新实验写帧。
+ * @returns 是否成功提交（true = 现在订阅的就是该特征）
+ */
+async function bleSubscribe(char: BleCharacteristicLike, gen?: number, subToken?: number): Promise<boolean> {
+  const stale = (): boolean =>
+    (gen !== undefined && gen !== connectionGeneration) ||
+    (subToken !== undefined && subToken !== bleSubToken);
+  if (stale()) return false;
+  const prevChar = bleState.char;
   if (bleState.char && bleState.char !== char) {
     const prev = bleState.char;
     try {
@@ -4510,15 +6476,50 @@ async function bleSubscribe(char: BleCharacteristicLike): Promise<void> {
       /* 假设备/老实现可能没有 removeEventListener */
     }
   }
-  bleState.char = char;
+  if (stale()) return false; // 退订 await 期间被切源
+  // 先订阅、**成功之后**才挂监听并提交。
+  //
+  // 顺序很关键（ROUND11 P1）：把「幂等的先摘再挂」放在 await 之前，会让**过期尝试的收尾**
+  // 摘掉**已提交尝试**挂的那个监听——两次快速切换（同一个 onBleNotify 引用）之后监听数为 0，
+  // 通知一条都进不来（冒烟实测）。现在只有真正提交的那一次会碰监听。
+  try {
+    await char.startNotifications();
+  } catch (err) {
+    // 失败回滚：既不能留下"已连接但订阅已停"的假状态，也不能把上一个可用订阅弄丢——
+    // 尝试恢复原特征；恢复不成就明确断开，而不是继续假装连接着（ROUND12）
+    const prev = prevChar;
+    if (prev && prev !== char) {
+      try {
+        await prev.startNotifications();
+        prev.addEventListener?.("characteristicvaluechanged", onBleNotify);
+        bleState.char = prev;
+      } catch {
+        void bleDisconnect(false, "BLE 特征切换失败——已断开，请重连");
+      }
+    }
+    throw err;
+  }
+  if (stale()) {
+    // 过期尝试只退订**自己那条**：如果这个特征已经被更新的意图提交（bleState.char === char），
+    // 退订会把新订阅一起停掉——实测"监听还在、通知却停了"（ROUND12）。
+    if (bleState.char !== char) {
+      try {
+        await char.stopNotifications();
+      } catch {
+        /* 忽略 */
+      }
+    }
+    return false;
+  }
   // 幂等：先摘再挂（同一个特征被重复订阅时不会叠加监听）
   try {
     char.removeEventListener?.("characteristicvaluechanged", onBleNotify);
   } catch {
-    /* 同上 */
+    /* 假设备/老实现可能没有 removeEventListener */
   }
   char.addEventListener("characteristicvaluechanged", onBleNotify);
-  await char.startNotifications();
+  bleState.char = char;
+  return true;
 }
 
 /**
@@ -4526,6 +6527,10 @@ async function bleSubscribe(char: BleCharacteristicLike): Promise<void> {
  * 注意这里只用 `ev.target.value` —— 不依赖 Event 的其他字段（便于用假设备测试）。
  */
 function onBleNotify(ev: { target: BleCharacteristicLike }): void {
+  // 归属校验：只消费**当前订阅的那个特征**的通知。
+  // 复核反例 P1-A：旧连接（或已切换掉的特征）的通知会继续往同一条队列灌帧，
+  // 界面显示新来源、数据却来自上一个设备的残留回调。
+  if (ev.target !== bleState.char) return;
   const dv = ev.target.value;
   if (!dv || dv.byteLength === 0) return;
   const bytes = new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength);
@@ -4542,18 +6547,196 @@ function onBleNotify(ev: { target: BleCharacteristicLike }): void {
   serialDrainBuffer();
 }
 
-/** BLE 设备断开回调（命名函数：重新连接时要能把它摘掉，见下） */
-function onBleDeviceLost(): void {
-  bleCleanup("BLE 连接已断开（设备离开范围 / 关机 / 被别的程序占用）——可重新连接", true);
+/* BLE 同样支持断线自动重连：BLE 的断链比串口更频繁（走出范围、手机抢连接）。
+   与串口一致：用户主动断开不重连；异常断开按 1s/2s/4s 退避，最多 3 次。 */
+const bleReconnectState = {
+  /** 最近一次成功连接过的设备（重连直接用它，不再弹选择框） */
+  lastDevice: null as BleDeviceLike | null,
+  reconnecting: false,
+  /** 最近一次成功连接时选择的服务 UUID（重连复用，不重新读下拉——防止用户在断线期间改了选择） */
+  lastServiceUuid: "",
+  /** 最近一次订阅的特征 uuid（重连后优先订回同一个） */
+  lastCharUuid: "",
+};
+const BLE_RECONNECT_MAX = 3;
+/** BLE 自动重连成功次数（状态条会被后续刷新覆盖，自动化只看只增不减的计数） */
+let bleReconnectCount = 0;
+/** 与串口共用「自动重连」开关，但退避状态独立（两条链路互不影响） */
+const bleReconnectPolicy = new ReconnectPolicy({
+  maxAttempts: BLE_RECONNECT_MAX,
+  baseDelayMs: 1000,
+  enabled: () => serialReconnectState.enabled,
+});
+
+/**
+ * 订阅意图令牌：特征切换是异步的（stopNotifications/startNotifications 都要 await），
+ * 两次快速切换可能乱序完成——只有最后一次意图允许提交，否则会留下活跃但无人使用的订阅。
+ */
+let bleSubToken = 0;
+
+function cancelBleReconnect(): void {
+  bleReconnectPolicy.cancel();
+  bleReconnectState.reconnecting = false;
 }
 
-function bleCleanup(message: string, warn = false): void {
+async function bleAutoReconnect(): Promise<void> {
+  const device = bleReconnectState.lastDevice;
+  if (!device || bleState.connected || !bleReconnectState.reconnecting) return;
+  // 与串口同样的意图世代校验：GATT/服务/特征/订阅全是 await，
+  // 期间用户可能断开、切串口或导入回放（复核反例 P1-A：自动 GATT 挂起 → 导入回放 → 旧 await 完成仍 connected=true）。
+  const gen = connectionGeneration;
+  const stale = (): boolean =>
+    gen !== connectionGeneration ||
+    bleReconnectState.lastDevice !== device ||
+    bleState.connected ||
+    !bleReconnectState.reconnecting;
+  let server: { getPrimaryService(uuid: string): Promise<BleServiceLike> } | undefined;
+  try {
+    server = await device.gatt?.connect();
+    if (!server) throw new Error("GATT 重连失败");
+    if (stale()) return disposeBleAttempt(device);
+    const service = await server.getPrimaryService(bleReconnectState.lastServiceUuid || bleServiceUuid());
+    const chars = await service.getCharacteristics();
+    if (stale()) return disposeBleAttempt(device);
+    const notifiers = chars.filter((c: BleCharacteristicLike) => c.properties.notify || c.properties.indicate);
+    if (!notifiers.length) throw new Error("服务下没有可通知特征");
+    const preferred = bleReconnectState.lastCharUuid
+      ? notifiers.find((c) => c.uuid === bleReconnectState.lastCharUuid)
+      : undefined;
+    bleState.notifiers = notifiers;
+    const ok = await bleSubscribe(preferred ?? notifiers[0], gen);
+    if (!ok || stale()) return disposeBleAttempt(device, bleState.char);
+    // 失败重连会摘掉掉线监听；成功重连必须**重新挂上**，否则下一次真掉线没人接（ROUND12 实测：
+    // 第二次掉线后 GATT 断开、状态仍显示已连接、也没有重连）
+    device.removeEventListener?.("gattserverdisconnected", onBleDeviceLost);
+    device.addEventListener("gattserverdisconnected", onBleDeviceLost);
+    bleState.device = device;
+    bleState.connected = true;
+    sourceIntent = "ble";
+    bleReconnectState.reconnecting = false;
+    bleReconnectPolicy.onSuccess();
+    bleReconnectCount++;
+    const btn = document.getElementById("btn-ble");
+    if (btn) btn.textContent = "断开 BLE";
+    bleStatus(`BLE 已自动重连 · ${device.name ?? "未命名"} · 等待数据…`);
+    applyDataSourceSemantics();
+    toast("BLE 已自动重连", "#7ee787");
+  } catch {
+    if (stale()) return; // 已作废：不排程、不报错（用户已经换源了）
+    disposeBleAttempt(device, bleState.char);
+    scheduleBleReconnect("BLE 自动重连失败");
+  }
+}
+
+/** 关闭一条 GATT 连接（尽力而为：可能本来就没连上/已断开） */
+function closeBleGatt(device: BleDeviceLike | null): void {
+  try {
+    device?.gatt?.disconnect();
+  } catch {
+    /* 已断开 */
+  }
+}
+
+/**
+ * 废弃一次 BLE 连接尝试：摘掉设备掉线监听 + 断开 GATT（+ 若已挂上则摘特征监听）。
+ * ROUND11 P1：初连在「服务下没有 notify 特征」等失败分支上直接 return，旧实现既不断 GATT
+ * 也不摘监听——状态里 connected=false，物理上却仍连着，还留着一个掉线回调等着搞下一次连接。
+ */
+function disposeBleAttempt(
+  device: BleDeviceLike | null,
+  char?: BleCharacteristicLike | null,
+): void {
+  if (char) {
+    try {
+      char.removeEventListener?.("characteristicvaluechanged", onBleNotify);
+    } catch {
+      /* 忽略 */
+    }
+  }
+  if (device) {
+    try {
+      device.removeEventListener?.("gattserverdisconnected", onBleDeviceLost);
+    } catch {
+      /* 忽略 */
+    }
+    closeBleGatt(device);
+  }
+  if (bleState.device === device) bleState.device = null;
+  if (bleState.char && bleState.char === char) bleState.char = null;
+}
+
+function scheduleBleReconnect(reason: string): void {
+  if (!bleReconnectState.lastDevice) return;
+  const plan = bleReconnectPolicy.onFailure(() => {
+    void bleAutoReconnect();
+  });
+  if (!plan) {
+    abandonBleTransport();
+    return;
+  }
+  if (plan.exhausted) {
+    bleStatus(`${reason}——自动重连 ${BLE_RECONNECT_MAX} 次仍失败，请靠近设备后手动重连`, true);
+    // 与串口同一条教训：放弃时必须把 reconnecting 一并清掉，否则 reconnectPending() 永远为真、主循环永久冻结
+    abandonBleTransport();
+    return;
+  }
+  bleReconnectState.reconnecting = true;
+  bleStatus(
+    `${reason}——${(plan.delayMs / 1000).toFixed(0)} s 后自动重连（第 ${plan.attempt}/${BLE_RECONNECT_MAX} 次）…`,
+    true,
+  );
+}
+
+/** 彻底放弃 BLE 链路（次数用尽 / 无可用设备 / 自动重连被关掉） */
+function abandonBleTransport(): void {
+  bleReconnectState.reconnecting = false;
+  bleReconnectPolicy.cancel();
+  sourceIntent = "simulation";
+  applyDataSourceSemantics();
+}
+
+/**
+ * BLE 设备断开回调（命名函数：重新连接时要能把它摘掉，见下）。
+ *
+ * 归属校验（ROUND11 P1）：浏览器会把同一个 BluetoothDevice 对象复用给后续连接，
+ * 而旧设备对象上残留的掉线回调会在**新连接建立之后**才被触发——旧实现因此清掉了
+ * 新串口/新 BLE 的状态（实测：旧 lost 回调把新 B 的队列清零）。只有「当前会话的那台设备」
+ * 才有资格触发断开收尾。
+ */
+function onBleDeviceLost(ev?: { target?: unknown }): void {
+  const target = (ev?.target ?? null) as BleDeviceLike | null;
+  if (target && target !== bleState.device && target !== bleReconnectState.lastDevice) return;
+  if (!target && !bleState.connected && !bleReconnectState.lastDevice) return;
+  if (ev?.target && bleState.device && target !== bleState.device) return;
+  const hadDevice = bleReconnectState.lastDevice !== null;
+  const willRetry = hadDevice && serialReconnectState.enabled;
+  // 顺序与串口一致：**先**进入过渡态，**再**刷新数据源语义。
+  // 反了就会 resetSim()——复核反例 P1-D：BLE 掉线后 t 从 24 s 回到 0、reset=1。
+  bleReconnectState.reconnecting = willRetry;
+  bleCleanup("BLE 连接已中断（设备离开范围 / 关机 / 被别的程序占用）", true);
+  if (willRetry) scheduleBleReconnect("BLE 连接中断");
+  else abandonBleTransport();
+}
+
+/**
+ * BLE 收尾（刷新状态文案 + 清会话状态）。
+ * @param target 只清理**这一套**资源（设备/特征）。给了 target 且它已经不是当前会话时，
+ *   只摘自己的监听、不动 bleState（ROUND11 P1：旧设备残留的掉线回调会把新连接清掉），
+ *   也**不清串口缓冲/队列**——那也是"别人"的数据。
+ */
+function bleCleanup(
+  message: string,
+  warn = false,
+  target?: { device: BleDeviceLike | null; char: BleCharacteristicLike | null },
+): void {
+  const mine = !target || target.device === null || target.device === bleState.device;
   // 摘监听：否则特征对象仍持有回调（断开后复用同一对象时会重复消费）
   try {
-    bleState.char?.removeEventListener?.("characteristicvaluechanged", onBleNotify);
+    (target?.char ?? bleState.char)?.removeEventListener?.("characteristicvaluechanged", onBleNotify);
   } catch {
     /* 忽略 */
   }
+  if (!mine) return; // 不是自己的会话：到此为止
   bleState.connected = false;
   bleState.char = null;
   bleState.device = null;
@@ -4588,14 +6771,21 @@ async function bleConnect(): Promise<void> {
   // 清掉 bleState，而第一次随后才置 connected=true，就会出现「设备物理上还连着、通知还在往队列里
   // 灌，但代码已经不认它」的僵尸连接——只能刷新页面。
   if (bleState.connected || bleState.connecting) return;
+  // 先占住本次意图："我要连 BLE"。之后的「清旧链」一律用不递增世代的内部版，
+  // 否则串口断开时的 ++ 会把**本次 BLE 连接自己**作废
+  // （复核反例 P1-B：已连串口后发起 BLE，实测 serial=false/ble=false/gatt=false/通知数 0）。
+  const connectGen = ++connectionGeneration;
   // 与串口 / 回放互斥：三条数据通路同时活着只会互相打架
-  if (serialState.running) await serialDisconnect();
+  if (serialState.running || serialState.port) await serialDisconnect(true);
   if (replayActive()) stopReplay();
   bleState.connecting = true;
+  let lastAttemptDevice: BleDeviceLike | null = null;
   setConnectButtonsBusy(true);
   try {
     bleStatus("正在弹出设备选择框…（需要你点一下授权）");
     const device = await bt.requestDevice({ filters: [{ services: [serviceUuid] }] });
+    lastAttemptDevice = device;
+    if (connectGen !== connectionGeneration) return disposeBleAttempt(device);
     bleStatus(`已选 ${device.name ?? device.id ?? "未命名设备"} · 正在连接 GATT…`);
     // 同一个物理设备重复连接时浏览器可能复用同一个 BluetoothDevice 对象，
     // 因此监听器要「先摘再挂」——否则连 5 次就挂 5 个回调（与特征上的监听器同一类问题）。
@@ -4603,17 +6793,21 @@ async function bleConnect(): Promise<void> {
     device.addEventListener("gattserverdisconnected", onBleDeviceLost);
     const server = await device.gatt?.connect();
     if (!server) throw new Error("GATT 连接失败");
+    if (connectGen !== connectionGeneration) return void closeBleGatt(device);
     const service = await server.getPrimaryService(serviceUuid);
     const chars = await service.getCharacteristics();
+    if (connectGen !== connectionGeneration) return void closeBleGatt(device);
     const notifiers = chars.filter((c) => c.properties.notify || c.properties.indicate);
     if (notifiers.length === 0) {
+      // 先真正释放这条链路（摘监听 + 断 GATT），再刷新文案：
+      // 否则状态显示未连接、物理上却连着，还留着掉线回调干扰后续连接（ROUND11 P1）
+      disposeBleAttempt(device);
       bleCleanup(
         `这个服务下没有支持通知（notify/indicate）的特征——UUID 可能选错了（该服务有 ${chars.length} 个特征）`,
         true,
       );
       return;
     }
-    bleState.device = device;
     bleState.notifiers = notifiers;
     // 填充特征下拉；只有一个时直接订阅，多个时默认第一个并让用户可切
     const sel = document.getElementById("ble-char") as HTMLSelectElement | null;
@@ -4622,8 +6816,21 @@ async function bleConnect(): Promise<void> {
       sel.selectedIndex = 0;
       document.getElementById("ble-char-row")?.classList.remove("hidden");
     }
-    await bleSubscribe(notifiers[0]);
+    // 订阅也要带世代：startNotifications 是 await，期间用户可能断开/切源（复核 P1-A）
+    const ok = await bleSubscribe(notifiers[0], connectGen);
+    if (!ok || connectGen !== connectionGeneration) {
+      // 连接期间用户已「断开」/切到别的来源：不提交状态，并把本次尝试的资源真正释放掉
+      disposeBleAttempt(device, bleState.char);
+      return;
+    }
+    bleState.device = device;
     bleState.connected = true;
+    sourceIntent = "ble";
+    cancelBleReconnect();
+    bleReconnectPolicy.onSuccess();
+    bleReconnectState.lastDevice = device;
+    bleReconnectState.lastServiceUuid = serviceUuid;
+    bleReconnectState.lastCharUuid = notifiers[0].uuid;
     serialState.frames = 0;
     serialState.dropped = 0;
     serialState.backlogDropped = 0;
@@ -4641,25 +6848,97 @@ async function bleConnect(): Promise<void> {
     const msg = err instanceof Error ? err.message : String(err);
     // 用户点取消是常态，不该当成错误吓人
     const cancelled = /cancel|chooser|user/i.test(msg);
-    bleCleanup(cancelled ? "已取消设备选择" : `BLE 连接失败：${msg}`, !cancelled);
+    // ROUND12：异常分支也必须**按归属**释放本次尝试（旧实现直接调用无 target 的全局
+    // bleCleanup：新串口连接已建立的队列会被清空，服务发现抛错时 GATT 与掉线监听还会残留）
+    if (connectGen === connectionGeneration) {
+      disposeBleAttempt(lastAttemptDevice, bleState.char);
+      bleCleanup(cancelled ? "已取消设备选择" : `BLE 连接失败：${msg}`, !cancelled);
+    }
   } finally {
     bleState.connecting = false;
     setConnectButtonsBusy(false);
   }
 }
 
-async function bleDisconnect(): Promise<void> {
+/**
+ * 断开 BLE。
+ * @param internal true = 由其它连接流程发起的「清旧链」：**不**递增世代、**不**改来源意图
+ *   （递增由调用方负责，见 serialDisconnect 的同名注释与复核反例 P1-B）。
+ */
+async function bleDisconnect(
+  internal = false,
+  message = "BLE 已断开——回到模拟模式",
+): Promise<void> {
+  if (!internal) {
+    connectionGeneration++; // 作废在途 connect await
+    sourceIntent = "simulation";
+  }
+  // 用户主动断开：取消排程并忘掉设备（否则会立刻自动接回来）
+  cancelBleReconnect();
+  const device = bleState.device; // 必须在 await 之前捕获：await 期间可能有新连接接管
+  bleReconnectState.lastDevice = null;
+  const char = bleState.char;
+  bleState.char = null; // 先摘「当前订阅」身份：之后到达的通知立即失效（onBleNotify 归属校验）
   try {
-    await bleState.char?.stopNotifications();
+    await char?.stopNotifications();
   } catch {
     /* 已断开 */
   }
-  try {
-    bleState.device?.gatt?.disconnect();
-  } catch {
-    /* 已断开 */
+  // 只关**自己**捕获的那台设备（await 期间可能有新连接接管：那份 device 必须保持不动）
+  closeBleGatt(device);
+  bleCleanup(message, false, { device, char });
+}
+
+/* 自动重连开关（串口与 BLE 共用）：关掉时立刻取消已排程的重试 */
+document.getElementById("serial-autoreconnect")?.addEventListener("change", (e) => {
+  serialReconnectState.enabled = (e.target as HTMLInputElement).checked;
+  if (!serialReconnectState.enabled) {
+    // 只取消已排程的重试；当前连接与「手动重连」都不受影响。
+    // cancel* 已经把「重连过渡态」清掉（reconnecting=false），这里再刷新一次语义：
+    // 若此刻本来就没活连接，界面应当立刻从「重连中…」回到模拟，而不是挂着不动。
+    cancelSerialReconnect();
+    cancelBleReconnect();
+    applyDataSourceSemantics();
   }
-  bleCleanup("BLE 已断开——回到模拟模式");
+});
+
+/* Web Serial 的全局断开事件：设备被拔出时不一定立刻让 read() 报错，
+   这里显式接管，保证「异常断开」一定进入自动重连流程。 */
+try {
+  navigator.serial?.addEventListener?.("disconnect", (ev: Event) => {
+    const port = (ev as unknown as { port?: SerialPortLike }).port;
+    if (!serialState.running) return;
+    if (port && serialState.port && port !== serialState.port) return;
+    serialState.running = false;
+    serialState.connToken++; // 作废在途 reader（它随后读到 done/异常时不许再对「新连接」收尾）
+    const deadPort = serialState.port;
+    const deadReader = serialState.reader;
+    serialState.port = null;
+    serialState.reader = null;
+    // ROUND12：系统级拔线时挂起的 read 仍**持着读锁**，此时 close 必然失败（"stream locked"），
+    // 端口会一直占着、重连全部撞 already open。必须真正走一遍
+    // 「cancel → 等 read 结束 → 释放锁 → close」，并把 reader 交给重连在同一代内收尾。
+    serialReconnectState.pendingReader = deadReader;
+    void (async (): Promise<void> => {
+      try {
+        await deadReader?.cancel();
+      } catch {
+        /* 已断开 */
+      }
+      try {
+        deadReader?.releaseLock();
+      } catch {
+        /* 已释放 */
+      }
+      await closePortVerified(deadPort);
+    })();
+    serialState.queue.length = 0;
+    serialState.lastTickMs = -1;
+    setSerialBaudLocked(false);
+    handleSerialDrop("真实 IMU 已拔出（系统断开事件）");
+  });
+} catch {
+  /* 不支持或不可用：不影响其它功能 */
 }
 
 document.getElementById("btn-ble")?.addEventListener("click", () => {
@@ -4671,7 +6950,23 @@ document.getElementById("ble-char")?.addEventListener("change", () => {
   const sel = document.getElementById("ble-char") as HTMLSelectElement | null;
   const uuid = sel?.value;
   const char = bleState.notifiers.find((c) => c.uuid === uuid);
-  if (char) void bleSubscribe(char);
+  if (char) {
+    if (uuid) bleReconnectState.lastCharUuid = uuid;
+    // 带上当前世代与订阅令牌：并发切换时只有**最后一次**意图能提交，
+    // 否则 B/C 两个 startNotifications 都会成功，留下一个没人用的活跃订阅（ROUND11 P1）
+    const gen = connectionGeneration;
+    const subToken = ++bleSubToken;
+    void bleSubscribe(char, gen, subToken)
+      .then((ok) => {
+        if (!ok && sel && bleState.char) sel.value = bleState.char.uuid;
+      })
+      .catch((err: unknown) => {
+        // 订阅失败必须是**可报告的**（旧实现只在 .then 里处理成功路径，失败直接变成
+        // 未捕获拒绝、控制台报错而界面无感——ROUND12）
+        toast(`切换通知特征失败：${err instanceof Error ? err.message : String(err)}`, "#f85149");
+        if (sel && bleState.char) sel.value = bleState.char.uuid;
+      });
+  }
 });
 syncBleUi();
 
@@ -4688,6 +6983,8 @@ updateMagLegend();
 applyDeepLink(); // 深链最后执行：覆盖默认视图/开关/滑块（且能正确进入四元数子模式）
 updateMetricsTable();
 updateMagCalUi();
+updateAccelCalUi();
+syncLoopAvailability();
 resetSim(); // 统一时钟/统计/曲线起点（不改变已还原的深链参数）
 
 // 控制台调试入口（教学/自动化验收用）：不参与 UI，不影响性能
@@ -4735,6 +7032,16 @@ resetSim(); // 统一时钟/统计/曲线起点（不改变已还原的深链参
     dropped: number;
     skipped: number;
     protocol: string;
+    reconnects: number;
+    bleReconnects: number;
+    /** 是否处于「断线重连过渡态」（此刻数据流冻结、但实验不清零） */
+    reconnectPending: boolean;
+    /** 当前数据源身份：过渡态下保持用户原来的来源，不退回 simulation */
+    sourceKind: DataSourceKind;
+    /** 已打开但未关闭的端口数（严格端口回收的观测点：重连失败后必须为 0） */
+    openPorts: number;
+    /** close() 失败次数（读锁未释放等）：必须为 0，否则"有开必有关"只是自我安慰 */
+    portCloseFailures: number;
   } => ({
     serial: serialState.running,
     ble: bleState.connected,
@@ -4748,6 +7055,14 @@ resetSim(); // 统一时钟/统计/曲线起点（不改变已还原的深链参
     dropped: serialState.dropped,
     skipped: serialState.skippedMsgs,
     protocol: serialProtocol(),
+    /** 串口自动重连成功累计次数（异常断开 → 退避重连成功 +1） */
+    reconnects: serialReconnectCount,
+    /** BLE 自动重连成功累计次数 */
+    bleReconnects: bleReconnectCount,
+    reconnectPending: reconnectPending(),
+    sourceKind: currentDataSource().kind,
+    openPorts: serialOpenPorts,
+    portCloseFailures,
   }),
   /**
    * 长跑稳定性自检出口：四个「会被不断 push」的容器当前长度与容量。
@@ -4757,6 +7072,8 @@ resetSim(); // 统一时钟/统计/曲线起点（不改变已还原的深链参
     simTime: number;
     logRows: number;
     logRowsCap: number;
+    rawRows: number;
+    rawRowsCap: number;
     insTrailMax: number;
     insTrailCap: number;
     serialQueue: number;
@@ -4766,15 +7083,264 @@ resetSim(); // 统一时钟/统计/曲线起点（不改变已还原的深链参
     simTime: state.simTime,
     logRows: logRows.length,
     logRowsCap: LOG_ROW_CAP,
+    rawRows: rawRecord.rows.length,
+    rawRowsCap: RAW_ROW_CAP,
     insTrailMax: Math.max(0, ...[...insTrails.values()].map((t) => t.length)),
     insTrailCap: 2 * 900,
     serialQueue: serialState.queue.length,
     serialQueueCap: SERIAL_QUEUE_MAX,
     charts: [attChart.size, errChart.size, imuChart.size],
   }),
+  /**
+   * 可复现实验出口（自动化与批量评测用）：
+   * config() 返回当前界面的完整数值配置；run() 用无 DOM runner 跑一次并返回
+   * 指标 + digest（同配置同 seed 必须逐位一致）；archive() 返回实验档案对象。
+   */
+  experiment: {
+    config: (durationSec = 30): ExperimentConfig => currentExperimentConfig(durationSec),
+    /** 批量评测的执行路径（自动化验收用）：worker = Web Worker，main = 主线程分片回退 */
+    batchMode: (): "worker" | "main" | null => batchLastMode,
+    /** 批量评测的运行/取消状态（自动化验收用）：running 期间再点按钮 = 取消 */
+    batchState: (): { running: boolean; activeJob: number; cancels: number; button: string; generation: number } => ({
+      running: batchRunning,
+      activeJob: activeBatchJob,
+      cancels: batchCancelCount,
+      button: document.getElementById("btn-batch")?.textContent ?? "",
+      /** 世代号：取消/新批次会 +1；自动化用它确认「旧世代没有回写」 */
+      generation: batchGeneration,
+    }),
+    /**
+     * 同步推进**界面自己的仿真** n 个 500 Hz 步（等价于把 rAF 主循环按固定步长跑 n 次）。
+     * 用途只有一个：让自动化能把「界面路径」与「runner 路径」放在同一时间基上逐帧比对
+     * （真实浏览器里没法等真实时间精确对齐，而 golden trace 必须逐帧同 t）。
+     *
+     * 要求：数据源为模拟、闭环关闭、A/B 关闭、不要有任何延迟/带宽/降采样（否则界面
+     * 的实时路径本身就不该与离线内核逐帧相同）。调用方负责把现场设成这些条件。
+     */
+    stepSimBy: (steps: number): { simTime: number; finalQuats: Record<string, Quat> } => {
+      const n = Math.max(0, Math.floor(steps));
+      for (let i = 0; i < n; i++) stepSim();
+      const finalQuats: Record<string, Quat> = {};
+      for (const e of ests) finalQuats[e.id] = { ...e.q };
+      return { simTime: state.simTime, finalQuats };
+    },
+    /** runner 侧同一条 trace：同 step 数、同配置（不需要真等 500 Hz × n 的真实时间） */
+    runTrace: (steps: number): { simTime: number; finalQuats: Record<string, Quat> } => {
+      const cfg = { ...currentExperimentConfig(1), durationSec: Math.max(0.002, steps * RUN_H) };
+      const r = runExperiment(cfg);
+      const finalQuats: Record<string, Quat> = {};
+      for (const [id, q] of Object.entries(r.finalQuats)) finalQuats[id] = { ...q };
+      return { simTime: r.window.endSec, finalQuats };
+    },
+    /**
+     * **逐帧 trace**（自动化验收用）：界面侧每解算一步记录时间与五算法姿态；
+     * runner 侧用 `runner.runTrace`（同一份 SolveLoop）。两者逐帧比对才能发现
+     * 「中途偏差被末态掩盖」的问题——只比终点是不够的。
+     */
+    traceFrames: (
+      steps: number,
+    ): Array<{
+      t: number;
+      dt: number;
+      quats: Array<{ w: number; x: number; y: number; z: number }>;
+      aligned: boolean;
+      raw: { gyro: number[]; accel: number[]; mag: number[] };
+      consumed: { accel: number[]; mag: number[] };
+    }> => {
+      const n = Math.max(0, Math.floor(steps));
+      const frames: Array<{
+        t: number;
+        dt: number;
+        quats: Array<{ w: number; x: number; y: number; z: number }>;
+        aligned: boolean;
+        raw: { gyro: number[]; accel: number[]; mag: number[] };
+        consumed: { accel: number[]; mag: number[] };
+      }> = [];
+      let rec = true;
+      solveLoop.setHooks({
+        onSolve: (ctx) => {
+          onSolveDefault(ctx);
+          if (rec) {
+            frames.push({
+              t: ctx.t,
+              dt: ctx.dt,
+              quats: ests.map((e) => ({ ...e.q })),
+              aligned: ctx.aligned,
+              raw: { gyro: [...ctx.sample.gyro], accel: [...ctx.sample.accel], mag: [...ctx.sample.mag] },
+              consumed: { accel: [...ctx.accel], mag: [...ctx.mag] },
+            });
+          }
+        },
+      });
+      for (let i = 0; i < n; i++) stepSim();
+      rec = false;
+      // 还原默认钩子（INS 仍在推进，但不再记录）
+      solveLoop.setHooks({ onSolve: onSolveDefault });
+      return frames;
+    },
+    /** runner 侧逐帧 trace（与 traceFrames 同口径：时间 + 五算法姿态） */
+    traceFramesRunner: (steps: number) => {
+      const cfg = { ...currentExperimentConfig(1), durationSec: Math.max(0.002, steps * RUN_H) };
+      const tr = runTrace(cfg, Math.max(1, Math.floor(steps)));
+      return {
+        steps: tr.steps.map((st) => ({
+          t: st.t,
+          dt: st.dt,
+          quats: st.quats.map((q) => ({ ...q })),
+          aligned: st.aligned,
+          raw: st.raw,
+          consumed: st.consumed,
+        })),
+        eventCounts: tr.eventCounts,
+        estimatorIds: tr.estimatorIds,
+        endSec: tr.endSec,
+      };
+    },
+    /**
+     * 主线程分片批量评测（自动化复算/Worker 降级验证用）：与面板同一条聚合口径，
+     * 但同步阻塞——只应在脚本里用，不要接进界面按钮（界面走 Worker 路径）。
+     */
+    batchOnMain: (durationSec = 10, count = 3): ReturnType<typeof runMonteCarlo>["summary"] =>
+      runMonteCarlo(currentExperimentConfig(durationSec), count).summary,
+    setSeed: (seed: number): void => {
+      experimentConfig.seed = Math.max(0, Math.floor(seed)) >>> 0;
+      if (seedInput) seedInput.value = String(experimentConfig.seed);
+      resetSim();
+    },
+    run: (durationSec = 2, seedOffset = 0): { digest: string; metrics: ReturnType<typeof runExperiment>["metrics"] } => {
+      const r = runExperiment({ ...currentExperimentConfig(durationSec), seed: currentExperimentConfig(durationSec).seed + seedOffset });
+      return { digest: resultDigest(r), metrics: r.metrics };
+    },
+    archive: (): ExperimentArchive => buildArchive(),
+    /**
+     * 导入档案配置（自动化验收用）：走与用户导入完全相同的迁移 + 校验 + 应用路径，
+     * 返回应用后的**校准状态快照**，用来验证「档案确实恢复了同一配置」。
+     */
+    importArchive: (rawArchive: unknown): {
+      ok: boolean;
+      error?: string;
+      config?: ExperimentConfig;
+      magModel?: MagCalModel;
+      magApplied?: boolean;
+      accelApplied?: boolean;
+      magOffset?: V3;
+      seed?: number;
+    } => {
+      const parsed = parseArchive(rawArchive);
+      if (!parsed.ok) return { ok: false, error: parsed.error };
+      const cfg = parsed.config;
+      applyArchiveConfig(cfg);
+      return {
+        ok: true,
+        config: currentExperimentConfig(cfg.durationSec),
+        magModel: currentMagCalModel(),
+        magApplied: magCalState.applied && magCalState.cal !== null,
+        accelApplied: accelCalState.applied && accelCalState.cal !== null,
+        magOffset: magCalState.cal ? ([...magCalState.cal.offset] as V3) : undefined,
+        seed: experimentConfig.seed,
+      };
+    },
+  },
+  /** 校准状态快照（自动化验收用）：模型、是否应用、对象是否在 */
+  calibration: (): {
+    magModel: MagCalModel;
+    magApplied: boolean;
+    accelApplied: boolean;
+    hasMag: boolean;
+    hasAccel: boolean;
+    /** 当前磁/加计的「标定基于旧模型」提示（null = 仍匹配） */
+    magStale: string | null;
+    accelStale: string | null;
+    /** 拟合时记录的器件指纹（诊断用） */
+    magFittedWith: ReturnType<typeof fingerprintOf> | null;
+    accelFittedWith: ReturnType<typeof fingerprintOf> | null;
+    imu: { accelCrossAxis: number; accelNonlin: number; accelNoise: number };
+  } => ({
+    magModel: currentMagCalModel(),
+    magApplied: magCalState.applied && magCalState.cal !== null,
+    accelApplied: accelCalState.applied && accelCalState.cal !== null,
+    hasMag: magCalState.cal !== null,
+    hasAccel: accelCalState.cal !== null,
+    magStale: calibrationStaleness(magCalState.cal?.fittedWith, imuParams, "mag", currentMagCalModel()),
+    accelStale: calibrationStaleness(accelCalState.cal?.fittedWith, imuParams, "accel"),
+    magFittedWith: magCalState.cal?.fittedWith ?? null,
+    accelFittedWith: accelCalState.cal?.fittedWith ?? null,
+    imu: {
+      accelCrossAxis: imuParams.accelCrossAxis,
+      accelNonlin: imuParams.accelNonlin,
+      accelNoise: imuParams.accelNoise,
+    },
+  }),
+  /** A/B 运行期状态（自动化验收用）：分叉后 B 的 q 应与 A 快照时刻一致；同起点则两组都回到初值 */
+  ab: (): {
+    on: boolean;
+    mode: string;
+    frozen: Record<string, EstimatorTuning> | null;
+    clones: Array<{ id: string; q: Quat; angleToA: number }>;
+  } => ({
+    on: abState.on,
+    mode: ($<HTMLSelectElement>("ab-mode"))?.value ?? "same-start",
+    frozen: abState.frozenTuning,
+    clones: abState.clones.map((c) => {
+      const a = ests.find((e) => e.id === c.id)!;
+      return {
+        id: c.id,
+        q: { ...c.q },
+        angleToA: qAngleBetween(c.q, a.q) * DEG,
+      };
+    }),
+  }),
+  /** 全帧记录/轨迹长度（长跑与导出用例用） */
+  raw: (): { on: boolean; rows: number; cap: number } => ({
+    on: rawRecord.on,
+    rows: rawRecord.rows.length,
+    cap: RAW_ROW_CAP,
+  }),
+  /** 加速度计六面校准调试入口：注入样本 → 走真实拟合/应用路径（自动化测试用） */
+  accelcal: {
+    inject: (samples: AccelCalibrationSample[]): { ok: boolean; applied: boolean; rmse: number } => {
+      accelCalState.samples = samples.map((s) => ({ raw: [...s.raw] as V3, face: s.face }));
+      fitAccelCal();
+      return {
+        ok: accelCalState.cal !== null,
+        applied: accelCalState.applied,
+        rmse: accelCalState.cal ? Math.max(...accelCalState.cal.rmse) : NaN,
+      };
+    },
+    /** 采面驱动（自动化验收用）：直接调用**生产**的 beginAccelCalFace/tickAccelCalibration */
+    beginFace: (face: AccelFace): void => beginAccelCalFace(face),
+    feed: (t: number, accel: V3, gyro: V3 = [0, 0, 0]): void =>
+      tickAccelCalibration(t, { gyro: [...gyro] as V3, accel: [...accel] as V3, mag: [30, 0, 40] as V3 }),
+    cancelFace: (): void => {
+      accelCalState.pending = null;
+      accelCalState.window = [];
+    },
+    info: (): { samples: number; applied: boolean; rmse: number; faces: number; message: string } => ({
+      samples: accelCalState.samples.length,
+      faces: accelCalState.samples.length,
+      message: accelCalState.message,
+      applied: accelCalState.applied,
+      rmse: accelCalState.cal ? Math.max(...accelCalState.cal.rmse) : NaN,
+    }),
+    /** 拟合参数的只读诊断（不会重新生成样本或改变验证状态） */
+    verifyDebug: (): { calM: number[] | null; bias: V3 | null } => ({
+      calM: accelCalState.cal ? [...accelCalState.cal.M] : null,
+      bias: accelCalState.cal ? [...accelCalState.cal.bias] as V3 : null,
+    }),
+  },
+  /**
+   * 打开某个文档分页（自动化逐页验收用）。
+   * 左栏没有对应按钮的页面（四个算法详情页与磁校准页）**只能**通过它激活，
+   * 否则「全部页面都测过」的断言其实是重复扫描同一页（复核反例）。
+   */
+  openDocPage: (page: string): boolean => {
+    const exists = document.querySelector(`.doc-page[data-doc-page="${page}"]`) !== null;
+    if (!exists) return false;
+    showDocPage(page);
+    return true;
+  },
   /** 引导课程的入口（自动化测试用；正常路径是右侧栏「引导课程」面板上的按钮） */
-  tour: {
-    start: (): void => tour.start(),
+  tour: {    start: (): void => tour.start(),
     next: (): void => tour.next(),
     prev: (): void => tour.prev(),
     goto: (n: number): void => tour.goto(n),
@@ -4799,6 +7365,9 @@ resetSim(); // 统一时钟/统计/曲线起点（不改变已还原的深链参
         idx: replayState.idx,
         speed: replayState.speed,
         real: state.real,
+        /** 日志声明的 IMU 语义（true=已校准）、当前是否在校准输入（false=原样解算） */
+        imuCalibrated: replayState.imuCalibrated,
+        applyCalibration: replayState.applyCalibration,
       };
     },
   },

@@ -13,7 +13,7 @@
 
 **Live demo**: [fly_web.070616.xyz](https://fly_web.070616.xyz)　(backup: [workers.dev](https://quaternion-attitude-demo.liu06167492.workers.dev))
 
-Every push to `master` builds and deploys automatically: type-check → 105 static assertions → bundle-size budget → 51 browser end-to-end checks → Cloudflare Workers (pull requests run the same verification, they just don't deploy).
+Every push to `master` builds and deploys automatically: type-check → 121 numeric + 10 scene-geometry + 15 HTML-contract + 2 doc-benchmark + 7 count-consistency checks → bundle-size budget → 78 browser end-to-end checks → Cloudflare Workers (pull requests run the same verification, they just don't deploy).
 
 ---
 
@@ -144,8 +144,8 @@ The reference sphere is the space of possible nose directions (lat/long grid + m
 
 ### 4. In-app documentation ("文档" button, top right)
 
-Light three-column layout (module navigation / body / on-page table of contents), **9 modules / 16 pages /
-100+ sections**, 16 diagrams (10 inline SVGs + 6 live canvas demos), with **full-text search (Ctrl/⌘+K)**.
+Light three-column layout (module navigation / body / on-page table of contents), **9 modules / 15 pages /
+100+ sections**, 18 diagrams (10 inline SVGs + 8 interactive canvas demos), with **full-text search (Ctrl/⌘+K)**.
 
 **Control manual** — an encyclopaedia entry for every slider / switch / marker: what it is · what it does ·
 what changes when you move it.
@@ -168,7 +168,7 @@ Includes three interactive demos (**non-commutativity of rotation order**, **1-D
 **complementary filter in the frequency domain**), the gimbal lock **matrix evidence**, the **magnetometer
 calibration dance**, and a **measured data table** for the algorithmic consequences of gimbal lock.
 
-**The other six modules** — "Experiments & exercises" (three learning paths + 17 indexed experiments +
+**The other six modules** — "Experiments & exercises" (three learning paths + 19 indexed experiments +
 12 self-test questions whose answers are experiments), "Hardware & firmware" (frame-protocol table / wiring /
 sign conventions / real-mode semantics / debugging steps), "Troubleshooting" (wrong curves / cannot connect /
 page problems / performance — four symptom tables), "Terminology & symbols" (quaternion · sensor · algorithm ·
@@ -217,11 +217,65 @@ magnetic interference). Scoring reads the same RMSE as the evaluation table, you
 may submit, and thresholds were measured first with margin left on both sides. The goal is to train "knowing
 which way to turn the knob", not brute-force search.
 
-**And also** — experiment library (17 one-click experiments, each with a "what to look at" line, each
+**And also** — experiment library (19 one-click experiments, each with a "what to look at" line, each
 resetting to a common baseline first so results reproduce), an evaluation table for the current run
 (current / mean / RMSE / peak / convergence time), interactive magnetometer calibration (sphere fit hard iron +
 diagonal soft iron), CSV export (25 Hz records + parameter header, optionally including quaternion components;
 the rolling window caps at 850 rows ≈ 34 s and the dialog shows how many rows are recorded),
+
+**Reproducibility and batch evaluation** — an **experiment seed** drives sensor noise and the random initial
+attitude: same config + same seed is frame-for-frame identical, and the magnetometer uses an independent random
+stream so enabling magnetic interference does not perturb the gyro/accelerometer sequence. The experiment panel
+runs a **10/30-seed paired batch** (five algorithms, same seeds) and reports RMSE P50/P95, non-convergence rate
+and tilt/yaw breakdown from the same DOM-free runner the live simulation uses. **Experiment archives** (JSON)
+save the full config, seed, calibration and run statistics and restore them on import; `npm run benchmark`
+regenerates `docs/generated/benchmarks.json` and `npm run doccheck` guards the `data-benchmark` references in the
+documentation. A **step button** advances one solver step and a **shared time cursor** links all three charts for
+frame-level inspection; the Kalman glass box shows gravity/magnetic **NIS** and accept/reject state, with
+**NEES/NIS** also reported by the batch runner so "over-confident covariance" becomes measurable.
+Batch tilt/yaw columns use an **SO(3) small-angle split** (error resolved into along-gravity yaw vs perpendicular
+tilt in the world frame), so they stay well-behaved through gimbal lock, and the steady-state window can be pinned
+to an absolute `steadyFromSec` instead of the default last 40%.
+
+**One scheduler, two callers** — the live loop and the batch/offline kernel now share a single solve
+scheduler (`core/solve-loop.ts`: solve-rate decimation, stillness coarse alignment, calibration chain,
+A/B reset), with a **per-step** smoke assertion at the same seed (2000 steps compared: max single-step attitude
+difference 5.1e-6°, time difference 0, i.e. double round-off). Writing that assertion immediately exposed two real divergences — the alignment
+check ran on opposite sides of the solve, and decimation double-counted its remainder into `dt`
+(12 s of simulation integrated 13.2 s of angular rate; a "200 Hz" solve rate actually ran at 166.7 Hz).
+The worker protocol also gained `jobId` (stale results dropped), cancel, and a heartbeat watchdog, and
+`npm run soak` provides a minutes-long acceptance run (no console errors, capped containers, bounded heap).
+
+**Engineering robustness** — the seed batch runs in a **Web Worker** (the page stays responsive; a failed or
+timed-out worker falls back to the main-thread chunked path, both sharing the same run kernel and aggregation),
+serial/BLE links **reconnect automatically** after an unexpected drop (1s/2s/4s backoff, max 3 tries; an explicit
+user disconnect is never undone), statistics are **bounded** (beyond 60k samples they switch to a deterministic
+reservoir — long runs stop growing, short runs stay bit-identical, pinned by a golden fingerprint), and sensor
+delay is no longer rounded to whole frames: **fractional delay is linearly interpolated** and each channel
+carries its own sample timestamp (the readout shows per-channel lag). Calibration gained **independent
+verification**: a fit/validation split, six-face leave-one-out, and a fresh-sample check that measures the
+heading error before/after using ground truth. `npm run statuscheck` keeps the counts written in the docs
+(experiments, demos, self-tests, smoke checks, doc pages) aligned with the source.
+
+**Review-fix round** — an independent review turned seven concrete defects into failing counterexamples first, then
+fixed them: cancelling a batch no longer lets the old watchdog resurrect the job (verified 17 s later); the reconnect
+window now **freezes** the data path (previously simulated IMU samples leaked into a real-data record); sensor delay
+addresses history by each frame's own sample time (50 Hz sampling + 10 ms delay: 100 ms → 28 ms); logs are parsed with
+**fractional** milliseconds (400 Hz log: Σdt 0.805 s → 1.000000 s); percentiles use a **fixed-capacity reservoir**
+(a 10 Hz periodic error's P95 went from an aliased 1.25° back to 9.98°, matching the exact value); the steady-state
+window accumulates exactly from a pre-computed cut; SO(3) tilt/yaw use the **log rotation vector** (90°/180° now
+report the true angle instead of 81.0°/114.6°); and calibration verification reuses the **production sensor chain**,
+with the late holdout trained on the early block only (previously 75 of the last 100 samples had been trained on).
+
+**Data closure** — exports declare what the IMU columns *are*: `# imu=raw` by default (or `# imu=calibrated`
+when you tick "write calibrated values"). On replay, a raw log gets the current magnetometer/accelerometer
+calibration applied, while a calibrated log automatically disables it (shown in the status bar, with a
+"apply calibration on replay" override) — so "calibrate → export → replay" is no longer double-calibrated.
+Truth waveforms during external-truth replay come from the logged `truth_q*` attitude (gravity/field projection
+plus a finite-difference angular rate), never from the simulated world. Below the 500 Hz simulation step, the
+per-sample white-noise σ is rescaled by √(fs/500): noise density is a device property, so sampling slower
+reduces the number of samples rather than inflating their amplitude.
+
 a **colour-blind-friendly palette** (Okabe–Ito; in the default palette "pure-integration red × Madgwick green"
 is the classic confusion pair for red-blind viewers, and 6–12 curves are on screen at once),
 **text-table equivalents of the three charts** (canvases are unreadable to screen readers; collapsibles give
@@ -302,7 +356,7 @@ npm run icons      # regenerate PWA icons from favicon.svg
 ## Project layout
 
 ```
-├── index.html              # page skeleton, panel UI and all documentation (9 modules / 16 pages inlined)
+├── index.html              # page skeleton, panel UI and all documentation (9 modules / 15 pages inlined)
 ├── vite.config.ts          # build config (three vendor chunk)
 ├── src/
 │   ├── main.ts             # assembly layer: simulation / solvers / scene / UI / docs / main loop
@@ -339,6 +393,7 @@ npm run icons      # regenerate PWA icons from favicon.svg
 │       ├── b64.ts          #   UTF-8 base64url deep-link encoding
 │       └── mode.ts         #   view state and copy
 ├── scripts/
+│   ├── statuscheck.ts     #  keeps doc counts (experiments/demos/tests/pages) aligned with source
 │   ├── selftest.ts         #   numeric self-tests (80)
 │   ├── scenecheck.ts       #   scene-geometry self-tests (10)
 │   ├── htmlcheck.ts        #   HTML↔TS contract self-tests (15)
@@ -412,6 +467,8 @@ External material checked against the maths and engineering conventions used her
 open-source implementations) is collected in [`docs/RESEARCH-NOTES.md`](docs/RESEARCH-NOTES.md); the project's
 architecture and change history are in [`docs/PROJECT-STATE.md`](docs/PROJECT-STATE.md); a full improvement
 review with **per-item status** is in [`docs/IMPROVEMENT-PROPOSAL.md`](docs/IMPROVEMENT-PROPOSAL.md).
+The next implementation roadmap, including evidence, dependencies, concrete tasks, documentation revisions
+and acceptance criteria, is in [`docs/NEXT-ITERATION-ROADMAP.md`](docs/NEXT-ITERATION-ROADMAP.md).
 (The `docs/` files are in Chinese.)
 
 Primary sources: i2Nav's *Inertial Navigation Attitude Algorithms* lecture notes and KF-GINS,

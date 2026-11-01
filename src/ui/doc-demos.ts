@@ -4,11 +4,21 @@
  *
  * 与主仿真完全解耦：不参与主状态机，只在文档层打开、且停留在对应页时运转
  * （由宿主经 {@link DocDemoHost.isVisible} 告知）。两个静态演示只在控件变化
- * 时重绘；四个动画演示由主循环每帧调用 step(dt) 推进。
+ * 时重绘；三个动画演示由主循环每帧调用 step(dt) 推进。
  */
 import { qFromEuler, qRotInv, RAD, type Quat, type V3 } from "../core/quat";
 import { mulberry32 } from "../core/rng";
 import { allanDeviation, synthesizeGyroAngle } from "../core/allan";
+import {
+  REF_GRAVITY_NED,
+  attitudeErrorDeg,
+  observationsDegenerate,
+  syntheticObservations,
+  triad,
+  weightedSolution,
+  type VectorObservation,
+} from "../core/attitude-determination";
+import { aliasHz, coningSweep } from "../core/coning";
 
 export interface DocDemoHost {
   /** 文档层已打开、且当前停留的正是 page 时返回 true */
@@ -297,25 +307,198 @@ function drawBode(): void {
   ctx.font = "11.5px sans-serif";
   ctx.fillStyle = DOC_COLORS.dim;
   ctx.fillText(`τ = 1/α = ${tau.toFixed(2)} s`, lx, ly + 50);
-  ctx.fillText("交点偏左：", lx, ly + 72);
-  ctx.fillText("更信加计（跟得慢）", lx, ly + 88);
-  ctx.fillText("交点偏右：", lx, ly + 108);
-  ctx.fillText("更信陀螺（漂得快）", lx, ly + 124);
+  ctx.fillText("交点偏左（α 小）：", lx, ly + 72);
+  ctx.fillText("更信陀螺仪（平滑、收敛慢）", lx, ly + 88);
+  ctx.fillText("交点偏右（α 大）：", lx, ly + 108);
+  ctx.fillText("更信加速度计（跟得快、噪声大）", lx, ly + 124);
 
   const dv = fig?.querySelector<HTMLElement>('[data-dockval="bode-alpha"]');
   if (dv) dv.textContent = `f_c = ${fc.toFixed(2)} Hz`;
+}
+
+/** 单帧姿态确定演示：TRIAD vs 加权 Wahba/QUEST，含共线退化提示 */
+function drawWahbaDemo(): void {
+  const fig = document.getElementById("fig-wahba-demo")?.closest("figure") as HTMLElement | null;
+  const c = document.getElementById("fig-wahba-demo") as HTMLCanvasElement | null;
+  if (!c) return;
+  const ctx = c.getContext("2d");
+  if (!ctx) return;
+  const num = (k: string, d: number): number => Number(dockInput(fig, k)?.value ?? d);
+  const noiseG = num("wh-noise-g", 4);
+  const noiseM = num("wh-noise-m", 8);
+  const weight = num("wh-weight", 1);
+  const sep = num("wh-sep", 90);
+
+  const qTrue = qFromEuler(30 * RAD, -20 * RAD, 50 * RAD);
+  const sepRad = (Math.max(0.5, sep) * Math.PI) / 180;
+  const ref2: V3 = [Math.sin(sepRad), 0, Math.cos(sepRad)];
+  const obs: [VectorObservation, VectorObservation] = syntheticObservations(
+    qTrue,
+    [REF_GRAVITY_NED, ref2],
+    [noiseG, noiseM],
+  );
+  const tri = observationsDegenerate(obs[0], obs[1]) ? null : triad(obs);
+  const que = observationsDegenerate(obs[0], obs[1]) ? null : weightedSolution(obs, weight);
+  const errT = tri ? attitudeErrorDeg(tri.q, qTrue) : NaN;
+  const errQ = que ? attitudeErrorDeg(que.q, qTrue) : NaN;
+
+  const W = c.width, H = c.height;
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, W, H);
+
+  const L = 70, R = 250, T = 44;
+  const plotW = W - L - R;
+  const maxErr = 30;
+  const bar = (i: number, label: string, err: number, color: string): void => {
+    const y = T + 28 + i * 62;
+    ctx.fillStyle = DOC_COLORS.dim;
+    ctx.font = "12.5px sans-serif";
+    ctx.textAlign = "right";
+    ctx.fillText(label, L - 10, y + 15);
+    ctx.fillStyle = DOC_COLORS.grid;
+    ctx.fillRect(L, y, plotW, 24);
+    if (Number.isFinite(err)) {
+      ctx.fillStyle = color;
+      ctx.fillRect(L, y, Math.min(plotW, (Math.max(0, err) / maxErr) * plotW), 24);
+      ctx.fillStyle = DOC_COLORS.ink;
+      ctx.font = "600 12.5px ui-monospace, monospace";
+      ctx.textAlign = "left";
+      ctx.fillText(`${err.toFixed(2)}°`, L + 8, y + 16);
+    }
+  };
+  bar(0, "TRIAD（几何）", errT, DOC_COLORS.hp);
+  bar(1, "Wahba/QUEST（加权最优）", errQ, DOC_COLORS.post);
+
+  ctx.textAlign = "left";
+  ctx.fillStyle = DOC_COLORS.ink;
+  ctx.font = "600 13px sans-serif";
+  ctx.fillText("单帧姿态确定误差（vs 真值）", 14, 20);
+  ctx.font = "11.5px sans-serif";
+  ctx.fillStyle = DOC_COLORS.dim;
+  ctx.fillText(`噪声：重力 ${noiseG.toFixed(1)}° / 磁 ${noiseM.toFixed(1)}°　磁权重 ${weight.toFixed(2)}　参考夹角 ${sep.toFixed(0)}°`, 14, 36);
+
+  const lx = W - R + 14;
+  ctx.font = "11.5px sans-serif";
+  ctx.fillStyle = DOC_COLORS.dim;
+  ctx.fillText(`TRIAD 代价 ${tri ? tri.cost.toFixed(3) : "—"}`, lx, T + 30);
+  ctx.fillText(`QUEST 代价 ${que ? que.cost.toFixed(3) : "—"}`, lx, T + 52);
+  ctx.fillText(`QUEST 状态 ${tri ? "正常" : "退化"}`, lx, T + 78);
+  const msg = tri ? "权重改变最优解偏向；权重不对反而更差" : "两参考向量接近共线：无唯一三轴解";
+  ctx.fillStyle = tri ? DOC_COLORS.dim : DOC_COLORS.obs;
+  ctx.fillText(msg, lx, T + 104);
+  ctx.fillText("提示：把两参考夹角拉到 2° 看退化", lx, T + 126);
+
+  const setVal = (k: string, text: string): void => {
+    const el = fig?.querySelector<HTMLElement>(`[data-dockval="${k}"]`);
+    if (el) el.textContent = text;
+  };
+  setVal("wh-noise-g", `${noiseG.toFixed(1)}°`);
+  setVal("wh-noise-m", `${noiseM.toFixed(1)}°`);
+  setVal("wh-weight", weight.toFixed(2));
+  setVal("wh-sep", `${sep.toFixed(0)}°`);
+}
+
+/** 圆锥效应演示：有限采样率积分 vs 20 kHz 参考的误差曲线 + 混叠折回读数 */
+function drawConingDemo(): void {
+  const fig = document.getElementById("fig-coning-demo")?.closest("figure") as HTMLElement | null;
+  const c = document.getElementById("fig-coning-demo") as HTMLCanvasElement | null;
+  if (!c) return;
+  const ctx = c.getContext("2d");
+  if (!ctx) return;
+  const freq = Number(dockInput(fig, "cn-freq")?.value ?? 12);
+  const amp = Number(dockInput(fig, "cn-amp")?.value ?? 120);
+  const pts = coningSweep({ freqHz: freq, ampDps: amp, durationSec: 4, rates: [1000, 500, 250, 125, 100, 50] });
+  const W = c.width, H = c.height;
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, W, H);
+  const L = 56, R = 220, T = 34, B = 36;
+  const rates = pts.map((p) => p.rateHz);
+  const xMin = Math.log10(Math.min(...rates));
+  const xMax = Math.log10(Math.max(...rates));
+  const errMax = Math.max(0.05, Math.max(...pts.map((p) => p.errDeg)) * 1.4);
+  const X = (r: number): number => L + ((Math.log10(r) - xMin) / (xMax - xMin)) * (W - L - R);
+  const Y = (e: number): number => T + (1 - Math.min(1, e / errMax)) * (H - T - B);
+
+  ctx.strokeStyle = DOC_COLORS.grid;
+  ctx.lineWidth = 1;
+  ctx.font = "10.5px sans-serif";
+  for (const r of [50, 100, 250, 500, 1000]) {
+    const x = X(r);
+    ctx.beginPath();
+    ctx.moveTo(x, T);
+    ctx.lineTo(x, H - B);
+    ctx.stroke();
+    ctx.fillStyle = DOC_COLORS.dim;
+    ctx.textAlign = "center";
+    ctx.fillText(String(r), x, H - B + 14);
+  }
+  ctx.textAlign = "left";
+  ctx.fillStyle = DOC_COLORS.dim;
+  ctx.fillText("采样率（Hz，对数轴）", L, H - 8);
+  ctx.fillText("姿态误差（°）", L, T - 12);
+
+  ctx.strokeStyle = DOC_COLORS.post;
+  ctx.lineWidth = 2.4;
+  ctx.beginPath();
+  pts.forEach((p, i) => {
+    const x = X(p.rateHz), y = Y(p.errDeg);
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+  for (const p of pts) {
+    ctx.fillStyle = DOC_COLORS.post;
+    ctx.beginPath();
+    ctx.arc(X(p.rateHz), Y(p.errDeg), 3.2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  const at = (r: number): number => pts.find((p) => p.rateHz === r)?.errDeg ?? NaN;
+  const lx = W - R + 14;
+  ctx.font = "11.5px sans-serif";
+  ctx.fillStyle = DOC_COLORS.dim;
+  ctx.fillText(`f = ${freq.toFixed(1)} Hz，幅值 ${amp.toFixed(0)}°/s`, lx, T + 12);
+  ctx.fillText(`1000 Hz：${at(1000).toFixed(3)}°`, lx, T + 38);
+  ctx.fillText(`500 Hz：${at(500).toFixed(3)}°`, lx, T + 58);
+  ctx.fillText(`100 Hz：${at(100).toFixed(3)}°`, lx, T + 78);
+  ctx.fillText(`50 Hz：${at(50).toFixed(3)}°`, lx, T + 98);
+  ctx.fillStyle = DOC_COLORS.ink;
+  ctx.fillText(`衰减比 500→50 Hz：${(at(50) / at(500)).toFixed(1)}×`, lx, T + 124);
+  ctx.fillStyle = DOC_COLORS.obs;
+  ctx.fillText("混叠折回示例：", lx, T + 154);
+  ctx.fillStyle = DOC_COLORS.dim;
+  ctx.fillText(`31 Hz @50 → ${aliasHz(31, 50).toFixed(0)} Hz`, lx, T + 172);
+  ctx.fillText(`28 Hz @100 → ${aliasHz(28, 100).toFixed(0)} Hz`, lx, T + 190);
+
+  const setVal = (k: string, text: string): void => {
+    const el = fig?.querySelector<HTMLElement>(`[data-dockval="${k}"]`);
+    if (el) el.textContent = text;
+  };
+  setVal("cn-freq", `${freq.toFixed(1)} Hz`);
+  setVal("cn-amp", `${amp.toFixed(0)}°/s`);
 }
 
 /** 绑定两个文档演示的控件；首次加载时各绘一次 */
 function initDocDockDemos(): void {
   const kfFig = document.getElementById("fig-kf1d-demo")?.closest("figure") as HTMLElement | null;
   const bodeFig = document.getElementById("fig-bode-demo")?.closest("figure") as HTMLElement | null;
+  const wahbaFig = document.getElementById("fig-wahba-demo")?.closest("figure") as HTMLElement | null;
+  const coningFig = document.getElementById("fig-coning-demo")?.closest("figure") as HTMLElement | null;
   for (const key of ["kf-s1", "kf-s2"]) {
     dockInput(kfFig, key)?.addEventListener("input", () => drawKf1d());
   }
   dockInput(bodeFig, "bode-alpha")?.addEventListener("input", () => drawBode());
+  for (const key of ["wh-noise-g", "wh-noise-m", "wh-weight", "wh-sep"]) {
+    dockInput(wahbaFig, key)?.addEventListener("input", () => drawWahbaDemo());
+  }
+  for (const key of ["cn-freq", "cn-amp"]) {
+    dockInput(coningFig, key)?.addEventListener("input", () => drawConingDemo());
+  }
   drawKf1d();
   drawBode();
+  drawWahbaDemo();
+  drawConingDemo();
 }
 
 // ---------- 文档页小演示：互补滤波三路信号实时对比 ----------
@@ -735,6 +918,7 @@ function stepCalibDemo(dt: number): void {
 // 合成 655s @50Hz 的陀螺序列（已知白噪声密度 N 与速率随机游走 K），计算重叠 Allan 偏差
 // σ(τ) 的 log-log 曲线：−½ 斜率段=白噪声（N=σ(1)），+½ 段=速率随机游走——「零偏随机游走」
 // 滑块对应的 K 系数在这里现出原形。
+
 const allanCanvas = document.getElementById("fig-allan-demo") as HTMLCanvasElement | null;
 let allanDrawn = false;
 const ALLAN_FS = 50; // Hz（合成用低采样率：Allan 方差只关心 τ 谱形）

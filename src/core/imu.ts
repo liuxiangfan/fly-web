@@ -46,6 +46,16 @@ export interface ImuParams {
    *  真实 MEMS 的传输 + 抗混叠滤波会带来群延迟；机动中它让姿态**滞后** ω·τ，
    *  在控制回路里吃掉相位裕度（增益加到某个值就振）。0 = 关闭 */
   sensorDelayMs: number;
+  /** 传感器带宽（Hz，0 = 关闭）：一阶低通，模拟抗混叠滤波与器件带宽；
+   *  开启后高频振动被衰减、同时引入相位滞后（与群延迟叠加） */
+  sensorBandwidthHz?: number;
+  /** 陀螺/加计/磁的相对延迟差（ms，0..20）：陀螺提前 skew、磁滞后 skew、加计取基准——
+   *  用于演示「三路时间戳不同步」比整帧延迟更接近真实；
+   *  0 = 三路共用同一条整帧延迟（历史默认行为，逐位一致） */
+  sensorDelaySkewMs?: number;
+  /** 传感器采样率（Hz；0/undefined = 跟随仿真步长）。低于仿真步长时按零阶保持抽样，
+   *  模拟「传感器采样率 ≠ 算法解算率」；高于奈奎斯特的运动会因此折回低频（混叠） */
+  sensorSampleHz?: number;
 }
 
 export interface ImuSample {
@@ -55,6 +65,13 @@ export interface ImuSample {
   accel: V3;
   /** 磁力计：世界磁场在机体系的投影 + 硬铁/干扰/噪声（μT） */
   mag: V3;
+  /**
+   * 各通道自己的采样时刻（秒，与调用方时间轴同源）。
+   * 只有经过 `SensorPipeline` 且**真有延迟/带宽/降采样**时才带上；
+   * 三路延迟不同步时 `times.gyro/accel/mag` 会分开，可直接读出各通道滞后。
+   * 透传快路径不带该字段（保持历史逐位一致的契约）。
+   */
+  times?: { gyro: number; accel: number; mag: number };
 }
 
 /**
@@ -94,11 +111,49 @@ const BIAS_DIR: V3 = (() => {
 })();
 
 /**
+ * 模拟器实际注入的陀螺零偏真值（rad/s）：恒定零偏 + World 持有的随机游走状态。
+ * 仅供仿真内诊断（NEES/误差分解）使用；真实数据没有这个量。
+ */
+export function trueGyroBiasRad(p: ImuParams, gyroWalkState?: V3): V3 {
+  return [0, 1, 2].map(
+    (i) => (p.gyroBiasDps * BIAS_DIR[i] + (gyroWalkState?.[i] ?? 0)) / 57.29578,
+  ) as unknown as V3;
+}
+
+/**
  * 由真实姿态与角速度生成模拟 IMU 输出。
  * 加计约定：静止时输出 +g 沿机体系「下」方向（即重力在机体系的投影）。
  * gyroWalkState：陀螺零偏随机游走的累积状态（°/s，三轴），由 World 持有并在每步
  * 先推进再传入——walkDps=0 时完全不动、不消耗随机数，既有噪声序列逐位不变。
  */
+/**
+ * 加计**单点**链路：理想比力 → 非线性（按模长压缩，1g 处零偏移）→ 交叉轴混合（每轴混入
+ * 另外两轴各 k）→ 白噪声。抽成独立函数的原因是**校准独立验证必须与生产模型逐位同构**：
+ * 旧实现自己写了一份 `2k` 交叉轴 + 逐分量非线性的版本，验证的是另一颗虚构器件（复核反例）。
+ */
+export function accelChannel(
+  accelBase: V3,
+  p: Pick<ImuParams, "accelNonlin" | "accelCrossAxis" | "accelNoise">,
+  gauss: Gauss,
+): V3 {
+  let bx = accelBase[0];
+  let by = accelBase[1];
+  let bz = accelBase[2];
+  if (p.accelNonlin > 0) {
+    const n = Math.hypot(bx, by, bz);
+    const k = 1 - p.accelNonlin * (n / G_ACC - 1) * (n / G_ACC - 1);
+    bx *= k;
+    by *= k;
+    bz *= k;
+  }
+  const k = p.accelCrossAxis;
+  return [
+    bx + k * (by + bz) + gauss.next() * p.accelNoise,
+    by + k * (bx + bz) + gauss.next() * p.accelNoise,
+    bz + k * (bx + by) + gauss.next() * p.accelNoise,
+  ];
+}
+
 export function simulateImu(
   q: Quat,
   omegaTrue: V3,
@@ -107,6 +162,18 @@ export function simulateImu(
   gauss: Gauss,
   accelFactor: number,
   gyroWalkState?: V3,
+  /**
+   * 磁力计独立随机流（可选）。为什么必须能分开：磁噪声/硬铁开关会改变磁链是否消耗随机数；
+   * 若与陀螺/加计共用高斯流，同 seed 下“只打开磁干扰”会连带改变后续陀螺噪声序列，
+   * A/B 与批量配对比较就不再是单变量。传入独立流后，磁链变化不影响陀螺/加计样本。
+   */
+  magGauss: Gauss = gauss,
+  /**
+   * 运动学一致模式的世界系平动加速度（可选）。给出时按下式生成比力投影：
+   *   ã = Rᵀ(q)·g_world − Rᵀ(q)·a_world
+   * 而不是叠加几条独立正弦——这样姿态、角速度、比力来自同一条物理轨迹。
+   */
+  accelWorld?: V3,
 ): ImuSample {
   const gBody = qRotInv(q, [0, 0, G_ACC]);
 
@@ -114,10 +181,7 @@ export function simulateImu(
   const vib = p.vibration;
 
   // 零偏 = 恒定零偏（固定方向，°/s）+ 随机游走（World 持有的三轴状态，°/s）→ 统一转 rad/s
-  const biasRad: V3 = [0, 0, 0];
-  for (let i = 0; i < 3; i++) {
-    biasRad[i] = (p.gyroBiasDps * BIAS_DIR[i] + (gyroWalkState?.[i] ?? 0)) / 57.29578;
-  }
+  const biasRad = trueGyroBiasRad(p, gyroWalkState);
 
   const gyro: V3 = [
     omegaTrue[0] + biasRad[0] + gauss.next() * p.gyroNoiseDps / 57.29578,
@@ -148,35 +212,28 @@ export function simulateImu(
     for (let i = 0; i < 3; i++) gyro[i] = Math.max(-lim, Math.min(lim, gyro[i]));
   }
 
-  // 加计确定性部分：重力投影 + 机动线加速度 + 振动
+  // 加计确定性部分：重力投影 − 平动加速度投影 + 振动（运动学一致模式）；否则用旧的独立正弦扰动
+  const aBody = accelWorld ? qRotInv(q, accelWorld) : null;
   const accelBase: V3 = [
-    gBody[0]
-      + lin * Math.sin(2 * Math.PI * 0.9 * t + 1.1)
+    gBody[0] - (aBody?.[0] ?? 0)
+      + (accelWorld
+        ? 0
+        : lin * Math.sin(2 * Math.PI * 0.9 * t + 1.1))
       + vib * 3.0 * Math.sin(2 * Math.PI * 31 * t),
-    gBody[1]
-      + lin * Math.sin(2 * Math.PI * 0.7 * t + 2.3)
+    gBody[1] - (aBody?.[1] ?? 0)
+      + (accelWorld
+        ? 0
+        : lin * Math.sin(2 * Math.PI * 0.7 * t + 2.3))
       + vib * 3.0 * Math.sin(2 * Math.PI * 28 * t + 1.0),
-    gBody[2]
-      + lin * 0.4 * Math.sin(2 * Math.PI * 1.3 * t + 0.5)
+    gBody[2] - (aBody?.[2] ?? 0)
+      + (accelWorld
+        ? 0
+        : lin * 0.4 * Math.sin(2 * Math.PI * 1.3 * t + 0.5))
       + vib * 1.8 * Math.sin(2 * Math.PI * 37 * t + 2.0),
   ];
-  // 非线性：偏离 1g 的二次压缩（1g 处零偏移，真实器件的满量程弯曲形态）
-  if (p.accelNonlin > 0) {
-    const n = Math.hypot(accelBase[0], accelBase[1], accelBase[2]);
-    const k = 1 - p.accelNonlin * (n / G_ACC - 1) * (n / G_ACC - 1);
-    accelBase[0] *= k;
-    accelBase[1] *= k;
-    accelBase[2] *= k;
-  }
-  // 交叉轴敏感度：每轴混入另外两轴各 k 的读数（确定性线性混合）
-  const accel: V3 = [0, 0, 0];
-  for (let i = 0; i < 3; i++) {
-    const j = (i + 1) % 3;
-    const k = (i + 2) % 3;
-    accel[i] = accelBase[i] + p.accelCrossAxis * (accelBase[j] + accelBase[k]) + gauss.next() * p.accelNoise;
-  }
+  const accel = accelChannel(accelBase, p, gauss);
 
-  const magSample = simulateMag(q, t, p, gauss);
+  const magSample = simulateMag(q, t, p, magGauss);
   return { gyro, accel, mag: magSample };
 }
 
