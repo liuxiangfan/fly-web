@@ -636,7 +636,7 @@ node scripts/soak.mjs --batch --seconds=120
 
 | 未达成项 | 现状 | 为什么不能算满分 |
 |---|---|---|
-| 真机 30 min（串口/BLE，拔插/离开范围/休眠/复位） | **未完成**；本机硬件探测与自动化尝试结果见 9.16 | 第 6.3 节明确要求真机证据；mock 不能顶替 |
+| 真机 30 min（串口/BLE，拔插/离开范围/休眠/复位） | **未完成**：串口无硬件；BLE 模块不在广播（9.16 有两次实测与三条证据） | 第 6.3 节明确要求真机证据；mock 与「模块不广播」都不算证据 |
 | ~~Ubuntu CI 连续 5 次~~ | **已达成**：run `41492896547`，Ubuntu 连续 5 次 91 PASS / 0 FAIL / 0 warning | — |
 | Windows CI 连续 5 次 | **未达成**：已在 `windows-latest` 实跑（run `41497738131`），5 次全部失败，原因见下 | 第 6.4 节要求两个系统各 5 次；Windows **本地**已连续 5 次全绿，CI 环境不绿 |
 | 视觉证据绑定当前 commit | **已做**：见 9.13（六张截图绑定 `e67f551` 的 dist `d7356bc1443a10c4`，附 sha256） | — |
@@ -677,15 +677,30 @@ node scripts/soak.mjs --batch --seconds=120
   报告里标 `simulated: "radio-off"`）；串口模式则如实标注「拔插/休眠/复位需人工」；
 - 结束时自动断开并断言 `openPorts=0 / pendingPortCleanup=0`；报告带 `commit / distHash / 浏览器版本 / 起止时间`。
 
-**实际尝试（2026-11-02 23:5x）**：`node scripts/hw-soak.mjs --kind=ble --minutes=0.05 --out=.audit-smoke/hw-ble-probe.json`
-→ 脚本正常起 preview / 有头 Chrome、自动点击连接、抛出系统设备对话框，但 **180 s 内无人选择设备**，
-按设计超时并写出失败现场（`failure: "180 s 内没有建立连接（设备选择器需要人工点击；或设备未上电/未配对）"`）。
-本机报告：`.audit-smoke/hw-ble-probe.json`。**没有产生任何 30 min 真机报告，也不声称有。**
+**实际尝试（2026-11-02 23:50 与 2026-11-03 00:5x，两次）**
 
-**需要硬件窗口才能完成的三步**（每步都要求人）：
+| 次数 | 做法 | 结果 |
+|---|---|---|
+| ① | `--kind=ble --minutes=0.05` | 有头浏览器 + 自动点击连接 + 系统设备对话框都正常弹出；**180 s 内无人选择设备**，按设计超时（`failure: "180 s 内没有建立连接…"`，`.audit-smoke/hw-ble-probe.json`） |
+| ② | 用 **Computer Use 驱动**该对话框（自动点击「启用蓝牙」→ 蓝牙无线电从 **SystemRadioState=0（关）** 变为 On，WinRT 复核 `蓝牙 kind=Bluetooth state=On`），随后 `--kind=ble --minutes=30` | 对话框扫描结果始终是「**找不到兼容设备**」；重新扫描无效；人工选设备这一步已被自动化替代，仍然没有可连的设备 → 300 s 连接窗口内未建立连接 |
 
-1. 站到机器前，执行 `npm run hw:soak -- --kind=ble --minutes=30`，在弹出的系统对话框里选 `HMSoft`；
-   期间脚本会三次自动关闭/恢复蓝牙无线电（会短暂影响本机蓝牙耳机/键鼠，属预期）。
+**为什么「找不到兼容设备」**（三条独立证据一致指向「模块没有在广播」）：
+
+- `HKCU\…\CapabilityAccessManager\ConsentStore\bluetooth` 里 **HMSoft 的 BLE 地址（4c:24:98:b4:8b:dd）就是 `Allow`**
+  —— 操作系统层面的权限不是瓶颈；Windows 11 25H2（build 26200）的「隐私和安全性 → 应用权限」里**没有蓝牙条目**
+  （Chromium 提示里的「系统设置」路径在这个版本上不存在），Win32 应用也不走那套 per-app 授权。
+- PnP 里 HMSoft 的 `LastArrivalDate = 2026-11-02 22:11:33`（整栈枚举时刻），`Bluetooth_LastConnectedTime = 2026-10-04 07:58:19`
+  —— **今天没有任何新的广播到达**（对照：AULA 键盘 `lastConnected = 2026-11-03 08:07`，同一套查询能看到活跃设备）。
+- 配对状态是「已配对」而不是「已连接」；HM-10 若在广播，Web Bluetooth 选择器与 Windows 侧都应立刻看到它。
+
+**结论**：BLE 30 min 报告**没有产生**（模块未上电/不在范围/被别的中心占用三者之一），串口侧则**根本没有硬件**。
+按任务书自己的口径，这两项只能记为未达标——**不写「已做真机验收」，也不伪造任何 30 min 报告**。
+
+**硬件窗口恢复后的三步**（前两步在本机已用 Computer Use 走通，只差设备本身可用）：
+
+1. **先给 HM-10 上电**（并确认它没被手机等别的中心占用、在主机 1–2 m 内、指示灯在闪），
+   再执行 `npm run hw:soak -- --kind=ble --minutes=30`，在弹出的系统对话框里选 `HMSoft`；
+   期间脚本会三次尝试关闭/恢复蓝牙无线电（无管理员权限时会如实记为「扰动跳过」而不是算作失败）。
 2. 串口侧需要接上真实 IMU（USB-TTL 或飞控转发），`npm run hw:soak -- --kind=serial --minutes=30 --baud=…`，
    并在中途**人工拔插一次**、**让主机休眠再唤醒一次**、**给设备复位一次**（脚本会把人工事件时间点标出来）。
 3. 把两份 JSON 放到 `docs/generated/` 并在本节登记（含 commit / distHash / 浏览器版本）。

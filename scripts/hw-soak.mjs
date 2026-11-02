@@ -156,7 +156,7 @@ try {
   const connectBtn = kind === "ble" ? "#btn-ble" : "#btn-serial";
   await page.click(connectBtn).catch((e) => console.warn(`[warn] 自动点击 ${connectBtn} 失败：${e.message}`));
   // 等人工完成连接（串口/BLE 任一）
-  const connectDeadline = Date.now() + 180000;
+  const connectDeadline = Date.now() + 300000;
   let connected = false;
   while (Date.now() < connectDeadline) {
     const p = await page.evaluate(() => window.attitudeDemo.plumbing());
@@ -164,7 +164,7 @@ try {
     await sleep(1000);
   }
   if (!connected) {
-    throw new Error("180 s 内没有建立连接（设备选择器需要人工点击；或设备未上电/未配对）");
+    throw new Error("300 s 内没有建立连接（设备选择器需要人工点击；或设备未上电/未配对）");
   }
   events.push({ at: Date.now(), type: "connected", kind, simulated: null });
   console.log(`[hw] 已连接（${kind}），开始 ${minutes} min 采样`);
@@ -187,12 +187,19 @@ try {
     for (const [i, ev] of plan.entries()) {
       if (!fired.has(i) && elapsed >= ev.at) {
         fired.add(i);
-        events.push({ at: Date.now(), type: "radio-off", simulated: "radio-off", seconds: ev.offSec, instanceId: radio });
         console.log(`[hw] 模拟离开范围：关闭蓝牙无线电 ${ev.offSec} s（${i + 1}/${plan.length}）`);
         const off = setRadio(radio, false);
+        if (!off) {
+          // 没有管理员权限时 pnputil 会失败：**如实记为跳过**，不计入「期望恢复次数」——
+          // 否则「没做成扰动」会被算成「没能恢复」，把环境问题伪装成产品缺陷。
+          events.push({ at: Date.now(), type: "radio-off-skipped", simulated: "radio-off", ok: false, reason: "pnputil 失败（多半需要管理员权限）", instanceId: radio });
+          console.log("[hw] 关闭无线电失败（多半需要管理员权限）——本次扰动跳过，不计入期望恢复次数");
+          continue;
+        }
+        events.push({ at: Date.now(), type: "radio-off", simulated: "radio-off", ok: true, seconds: ev.offSec, instanceId: radio });
         await sleep(ev.offSec * 1000);
         const on = setRadio(radio, true);
-        events.push({ at: Date.now(), type: "radio-on", simulated: "radio-off", ok: off && on, instanceId: radio });
+        events.push({ at: Date.now(), type: "radio-on", simulated: "radio-off", ok: on, instanceId: radio });
         console.log(`[hw] 无线电已恢复（disable=${off} enable=${on}）`);
       }
     }
@@ -227,7 +234,7 @@ try {
 
   const framesGrew = samples.length > 1 && samples.at(-1).frames > samples[0].frames;
   const reconnects = final.reconnects + final.bleReconnects;
-  const expectedRecoveries = kind === "ble" && radio ? plan.length : 0;
+  const expectedRecoveries = events.filter((e) => e.type === "radio-off" && e.ok === true).length;
   const verdict = {
     connected,
     framesGrew,
@@ -235,13 +242,13 @@ try {
     framesEnd: samples.at(-1)?.frames ?? 0,
     reconnects,
     expectedRecoveries,
-    recoveredAll: kind === "ble" && radio ? reconnects >= expectedRecoveries : null,
+    recoveredAll: expectedRecoveries > 0 ? reconnects >= expectedRecoveries : null,
     cleanShutdown: final.openPorts === 0 && final.pendingPortCleanup === 0,
     consoleErrors,
   };
   const pass = Boolean(verdict.connected && verdict.framesGrew && verdict.cleanShutdown &&
     consoleErrors.length === 0 &&
-    (kind === "ble" && radio ? verdict.recoveredAll : true));
+    (verdict.recoveredAll === null || verdict.recoveredAll));
   const report = {
     generatedAt: new Date().toISOString(),
     commit, distHash, browserVersion, url, kind, minutes,
