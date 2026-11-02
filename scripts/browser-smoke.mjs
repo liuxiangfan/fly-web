@@ -467,12 +467,19 @@ try {
   );
 
   await gotoDocPage("math"); // 顺序 / 校准 / Allan / 一维卡尔曼四个演示都在这一页
+  // 与上面的互补演示同一套判据：**丢弃第一帧**。第一次采样可能落在「还没画过第一帧」或
+  // 「上一页面的内容还没被清掉」的窗口里（Ubuntu CI 第 5 轮实测 ordA 墨迹 19200 > 半屏，
+  // 被 painted() 的上界判成「不像正常绘图」，而它其实只是一次瞬态）。判据放在后两次上：
+  // 「后两次都画过了、且指纹不同」= 在实时重绘；真冻住时两帧相同 → 仍然失败。
   await new Promise((r) => setTimeout(r, 700));
-  const ordA = await canvasStat("fig-order-demo");
-  const calA = await canvasStat("fig-calib-demo");
+  await canvasStat("fig-order-demo"); // 丢弃：等第一帧真正画出来
+  await canvasStat("fig-calib-demo");
   await new Promise((r) => setTimeout(r, 2500)); // 摆角此刻转到约 35°
   const ordB = await canvasStat("fig-order-demo");
   const calB = await canvasStat("fig-calib-demo");
+  await new Promise((r) => setTimeout(r, 2500));
+  const ordC = await canvasStat("fig-order-demo");
+  const calC = await canvasStat("fig-calib-demo");
   const allanSt = await canvasStat("fig-allan-demo");
   const kfSt = await canvasStat("fig-kf1d-demo");
   // 一维卡尔曼那张图是**静态**演示：重绘点只有「拖动它自己的滑杆」。抽出模块时
@@ -493,8 +500,8 @@ try {
   await page.waitForFunction(() => document.getElementById("docs-overlay").hidden);
   check(
     "文档演示：旋转顺序 / 校准舞蹈在实时重绘",
-    ordA.sig !== ordB.sig && calA.sig !== calB.sig && painted(ordA) && painted(ordB) && painted(calA) && painted(calB),
-    `顺序 ${ordA.ink} → ${ordB.ink}（变化=${ordA.sig !== ordB.sig}）；校准 ${calA.ink} → ${calB.ink}（变化=${calA.sig !== calB.sig}）`,
+    ordB.sig !== ordC.sig && calB.sig !== calC.sig && painted(ordB) && painted(ordC) && painted(calB) && painted(calC),
+    `顺序 ${ordB.ink} → ${ordC.ink}（变化=${ordB.sig !== ordC.sig}）；校准 ${calB.ink} → ${calC.ink}（变化=${calB.sig !== calC.sig}）`,
   );
   check(
     "文档演示：Allan 有图形（惰性一次绘制生效）+ 一维卡尔曼拖滑杆会重绘",
