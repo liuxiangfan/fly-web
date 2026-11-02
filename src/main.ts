@@ -100,6 +100,10 @@ import {
   type MagCalModel,
 } from "./core/experiment-config";
 import { TraceEvents } from "./core/trace-events";
+/** 构建期注入（vite define）：线上页面必须能回答「我看的是哪个提交」 */
+declare const __BUILD_COMMIT__: string;
+declare const __BUILD_TIME__: string;
+
 import {
   applyTuning,
   resultDigest,
@@ -2989,6 +2993,19 @@ window.addEventListener("keydown", (e) => {
   setSharedCursor(next);
   e.preventDefault();
 });
+
+/** 构建标识：关于页脚 + 自动化出口（部署后 smoke 用它对「线上到底是哪个提交」） */
+const BUILD_INFO = {
+  commit: __BUILD_COMMIT__,
+  builtAt: __BUILD_TIME__,
+};
+function paintBuildStamp(): void {
+  const el = document.getElementById("build-stamp-value");
+  if (!el) return;
+  const when = BUILD_INFO.builtAt.replace("T", " ").slice(0, 19);
+  el.textContent = `${BUILD_INFO.commit} · ${when} UTC`;
+}
+paintBuildStamp();
 
 function resetSim(): void {
   // 档案导入的**验证阶段**禁止清现场：写控件会触发 change → resetSim，
@@ -7403,6 +7420,8 @@ resetSim(); // 统一时钟/统计/曲线起点（不改变已还原的深链参
       autoCoarseAlign: solveLoop.autoCoarseAlign,
     }),
   },
+  /** 构建标识（部署后 smoke 用）：线上页面报的提交必须等于被部署的那个 */
+  build: () => ({ ...BUILD_INFO }),
   /** 校准状态快照（自动化验收用）：模型、是否应用、对象是否在 */
   calibration: (): {
     magModel: MagCalModel;

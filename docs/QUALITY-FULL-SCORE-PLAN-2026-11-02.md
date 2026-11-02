@@ -657,6 +657,23 @@ node scripts/soak.mjs --batch --seconds=120
 已可用实测输出复核；但上表五项缺证据（其中体积余量是实打实的未达标），因此**只能写
 「按本轮证据已达可复核的高质量水准」，不能写「各维度满分」**。
 
+### 9.18 「线上到底是哪个提交」：构建标识 + 部署后 smoke（6.7 的前置）
+
+6.7 要求「合并到 master，线上页面可显示 build commit」——之前页面并没有构建标识，这一项**做不了**。现在补齐：
+
+- `vite.config.ts` 在**编译期**注入 `__BUILD_COMMIT__` / `__BUILD_TIME__`（CI 用 `GITHUB_SHA`，本地用
+  `git rev-parse --short=12 HEAD`，无 git 时退化为 `unknown`）。运行时不再读环境，Worker / 离线包看到的是同一个值。
+- 「关于本装置」页标题下多一行 `构建：<commit> · <UTC 时间>`（`#build-stamp-value`，mono 样式）；
+  同时通过 `attitudeDemo.build()` 暴露给自动化。截图：`screenshots/visual-buildstamp/about-1440x900.png`
+  （sha256 前 16 位 `d6bb194e53c8fe98`；该图拍摄于工作树 = `c88e196` + 本次改动，因此页脚显示 `c88e196ba394`）。
+- 新增 `scripts/postdeploy-smoke.mjs`（`npm run postdeploy:smoke -- --url=<线上地址> --expect=<commit>`）：
+  打开线上页面 → 断言 HTTP 200、`attitudeDemo.build().commit` 以期望提交开头、页脚渲染出构建标识、
+  仿真时钟真的推进、评测表 5 行、canvas 有 WebGL、控制台零错误，并写出带时间戳的 JSON 报告。
+  本地预演已通过：`构建标识 c88e196ba394（期望 c88e196ba394）；页脚「c88e196ba394 · 2026-11-02 21:17:04 UTC」；
+  时钟 0.5→2.0 s；评测表 5 行；canvas=true；控制台错误 0`（`.audit-smoke/postdeploy-local.json`）。
+- 部署后要做的两件事因此变成一条命令：合并后 `npm run postdeploy:smoke -- --url=https://fly_web.070616.xyz/ --expect=<merge commit>`；
+  回滚 = 反向提交 + 再跑同一条命令（`--expect` 换成回滚目标提交）。
+
 ### 9.17 Windows CI 两轮实跑的失败画像（2026-11-03）
 
 `windows-latest`（2 vCPU + swiftshader）上跑了两轮、共 10 次完整冒烟，**全部失败**，但失败点每次不同：

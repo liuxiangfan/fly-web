@@ -83,6 +83,10 @@
   期间修掉一个**真缺陷**：批量 Worker 的停滞看门狗 15 s 太短——Worker 里单个种子是同步跑完的，
   单线程下定时器发不出消息，2 vCPU 上会被误判「卡死」并**静默回退主线程**（慢机器拿不到 Worker 加速）；
   改为 60 s。冒烟侧补 `protocolTimeout=300 s`、首帧等待 30→60 s、批量等待 120→240 s、万向节脉冲环改状态等待。
+- **线上构建标识 + 部署后 smoke**：`vite define` 编译期注入 `__BUILD_COMMIT__`/`__BUILD_TIME__`，
+  「关于本装置」页显示 `构建：<commit> · <UTC>`，`attitudeDemo.build()` 供自动化读取；
+  新增 `npm run postdeploy:smoke -- --url=… --expect=<commit>`（HTTP 200 / 提交匹配 / 页脚标识 / 时钟推进 /
+  5 行评测 / canvas / 控制台零错误，落 JSON 报告），本地预演通过。
 - **仍缺证据**：真机串口/BLE 各 30 min（缺硬件/模块不在广播）；Windows CI 连续 5 次（环境容量，见任务书 9.17）；
   全部 JS 的 10% 体积余量（现 262/272 KB）；PR 合并/部署后 smoke/回滚演练。
   这些在任务书 9.15 列为未达标，**不写「各维度满分」**。
