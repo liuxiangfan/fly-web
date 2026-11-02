@@ -4530,7 +4530,15 @@ try {
     const r = window.attitudeDemo.replay.import(rows.join(String.fromCharCode(10)), "soak.csv");
     document.getElementById("replay-speed").value = "0";
     document.getElementById("replay-speed").dispatchEvent(new Event("change"));
-    await new Promise((res) => setTimeout(res, 3000)); // 让主循环把 4000 帧消费掉
+    // 状态等待：最快档仍受 rAF 频率与单拍预算限制。固定 3 s 在慢 runner 上只喂进 30 s
+    // （Ubuntu CI 第 4 轮实测 simTime=30.0，而判据要 >35），这里等它真的喂到 39 s。
+    const consumeDeadline = performance.now() + 60000;
+    while (performance.now() < consumeDeadline) {
+      const sz = window.attitudeDemo.sizes();
+      const ri = window.attitudeDemo.replay.info;
+      if (sz.simTime >= 39 || ri.idx >= ri.frames) break;
+      await new Promise((res) => setTimeout(res, 200));
+    }
     const after = window.attitudeDemo.sizes();
     const info = window.attitudeDemo.replay.info;
     window.attitudeDemo.replay.stop();
