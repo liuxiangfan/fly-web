@@ -90,6 +90,9 @@ const launchBrowser = async () => {
         headless: "new",
         // CI 冷启动（新建 profile、磁盘慢）可能超过 puppeteer 默认的 30 s WS 超时
         timeout: 60000,
+        // 2 vCPU runner 上开新标签页偶发超过 puppeteer 默认的 180 s 协议超时
+        // （Windows CI 实测 `Target.createTarget timed out` → 被门禁判为基础设施失败）
+        protocolTimeout: 300000,
         userDataDir: dir,
         args: [
           "--no-sandbox",
@@ -201,7 +204,7 @@ const newPage = async () => {
         await page.goto(APP_URL, { waitUntil: "domcontentloaded", timeout: 20000 });
         await page.waitForFunction(
           () => document.getElementById("fps")?.textContent !== "-- fps",
-          { timeout: 30000 },
+          { timeout: 60000 },
         );
       } catch { /* 让具体用例自己的 waitFor 报更准确的失败 */ }
     }
@@ -219,7 +222,7 @@ try {
   // 等待真实仿真推进（rAF）——隐藏标签页会冻结，headless 新模式下正常运行
   await page.waitForFunction(
     () => parseFloat((document.getElementById("clock")?.textContent ?? "").replace("t = ", "")) > 2,
-    { timeout: 30000 }, // 软件渲染（swiftshader）下 CI 的首帧可能很慢，给足余量
+    { timeout: 60000 }, // 软件渲染（swiftshader）下 CI 的首帧可能很慢，给足余量
   );
   if (runApp) {
   const boot = await page.evaluate(() => {
@@ -1416,7 +1419,7 @@ try {
   });
   await page.waitForFunction(
     () => (document.getElementById("batch-status")?.textContent ?? "").startsWith("完成"),
-    { timeout: 120000 },
+    { timeout: 240000 }, // 慢 runner 上 10 种子 × 10 s 会跑上几分钟
   );
   const batch = await page.evaluate(() => ({
     rows: document.querySelectorAll("#batch-body tr").length,

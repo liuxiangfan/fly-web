@@ -3178,7 +3178,17 @@ function updateMetricsTable(): void {
    ========================================================================== */
 let batchRunning = false;
 /** Worker 多久没有任何消息就判为卡死（心跳间隔 2 s，留足余量） */
-const WORKER_STALL_MS = 15_000;
+/**
+ * 批量 Worker 的停滞看门狗。
+ *
+ * 为什么是 60 s 而不是 15 s：Worker 里每个种子是**同步**跑完的，单线程下定时器在
+ * 一次长跑期间根本发不出来——也就是说「下一条 progress」要等当前种子算完。
+ * 快机器上 10 s 仿真约 1 s，15 s 窗口够用；但 2 vCPU 的 CI runner（与 WebGL 主循环抢 CPU）
+ * 上单个种子就可能超过 15 s，于是**慢机器会被误判成「Worker 卡死」并静默回退主线程**
+ * （Windows CI 实测：界面结果正确、但 `batchMode()` 变成 `main`，与「Worker 路径失败」无法区分）。
+ * 60 s 仍然能把真正死掉的 Worker（一句消息都不发）判出来，只是不再惩罚慢硬件。
+ */
+const WORKER_STALL_MS = 60_000;
 
 /** 从当前实例提取完整算法配置（批量评测的输入快照） */
 function tuningOf(e: Estimator): EstimatorTuning {
