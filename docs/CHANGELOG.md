@@ -77,7 +77,13 @@
   用 Computer Use 驱动对话框把蓝牙无线电从关打开（WinRT 复核 state=On）、OS 对该设备地址的授权本身就是 Allow，
   但选择器两次都报「找不到兼容设备」，且 PnP 里今天没有任何新的 arrival（对照活跃键盘有 lastConnected）。
   → 没有产生任何 30 min 真机报告，任务书 9.16 记录全过程，**不伪造**。
-- **仍缺证据**：真机串口/BLE 各 30 min（缺硬件/模块不在广播）；Windows CI 连续 5 次；
+- **Windows CI 两轮实跑（10 次全失败，但失败点每次不同）**：`windows-latest` 是 2 vCPU + swiftshader，
+  跑不动这套 91 项 WebGL 全量套件——`Target.createTarget timed out`、不同位置的 `waitForFunction` 超时
+  （8/15/30/240 s）。同一提交在本机 Windows 连续 5 次 91/91、在 Ubuntu CI 连续 5 次 91/91。
+  期间修掉一个**真缺陷**：批量 Worker 的停滞看门狗 15 s 太短——Worker 里单个种子是同步跑完的，
+  单线程下定时器发不出消息，2 vCPU 上会被误判「卡死」并**静默回退主线程**（慢机器拿不到 Worker 加速）；
+  改为 60 s。冒烟侧补 `protocolTimeout=300 s`、首帧等待 30→60 s、批量等待 120→240 s、万向节脉冲环改状态等待。
+- **仍缺证据**：真机串口/BLE 各 30 min（缺硬件/模块不在广播）；Windows CI 连续 5 次（环境容量，见任务书 9.17）；
   全部 JS 的 10% 体积余量（现 262/272 KB）；PR 合并/部署后 smoke/回滚演练。
   这些在任务书 9.15 列为未达标，**不写「各维度满分」**。
 

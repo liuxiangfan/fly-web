@@ -4231,12 +4231,20 @@ try {
       if (settled > 89.5) break;
     }
     const late = document.getElementById("gimbal-readout").textContent;
-    const halo = g.group.children.find(
-      (c) => c.type === "Mesh" && c.geometry.type === "TorusGeometry" &&
-        c.material.color.getHexString() === "f85149",
-    );
-    // 脉冲环由 setLockVisual 在每 0.1 s 的 UI 块里驱动：再等一拍让它跟上
-    await new Promise((r) => setTimeout(r, 300));
+    const findHalo = () =>
+      g.group.children.find(
+        (c) => c.type === "Mesh" && c.geometry.type === "TorusGeometry" &&
+          c.material.color.getHexString() === "f85149",
+      );
+    // 脉冲环由 setLockVisual 在每 0.1 s 的 UI 块里驱动：**等它真的亮起来**，
+    // 而不是固定睡 300 ms——2 vCPU 的 CI runner 上 UI 块可能晚于 300 ms（Windows CI 实测
+    // 出现过「其余全对、只有脉冲环=false」的假失败）。
+    let halo = findHalo();
+    const haloDeadline = performance.now() + 8000;
+    while (performance.now() < haloDeadline && !(halo && halo.visible)) {
+      await new Promise((r) => setTimeout(r, 100));
+      halo = findHalo();
+    }
     return {
       instant,
       settled,
