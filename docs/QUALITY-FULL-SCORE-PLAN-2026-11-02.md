@@ -686,6 +686,13 @@ node scripts/soak.mjs --batch --seconds=120
     时钟 0.5→2.0 s；评测表 5 行；canvas=true；控制台错误 0
   ```
   报告：`docs/generated/postdeploy-566086bea469.json`。「线上页面可显示 build commit」这一条因此**有实际证据**。
+- **第二条部署链复核**：`master` 上的文档提交 `3c89ce3` 再次触发部署（run `41545893765`，verify+deploy 双绿），
+  线上 smoke 复验 PASS：`构建标识 3c89ce35162a（期望 3c89ce3）；页脚「3c89ce35162a · 2026-11-02 23:36:56 UTC」；
+  时钟 0.5→2.0 s；评测表 5 行；canvas=true；控制台错误 0`（`docs/generated/postdeploy-3c89ce3.json`）。
+  说明「每次 push master 都会重新部署并被验证」这条链路是通的，不是一次性巧合。
+- **顺手修掉一个本地门禁假失败**：`core.autocrlf=true` 的 Windows 工作树会把 `index.html` 检出成 CRLF，
+  而 doccheck 对基准数字块做**逐字节**比较 → 本地 `npm run check` 假红（CI 的 Linux 是 LF，所以一直没暴露）。
+  新增 `.gitattributes`（`* text=auto eol=lf`，二进制文件标注 binary），本地与 CI 的行尾从此一致。
 - **回滚演练（干跑）**：从 `origin/master` 拉出临时分支，对合并提交 `git revert -m 1` —— **无冲突**，
   回滚后的代码 `npx tsc --noEmit` 通过、`npm run build` 成功（主包 190 KB），演练后删除临时分支、仓库无残留。
   线上回滚命令与干跑一致：
