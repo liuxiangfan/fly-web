@@ -22,8 +22,10 @@
 > `soak --batch --seconds=120` 通过（堆增长 +10.5 MB / 峰值增量 10.5 MB / 线性趋势 +5.3 MB），报告带 commit·dist·浏览器·时间窗溯源。
 > **冒烟分片与 CI**：`SMOKE_SHARD=app|devices`（72 + 19 = 91，两片各自 0 FAIL）；
 > `scripts/ci-run-smoke.mjs` 自起 preview → 探活 200 → 连跑 N 次（任何 FAIL/warning 判失败）；
-> `.github/workflows/ci.yml`：gate 与两片冒烟自动跑，**Ubuntu + Windows 各连续 5 次**用手动 `workflow_dispatch`
-> （私有仓库配额不挂在每次 push 上）；浏览器候选路径补齐 Linux。
+> `.github/workflows/ci.yml`：gate 与两片冒烟自动跑；稳定性验收走专用分支（`ci-stability` / `ci-stability-win`，
+> 因为 `workflow_dispatch` 只认默认分支，而 5×冒烟不该挂在每次 push 上）。**Ubuntu 已实测连续 5 次全绿**
+> （run `41492896547`，5×91 PASS / 0 FAIL / 0 warning；PR #1 的 gate + 两片也全绿）；Windows 的同一作业已就绪待跑。
+> 浏览器候选路径补齐 Linux。
 > **视觉验收**绑定提交 `e67f551`（dist `d7356bc1443a10c4`）：桌面 1440×900 / 窄屏 390×844 / 文档 1440×900 /
 > 打印 794×1123 两组共六张，路径·尺寸·sha256 见任务书 9.13。
 > **仍未做**：真机串口/BLE 各 30 min、CI 的远端执行结果（workflow 已就绪，需手动触发一次）、
