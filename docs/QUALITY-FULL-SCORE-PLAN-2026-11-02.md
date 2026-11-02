@@ -636,7 +636,7 @@ node scripts/soak.mjs --batch --seconds=120
 
 | 未达成项 | 现状 | 为什么不能算满分 |
 |---|---|---|
-| 真机 30 min（串口/BLE，拔插/离开范围/休眠/复位） | **未做**（无可控硬件窗口） | 第 6.3 节明确要求真机证据；mock 不能顶替 |
+| 真机 30 min（串口/BLE，拔插/离开范围/休眠/复位） | **未完成**；本机硬件探测与自动化尝试结果见 9.16 | 第 6.3 节明确要求真机证据；mock 不能顶替 |
 | ~~Ubuntu CI 连续 5 次~~ | **已达成**：run `41492896547`，Ubuntu 连续 5 次 91 PASS / 0 FAIL / 0 warning | — |
 | Windows CI 连续 5 次 | **未达成**：已在 `windows-latest` 实跑（run `41497738131`），5 次全部失败，原因见下 | 第 6.4 节要求两个系统各 5 次；Windows **本地**已连续 5 次全绿，CI 环境不绿 |
 | 视觉证据绑定当前 commit | **已做**：见 9.13（六张截图绑定 `e67f551` 的 dist `d7356bc1443a10c4`，附 sha256） | — |
@@ -657,3 +657,35 @@ node scripts/soak.mjs --batch --seconds=120
 已可用实测输出复核；但上表五项缺证据（其中体积余量是实打实的未达标），因此**只能写
 「按本轮证据已达可复核的高质量水准」，不能写「各维度满分」**。
 
+### 9.16 真机验收：硬件探测与自动化边界（2026-11-02 实测）
+
+**本机实际存在的硬件（PowerShell/PnP 实测）**
+
+- **串口：没有可用设备。** `Win32_SerialPort` / PnP 里没有任何 USB 串口桥（CP210x / CH340 / FTDI / CDC 均为空）；
+  仅有的 `COM12` / `COM13` 是「蓝牙链接上的标准串行」的**残留 RFCOMM 端点**，`SerialPort.Open()` 报
+  「端口不存在」。→ **串口 30 min 在这台机器上无法执行**（缺硬件，不是缺脚本）。
+- **BLE：有一个已配对的 HM-10 模块**（`FriendlyName=HMSoft`，`InstanceId=BTHLE\DEV_4C2498B48BDD\…`，
+  `Status=OK`、`Present=True`，上次 Windows 侧连接时间 2026-10-04）。
+  → BLE 走 Web Bluetooth，**设备选择器是浏览器原生对话框**，puppeteer/CDP 无法代选；
+  原点一次「连接 BLE IMU」后必须由人选择设备。
+
+**为此新增的真机长稳脚本**：`scripts/hw-soak.mjs`（`npm run hw:soak -- --kind=ble --minutes=30`）
+
+- 有头 Chrome + 固定 profile 启动，自动点「连接 BLE IMU / 连接真实 IMU」把系统对话框弹出来（只差人选设备）；
+- 连接成功后全自动：每 2 s 采样（帧数/字节/重连/端口/清理/状态行），按 25% / 55% / 75% 三个时间点
+  用 `pnputil /disable-device` **关闭本机蓝牙无线电 8 s / 8 s / 20 s** 模拟「离开范围」与「长断链」（软件代理，
+  报告里标 `simulated: "radio-off"`）；串口模式则如实标注「拔插/休眠/复位需人工」；
+- 结束时自动断开并断言 `openPorts=0 / pendingPortCleanup=0`；报告带 `commit / distHash / 浏览器版本 / 起止时间`。
+
+**实际尝试（2026-11-02 23:5x）**：`node scripts/hw-soak.mjs --kind=ble --minutes=0.05 --out=.audit-smoke/hw-ble-probe.json`
+→ 脚本正常起 preview / 有头 Chrome、自动点击连接、抛出系统设备对话框，但 **180 s 内无人选择设备**，
+按设计超时并写出失败现场（`failure: "180 s 内没有建立连接（设备选择器需要人工点击；或设备未上电/未配对）"`）。
+本机报告：`.audit-smoke/hw-ble-probe.json`。**没有产生任何 30 min 真机报告，也不声称有。**
+
+**需要硬件窗口才能完成的三步**（每步都要求人）：
+
+1. 站到机器前，执行 `npm run hw:soak -- --kind=ble --minutes=30`，在弹出的系统对话框里选 `HMSoft`；
+   期间脚本会三次自动关闭/恢复蓝牙无线电（会短暂影响本机蓝牙耳机/键鼠，属预期）。
+2. 串口侧需要接上真实 IMU（USB-TTL 或飞控转发），`npm run hw:soak -- --kind=serial --minutes=30 --baud=…`，
+   并在中途**人工拔插一次**、**让主机休眠再唤醒一次**、**给设备复位一次**（脚本会把人工事件时间点标出来）。
+3. 把两份 JSON 放到 `docs/generated/` 并在本节登记（含 commit / distHash / 浏览器版本）。

@@ -21,6 +21,7 @@
     "smoke:app": "node scripts/ci-run-smoke.mjs --shard=app --runs=1",
     "smoke:devices": "node scripts/ci-run-smoke.mjs --shard=devices --runs=1",
     "smoke:stability": "node scripts/ci-run-smoke.mjs --shard=all --runs=5",
+    "hw:soak": "node scripts/hw-soak.mjs",
     "soak": "node scripts/soak.mjs",
     "budget": "node scripts/distbudget.mjs"
   },
