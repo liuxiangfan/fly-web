@@ -127,6 +127,33 @@ if (R["accel-six-face"]) {
 }
 
 /* --------------------------------------------------------------------------
+   配置 ↔ 正文关系（复核 8）：正文里的「30 s / 12 Hz / 120°/s / 6 面」以前是**手写常量**，
+   把生成器改成 20 s、7 Hz 再重跑，"渲染结果 == 存档"仍然通过。现在正文由配置渲染，
+   这里再把配置本身核对一遍：缺字段/零值/自相矛盾（采样率高于参考率）都要报错。
+   -------------------------------------------------------------------------- */
+function requirePositiveConfig(id: string, keys: string[]): void {
+  const cfg = (R[id]?.config ?? {}) as Record<string, unknown>;
+  for (const k of keys) if (!(isFiniteNum(cfg[k]) && Number(cfg[k]) > 0)) problems.push(`${id}.config.${k} 必须为正有限数：${String(cfg[k])}`);
+}
+if (R["kalman-consistency-30s"]) requirePositiveConfig("kalman-consistency-30s", ["durationSec"]);
+if (R["coning-sweep"]) {
+  requirePositiveConfig("coning-sweep", ["freqHz", "ampDps", "durationSec", "refHz"]);
+  const cfg = R["coning-sweep"].config as Record<string, number>;
+  const pts = R["coning-sweep"].points as Array<{ rateHz: number }> | undefined;
+  if (Array.isArray(pts) && isFiniteNum(cfg.refHz)) {
+    for (const p of pts) if (!(isFiniteNum(p.rateHz) && p.rateHz > 0 && p.rateHz <= cfg.refHz)) {
+      problems.push(`coning-sweep@${String(p.rateHz)} 采样率非法（应 ≤ 参考率 ${cfg.refHz}）`);
+    }
+  }
+}
+// accel-six-face：面数与残差条数必须与正文宣称的「6 面」一致，且噪声/种子合法
+if (R["accel-six-face"]) {
+  const cfg = (R["accel-six-face"].config ?? {}) as Record<string, unknown>;
+  if (!(isFiniteNum(cfg.noiseMs2) && Number(cfg.noiseMs2) > 0)) problems.push(`accel-six-face.config.noiseMs2 必须为正有限数：${String(cfg.noiseMs2)}`);
+  if (!Number.isSafeInteger(cfg.seed)) problems.push(`accel-six-face.config.seed 须为整数：${String(cfg.seed)}`);
+}
+
+/* --------------------------------------------------------------------------
    严格 schema：每条记录必须自带 **配置 + 样本量/时间窗 + 指标** 三件套。
    旧实现只对 5 条已知 id 做范围检查——新增记录、或把 records 换成数组/字符串、
    把指标删空，都能蒙过去（复核 6.3）。

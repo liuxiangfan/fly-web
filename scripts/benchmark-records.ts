@@ -171,19 +171,25 @@ export function renderBenchmarkBlock(recordsIn: Record<string, unknown>): string
         `稳态 P95 <span class="mono">${fmt(kalmanRow?.steadyRmseP95)}°</span></li>`,
     );
   }
-  const k = R["kalman-consistency-30s"]?.metrics as Record<string, number> | undefined;
+  const kRec = R["kalman-consistency-30s"] as Record<string, unknown> | undefined;
+  const k = kRec?.metrics as Record<string, number> | undefined;
   if (k) {
+    // 时长同样取自记录配置：正文写死 30 s 时，把生成器改成 20 s 再重跑也能"通过"（复核 8）
+    const kDur = Number((kRec?.config as Record<string, number> | undefined)?.durationSec ?? 0);
     rows.push(
-      `<li><b>卡尔曼一致性</b>（30 s）：姿态 NEES <span class="mono">${fmt(k.neesThetaMean)}</span>（自由度 3）、` +
+      `<li><b>卡尔曼一致性</b>（${kDur} s）：姿态 NEES <span class="mono">${fmt(k.neesThetaMean)}</span>（自由度 3）、` +
         `重力 NIS <span class="mono">${fmt(k.nisAccelMean)}</span>、` +
         `重力接受率 <span class="mono">${fmt(k.accelAcceptPct, 1)}%</span></li>`,
     );
   }
-  const pts = R["coning-sweep"]?.points as Array<{ rateHz: number; errDeg: number }> | undefined;
+  const cRec = R["coning-sweep"] as Record<string, { freqHz?: number; ampDps?: number; durationSec?: number } | number | unknown[]> | undefined;
+  const pts = cRec?.points as Array<{ rateHz: number; errDeg: number }> | undefined;
   if (pts) {
+    // 圆锥剧本的激励（频率/幅值/时长）也必须来自记录：写死 12 Hz / 120°/s 时改生成器测不出（复核 8）
+    const cCfg = (cRec?.config ?? {}) as Record<string, number>;
     const sorted = [...pts].sort((a, b) => b.rateHz - a.rateHz);
     rows.push(
-      `<li><b>圆锥误差-采样率</b>（12 Hz / 120°/s）：` +
+      `<li><b>圆锥误差-采样率</b>（${fmt(cCfg.freqHz, 0)} Hz / ${fmt(cCfg.ampDps, 0)}°/s，${fmt(cCfg.durationSec, 0)} s，以 ${fmt(cCfg.refHz, 0)} Hz 为参考）：` +
         sorted.map((p) => `${p.rateHz} Hz <span class="mono">${fmt(p.errDeg, 3)}°</span>`).join(" → ") +
         `——误差随采样率下降而单调上升</li>`,
     );
@@ -195,11 +201,15 @@ export function renderBenchmarkBlock(recordsIn: Record<string, unknown>): string
         `<span class="mono">${fmt(w.questErrDeg, 6)}°</span>（1e-12 量级）</li>`,
     );
   }
-  const a = R["accel-six-face"]?.metrics as Record<string, number> | undefined;
+  const aRec = R["accel-six-face"] as Record<string, unknown> | undefined;
+  const a = aRec?.metrics as Record<string, number> | undefined;
   if (a) {
+    // 「几面」取自记录（合成样本数 / 6 面），不再写死
+    const aCfg = (aRec?.config ?? {}) as Record<string, number>;
+    const faces = Number.isFinite(a.faces) ? a.faces : Number.isFinite(aCfg.faces) ? Number(aCfg.faces) : 6;
     rows.push(
       `<li><b>六面加计校准恢复</b>：残差 RMS x/y/z = <span class="mono">${fmt(a.rmseX, 4)}</span> / ` +
-        `<span class="mono">${fmt(a.rmseY, 4)}</span> / <span class="mono">${fmt(a.rmseZ, 4)}</span> m/s²（6 面）</li>`,
+        `<span class="mono">${fmt(a.rmseY, 4)}</span> / <span class="mono">${fmt(a.rmseZ, 4)}</span> m/s²（${faces} 面）</li>`,
     );
   }
   return [BENCH_BLOCK_BEGIN, `<ul class="bench-numbers">`, ...rows, `</ul>`, BENCH_BLOCK_END].join("\n");

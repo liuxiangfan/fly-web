@@ -12,10 +12,10 @@
  */
 import type { ImuParams } from "./imu";
 import type { MagCalibration } from "./magcal";
-import { conditionNumber3, type AccelCalibration } from "./accelcal";
-
-/** 标定矩阵的条件数上限（刻度/交叉轴矩阵的真实条件数只有个位数，50 已非常宽松） */
-export const MATRIX_MAX_COND = 50;
+import type { AccelCalibration } from "./accelcal";
+import { calibrationProblems, copyCalibration, isRecord, isFiniteNumber } from "./calibration-validation";
+import { scenarios } from "./scenarios";
+export { calibrationProblems, MATRIX_MAX_COND } from "./calibration-validation";
 import type { V3 } from "./quat";
 import { qFromAxisAngle, qId, RAD, type Quat } from "./quat";
 import { mulberry32 } from "./rng";
@@ -233,67 +233,151 @@ export interface ConfigProblem {
   message: string;
 }
 
-/** 校验配置；只报告问题，不抛异常，方便 UI 逐项提示 */
-export function validateExperimentConfig(c: ExperimentConfig): ConfigProblem[] {
-  const problems: ConfigProblem[] = [];
-  const finite = (path: string, v: number, min = -Infinity, max = Infinity): void => {
-    if (!Number.isFinite(v)) problems.push({ path, message: `不是有限数：${v}` });
-    else if (v < min || v > max) problems.push({ path, message: `超出范围 [${min}, ${max}]：${v}` });
+/** 界面「解算频率」下拉的全部档位（UI 可表达的取值就是白名单）。 */
+export const SOLVE_RATE_CHOICES = [500, 250, 125, 100, 50] as const;
+
+/**
+ * 档案里存在、但**界面上没有对应控件**的顶层字段。
+ *
+ * 它们不参与「导入后逐字段一致」的往返比较（界面无法表达，比较必然失败），
+ * 导入提示必须把它们列为「本次未恢复」。新增字段时要么在界面上接一个控件，
+ * 要么加进这个清单——不能让导入"成功"却悄悄换了一份配置。
+ */
+export const ARCHIVE_IGNORED_KEYS = ["durationSec", "steadyFromSec", "autoCoarseAlign"] as const;
+
+/**
+ * 界面无法表达的取值：导入必须**拒绝**，而不是解析成功后静默改写。
+ * 只列出「schema 允许、界面做不到」的组合；界面能调的范围由 apply 后的读回比较兜底。
+ */
+export function archiveExpressibilityProblems(cfg: ExperimentConfig): ConfigProblem[] {
+  const out: ConfigProblem[] = [];
+  if (cfg.initialAttitude?.kind === "fixed-axis") {
+    out.push({ path: "initialAttitude.kind", message: "界面只支持 level / random；固定轴初始姿态只能由脚本/runner 使用" });
+  }
+  for (const id of Object.keys(cfg.estimators ?? {}) as EstimatorId[]) {
+    if (cfg.estimators[id]?.enabled === false) {
+      out.push({ path: `estimators.${id}.enabled`, message: "界面不允许关闭单个算法（五种算法始终同时运行）" });
+    }
+  }
+  return out;
+}
+
+/**
+ * 档案 → 界面 → 读回 的往返比较：返回不一致的字段路径（最多 8 条）。
+ *
+ * 为什么要读回比较：控件的 min/max/step 是"界面真相"，档案里的 999999 会被
+ * 滑块夹到 5，333 Hz 会被下拉回落成 500 Hz。旧实现解析成功后直接 apply，
+ * 用户看到「已导入」，实际跑的是另一份配置（复核反例）。现在导入流程在提交前
+ * 用本函数核对，不一致就回滚并报具体字段。
+ */
+export function archiveRoundTripProblems(want: ExperimentConfig, got: ExperimentConfig): ConfigProblem[] {
+  const out: ConfigProblem[] = [];
+  const skip = new Set<string>(ARCHIVE_IGNORED_KEYS);
+  const fmt = (v: unknown): string => {
+    if (v === undefined) return "缺失";
+    try { return JSON.stringify(v); } catch { return String(v); }
   };
-  if (!Number.isInteger(c.schemaVersion) || c.schemaVersion < 1) {
-    problems.push({ path: "schemaVersion", message: `非法 schemaVersion：${c.schemaVersion}` });
-  }
-  if (!Number.isFinite(c.seed)) problems.push({ path: "seed", message: `非法 seed：${c.seed}` });
-  if (!c.scenario) problems.push({ path: "scenario", message: "缺少 scenario" });
-  finite("durationSec", c.durationSec, 0.1, 24 * 3600);
-  finite("solveRateHz", c.solveRateHz, 1, 1000);
-  for (const [k, v] of Object.entries(c.imu)) finite(`imu.${k}`, v as number, 0, 1e6);
-  for (const id of Object.keys(c.estimators) as EstimatorId[]) {
-    const t = c.estimators[id];
-    if (!t) {
-      problems.push({ path: `estimators.${id}`, message: "缺少算法配置" });
-      continue;
+  const walk = (a: unknown, b: unknown, path: string): void => {
+    if (out.length >= 8) return;
+    if (typeof a === "number" && typeof b === "number") {
+      const tol = 1e-9 * Math.max(1, Math.abs(a), Math.abs(b));
+      if (!Number.isFinite(a) || !Number.isFinite(b) || Math.abs(a - b) > tol) {
+        out.push({ path, message: `档案 ${a} → 导入后 ${b}（界面会改写这个值）` });
+      }
+      return;
     }
-    finite(`estimators.${id}.params`, 0);
-    if (!Number.isFinite(t.gateDeg) || t.gateDeg <= 0) problems.push({ path: `estimators.${id}.gateDeg`, message: "门控角须为正" });
-    if (!Number.isFinite(t.gateMagPct) || t.gateMagPct <= 0) problems.push({ path: `estimators.${id}.gateMagPct`, message: "幅度门控须为正" });
-    for (const [k, v] of Object.entries(t.params)) finite(`estimators.${id}.params.${k}`, v, 0, 1e6);
-  }
-  if (c.initialAttitude.kind === "fixed-axis") {    const a = c.initialAttitude.axis;
-    if (!a || !a.every(Number.isFinite) || Math.hypot(a[0], a[1], a[2]) < 1e-9) {
-      problems.push({ path: "initialAttitude.axis", message: "固定轴偏差需要非零有限轴" });
+    if (Array.isArray(a) || Array.isArray(b)) {
+      if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) {
+        out.push({ path, message: `档案 ${fmt(a)} → 导入后 ${fmt(b)}` });
+        return;
+      }
+      for (let i = 0; i < a.length; i++) walk(a[i], b[i], `${path}[${i}]`);
+      return;
     }
-    finite("initialAttitude.angleDeg", c.initialAttitude.angleDeg ?? NaN, 0, 180);
-  }
-  if (c.ab && c.ab.mode !== "same-start" && c.ab.mode !== "online-fork") {
-    problems.push({ path: "ab.mode", message: `未知 A/B 起跑方式：${String(c.ab.mode)}` });
-  }
-  if (c.magModel !== "diag" && c.magModel !== "full") {
-    problems.push({ path: "magModel", message: `未知磁校准模型：${String(c.magModel)}` });
-  }
-  if (c.magCalibration) {
-    const kind = c.magCalibration.kind ?? "diag";
-    if (kind !== c.magModel) {
-      problems.push({
-        path: "magModel",
-        message: `模型与校准对象不一致：magModel=${c.magModel}，magCalibration.kind=${kind}`,
-      });
+    if (a && b && typeof a === "object" && typeof b === "object") {
+      const keys = new Set([...Object.keys(a as object), ...Object.keys(b as object)]);
+      for (const k of keys) walk((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k], path ? `${path}.${k}` : k);
+      return;
     }
-    finite("magCalibration.field", c.magCalibration.field, 1e-6);
-    problems.push(...magCalibrationProblems(c.magCalibration));
-  } else if (c.magCalibrationApplied) {
-    // 「已应用」却没有模型 = 界面显示已校准、实际什么都没做（复核反例：Applied=true 而模型被静默丢掉）
-    problems.push({ path: "magCalibrationApplied", message: "标记为已应用，但 magCalibration 为空" });
+    if (a !== b) out.push({ path, message: `档案 ${fmt(a)} → 导入后 ${fmt(b)}` });
+  };
+  const keys = new Set([...Object.keys(want), ...Object.keys(got)]);
+  for (const k of keys) {
+    if (skip.has(k)) continue;
+    walk((want as unknown as Record<string, unknown>)[k], (got as unknown as Record<string, unknown>)[k], k);
   }
-  if (c.accelCalibration) {
-    problems.push(...accelCalibrationProblems(c.accelCalibration));
-  } else if (c.accelCalibrationApplied) {
-    problems.push({ path: "accelCalibrationApplied", message: "标记为已应用，但 accelCalibration 为空" });
+  return out;
+}
+
+/** 原始字段契约：当前版递归 required；旧版仅验已声明的白名单字段。 */
+export function experimentConfigProblems(raw: unknown, required = true): ConfigProblem[] {
+  const out: ConfigProblem[] = [];
+  if (!isRecord(raw)) return [{ path: "config", message: "须为对象" }];
+  const add = (path: string, message: string): void => { out.push({ path, message }); };
+  const check = (o: Record<string, unknown>, k: string, path: string, ok: (v: unknown) => boolean, must = false): void => {
+    if (o[k] === undefined && !must) return;
+    if (!ok(o[k])) add(path, o[k] === undefined ? "缺少必需字段" : "字段类型、枚举或范围不合法");
+  };
+  const num = (min = 0, max = 1e6) => (v: unknown): boolean => isFiniteNumber(v) && v >= min && v <= max;
+  const positive = (v: unknown): boolean => isFiniteNumber(v) && v > 0 && v <= 1e6;
+  const triple = (v: unknown): v is number[] => Array.isArray(v) && v.length === 3 && v.every(isFiniteNumber);
+  const bool = (v: unknown): boolean => typeof v === "boolean";
+  const entry = (o: Record<string, unknown>, k: string, path: string, must = false): Record<string, unknown> | null => {
+    check(o, k, path, isRecord, must); return isRecord(o[k]) ? o[k] : null;
+  };
+  check(raw, "schemaVersion", "schemaVersion", v => Number.isInteger(v) && (v as number) >= 1 && (v as number) <= EXPERIMENT_SCHEMA_VERSION, required);
+  // seed 直接进入 PRNG（`>>>0`）：小数/负数/超 32 位会被悄悄改语义，必须拦在解析阶段。
+  check(raw, "seed", "seed", v => Number.isSafeInteger(v) && (v as number) >= 0 && (v as number) <= 0xffffffff, required);
+  check(raw, "scenario", "scenario", v => typeof v === "string" && Object.prototype.hasOwnProperty.call(scenarios, v), required);
+  check(raw, "durationSec", "durationSec", num(0.1, 86400), required);
+  // 解算频率只有下拉里的五档；333 Hz 这类值界面无法表达，导入会回落成 500 Hz。
+  check(raw, "solveRateHz", "solveRateHz", v => (SOLVE_RATE_CHOICES as readonly number[]).includes(v as number), required);
+  check(raw, "magModel", "magModel", v => v === "diag" || v === "full", required);
+  check(raw, "magTargetUts", "magTargetUts", positive);
+  for (const k of ["magCalibrationApplied", "accelCalibrationApplied", "autoCoarseAlign"]) check(raw, k, k, bool);
+  // 手动目标角由三个 ±180° 滑块表达；超出范围会被控件夹住。
+  check(raw, "manualTargetDeg", "manualTargetDeg", v => triple(v) && (v as number[]).every(x => x >= -180 && x <= 180));
+  check(raw, "steadyFromSec", "steadyFromSec", v => v === null || num(0, 86400)(v));
+  const imu = entry(raw, "imu", "imu", required);
+  if (imu) for (const k of Object.keys(DEFAULT_IMU_PARAMS)) {
+    const optional = ["sensorBandwidthHz", "sensorDelaySkewMs", "sensorSampleHz"].includes(k);
+    check(imu, k, `imu.${k}`, num(), required && !optional);
   }
-  if (c.steadyFromSec !== undefined && c.steadyFromSec !== null) {
-    finite("steadyFromSec", c.steadyFromSec, 0, 24 * 3600);
+  const estimators = entry(raw, "estimators", "estimators", required);
+  if (estimators) for (const id of Object.keys(DEFAULT_ESTIMATOR_TUNING) as EstimatorId[]) {
+    const path = `estimators.${id}`, t = entry(estimators, id, path, required);
+    if (!t) continue;
+    for (const k of ["enabled", "magEnabled", "accelGate", "gateRecovery", "rampEnabled"]) check(t, k, `${path}.${k}`, bool, required);
+    check(t, "gateDeg", `${path}.gateDeg`, v => isFiniteNumber(v) && v > 0 && v <= 180, required);
+    check(t, "gateMagPct", `${path}.gateMagPct`, positive, required);
+    check(t, "magMode", `${path}.magMode`, v => v === "yaw" || v === "full", required);
+    check(t, "kalmanGate", `${path}.kalmanGate`, v => v === "angle" || v === "mahalanobis");
+    check(t, "kalmanChi2", `${path}.kalmanChi2`, positive);
+    check(t, "kalmanResetCov", `${path}.kalmanResetCov`, bool);
+    const params = entry(t, "params", `${path}.params`, required);
+    if (params) for (const k of Object.keys(DEFAULT_ESTIMATOR_TUNING[id].params)) check(params, k, `${path}.params.${k}`, num(), required);
   }
-  return problems;
+  const ia = entry(raw, "initialAttitude", "initialAttitude", required);
+  if (ia) {
+    check(ia, "kind", "initialAttitude.kind", v => v === "level" || v === "fixed-axis" || v === "random", required);
+    check(ia, "axis", "initialAttitude.axis", v => triple(v) && Math.hypot(...v) >= 1e-9, ia.kind === "fixed-axis");
+    check(ia, "angleDeg", "initialAttitude.angleDeg", num(0, 180), ia.kind === "fixed-axis");
+  }
+  const ab = entry(raw, "ab", "ab");
+  if (ab) check(ab, "mode", "ab.mode", v => v === "same-start" || v === "online-fork", true);
+  for (const [key, kind] of [["magCalibration", "mag"], ["accelCalibration", "accel"]] as const) {
+    if (raw[key] === undefined) { if (required && key === "magCalibration") add(key, "缺少必需字段（对象或 null）"); }
+    else if (raw[key] !== null) out.push(...calibrationProblems(kind, raw[key], key));
+  }
+  if (raw.magCalibration == null && raw.magCalibrationApplied === true) add("magCalibrationApplied", "已应用但模型为空");
+  if (raw.accelCalibration == null && raw.accelCalibrationApplied === true) add("accelCalibrationApplied", "已应用但模型为空");
+  if (isRecord(raw.magCalibration) && (raw.magCalibration.kind ?? (raw.magCalibration.matrix !== undefined ? "full" : "diag")) !== raw.magModel && (required || raw.magModel !== undefined)) add("magModel", "与 magCalibration.kind 不一致");
+  return out;
+}
+
+/** 校验配置只返回字段路径，不抛异常，与档案原始契约一致。 */
+export function validateExperimentConfig(c: ExperimentConfig): ConfigProblem[] {
+  return experimentConfigProblems(c);
 }
 
 /**
@@ -379,258 +463,18 @@ export function migrateExperimentConfig(raw: unknown): ExperimentConfig {
   return base;
 }
 
-function numTriple(v: unknown): V3 | null {
-  if (!Array.isArray(v) || v.length !== 3) return null;
-  if (!v.every((x) => typeof x === "number" && Number.isFinite(x))) return null;
-  return v as V3;
-}
-
-/** 宽松解析磁校准（用于深链/档案迁移）；结构不完整时返回 null，而不是半有效对象 */
+/** 原始模型先验证，合法时才复制；不清洗字段/元素或制造默认残差。 */
 export function parseMagCalibration(raw: unknown): MagCalibration | null {
-  if (!raw || typeof raw !== "object") return null;
-  const o = raw as Record<string, unknown>;
-  const field = typeof o.field === "number" && Number.isFinite(o.field) && o.field > 0 ? o.field : null;
-  const offset = numTriple(o.offset);
-  const scale = numTriple(o.scale);
-  if (!offset || !scale || field === null) return null;
-  const kind: MagCalModel = o.kind === "full" ? "full" : "diag";
-  const entry: MagCalibration = {
-    offset,
-    scale,
-    field,
-    residual: typeof o.residual === "number" && Number.isFinite(o.residual) ? o.residual : 0,
-    count: typeof o.count === "number" && Number.isFinite(o.count) ? o.count : 0,
-  };
-  if (kind === "full") {
-    const matrix = o.matrix;
-    if (!Array.isArray(matrix) || matrix.length !== 9 || !matrix.every((x) => typeof x === "number" && Number.isFinite(x))) {
-      return null;
-    }
-    entry.kind = "full";
-    entry.matrix = matrix as number[];
-  } else {
-    entry.kind = "diag";
-  }
-  // 验证结果与器件指纹一起往返（否则导入档案后「标定已过期」提示会消失）
-  if (o.validation && typeof o.validation === "object") {
-    const v = o.validation as Record<string, unknown>;
-    const residual = typeof v.residual === "number" && Number.isFinite(v.residual) ? v.residual : NaN;
-    const count = typeof v.count === "number" && Number.isFinite(v.count) ? v.count : 0;
-    const maxErrUt = typeof v.maxErrUt === "number" && Number.isFinite(v.maxErrUt) ? v.maxErrUt : NaN;
-    const ratio = typeof v.ratio === "number" && Number.isFinite(v.ratio) ? v.ratio : NaN;
-    if (Number.isFinite(residual)) {
-      entry.validation = { residual, count, maxErrUt, ratio };
-      const l = v.late;
-      if (l && typeof l === "object") {
-        const lr = l as Record<string, unknown>;
-        const lres = typeof lr.residual === "number" && Number.isFinite(lr.residual) ? lr.residual : NaN;
-        if (Number.isFinite(lres)) {
-          entry.validation.late = {
-            residual: lres,
-            count: typeof lr.count === "number" && Number.isFinite(lr.count) ? lr.count : 0,
-            maxErrUt: typeof lr.maxErrUt === "number" && Number.isFinite(lr.maxErrUt) ? lr.maxErrUt : NaN,
-            ratio: typeof lr.ratio === "number" && Number.isFinite(lr.ratio) ? lr.ratio : NaN,
-          };
-        }
-      }
-    }
-  }
-  if (o.fittedWith && typeof o.fittedWith === "object") {
-    const f = o.fittedWith as Record<string, unknown>;
-    const num = (x: unknown): number => (typeof x === "number" && Number.isFinite(x) ? x : 0);
-    entry.fittedWith = {
-      at: typeof f.at === "string" ? f.at : "",
-      crossAxis: num(f.crossAxis),
-      nonlin: num(f.nonlin),
-      noise: num(f.noise),
-      ...(f.magModel === "full" || f.magModel === "diag" ? { magModel: f.magModel } : {}),
-      // 磁模型参数也要进档案，否则导入后"标定基于旧模型"会误报
-      magNoise: num(f.magNoise),
-      hardIron: num(f.hardIron),
-      disturbMag: num(f.disturbMag),
-      magSoftIron: num(f.magSoftIron),
-      magQuantUts: num(f.magQuantUts),
-      ...(typeof f.magTargetUts === "number" && Number.isFinite(f.magTargetUts) ? { magTargetUts: f.magTargetUts } : {}),
-    };
-  }
-  // 结构合法性走**共用**校验（解析与配置校验同一套判据，不会出现"能导入但校验不过"）
-  return magCalibrationProblems(entry).length === 0 ? entry : null;
+  return isRecord(raw) && calibrationProblems("mag", raw).length === 0 ? copyCalibration("mag", raw) : null;
 }
-
-
-const VALID_FACES = new Set(["+x", "-x", "+y", "-y", "+z", "-z"]);
-/** 合法增益范围：真实器件的刻度/交叉轴只会是个位数百分比偏差（用来拦 1e-10I / 1000I） */
-const GAIN_MIN = 0.01;
-const GAIN_MAX = 100;
-const G_ACC = 9.80665;
-
-const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
-const det3 = (m: number[]): number =>
-  m[0] * (m[4] * m[8] - m[5] * m[7]) - m[1] * (m[3] * m[8] - m[5] * m[6]) + m[2] * (m[3] * m[7] - m[4] * m[6]);
-const meanGain = (m: number[]): number => Math.sqrt(m.reduce((a, v) => a + v * v, 0) / 3);
-/** 对称（允许器件安装项，但拒绝把非对称矩阵当合法校正结构） */
-function symmetricWithin(m: number[]): boolean {
-  const s = Math.max(...m.map(Math.abs), 1e-12);
-  return Math.abs(m[1] - m[3]) <= 1e-3 * s && Math.abs(m[2] - m[6]) <= 1e-3 * s && Math.abs(m[5] - m[7]) <= 1e-3 * s;
+export function parseAccelCalibration(raw: unknown): AccelCalibration | null {
+  return isRecord(raw) && calibrationProblems("accel", raw).length === 0 ? copyCalibration("accel", raw) : null;
 }
-/** 对称正定（Sylvester）：刻度矩阵必须正的，否则校正后出现镜像/反号（diag(-1,-1,1) 就是这种） */
-function isPositiveDefinite(m: number[]): boolean {
-  const [a, b, c, d, e, f, g, h, i] = m;
-  return a > 0 && a * e - b * d > 0 && a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g) > 0;
-}
-
-/**
- * 校准模型合法性（**解析与配置校验共用**；ROUND11 P1）。
- *
- * 只验「可逆 + det>0」不够：`diag(-1,-1,1)` 行列式为正、条件数也只有 3，却是**负定**结构——
- * 导入后粗对准航向整体翻转 180°。器件刻度矩阵必须**对称正定**且增益合理，
- * 所以这里按结构验：对称、正定、平均增益在 [0.01,100]、偏置/残差在物理量级内。
- * 两个模型共用一套判据，避免"能导入但校验不过"的两套标准。
- */
-export function calibrationProblems(
-  kind: "mag" | "accel",
-  cal: MagCalibration | AccelCalibration,
-  path = kind === "mag" ? "magCalibration" : "accelCalibration",
-): ConfigProblem[] {
-  const out: ConfigProblem[] = [];
-  const mag = kind === "mag" ? (cal as MagCalibration) : null;
-  const acc = kind === "accel" ? (cal as AccelCalibration) : null;
-  const full = mag ? (mag.kind ?? "diag") === "full" : false;
-  if (mag && !full) {
-    mag.scale.forEach((v, i) => {
-      if (!(v >= GAIN_MIN && v <= GAIN_MAX)) {
-        out.push({ path: `${path}.scale[${i}]`, message: `软铁缩放 ${v} 超出 [${GAIN_MIN}, ${GAIN_MAX}]` });
-      }
-    });
-  }
-  const mkey = `${path}.${mag ? "matrix" : "M"}`;
-  // ROUND12：full 模型**必须**带 matrix——旧实现把这段放进 `if (M)`，缺 matrix 时直接跳过，
-  // 于是"解析拒、校验过"两个标准并存
-  if (mag && full && (!mag.matrix || mag.matrix.length !== 9)) {
-    out.push({ path: mkey, message: "完整椭球模型缺少 matrix（9 个有限数）" });
-  }
-  const M = mag ? (full ? mag.matrix ?? null : null) : acc!.M;
-  if (M) {
-    if (M.length !== 9 || !M.every(isNum)) {
-      out.push({ path: mkey, message: "需要 9 个有限数" });
-    } else if (mag) {
-      // 磁椭球是**校正矩阵**：约定为对称正定
-      if (!symmetricWithin(M)) out.push({ path: mkey, message: "椭球矩阵不对称（不是合法校正结构）" });
-      if (!isPositiveDefinite(M)) out.push({ path: mkey, message: "椭球矩阵非正定（会出现镜像/反号校正）" });
-      if (!(meanGain(M) >= GAIN_MIN && meanGain(M) <= GAIN_MAX)) {
-        out.push({ path: mkey, message: `平均增益 ${meanGain(M).toPrecision(3)} 超出 [${GAIN_MIN}, ${GAIN_MAX}]` });
-      }
-      if (!(conditionNumber3(M) <= MATRIX_MAX_COND)) out.push({ path: mkey, message: "条件数过大（接近不可逆）" });
-    } else {
-      // 加计刻度矩阵**允许安装失准/交叉轴**（见 core/accelcal.ts 的测量模型），
-      // 因此不能套用"对称正定"。这里按本装置的结构验：对角为正且接近 1、交叉项受限、
-      // 行列式为正（不镜像）、条件数可控。
-      for (let i = 0; i < 3; i++) {
-        const d = M[i * 3 + i];
-        if (!(d > 0.2 && d < 5)) out.push({ path: mkey, message: `对角刻度 M[${i}][${i}]=${d} 不合理（应接近 1）` });
-      }
-      for (let i = 0; i < 3; i++) {
-        for (let j = 0; j < 3; j++) {
-          if (i !== j && !(Math.abs(M[i * 3 + j]) <= 0.5)) {
-            out.push({ path: mkey, message: `交叉轴项 M[${i}][${j}]=${M[i * 3 + j]} 过大（应 ≤0.5）` });
-          }
-        }
-      }
-      if (!(det3(M) > 0)) out.push({ path: mkey, message: "刻度矩阵行列式为负（镜像，不是合法校正）" });
-      if (!(conditionNumber3(M) <= MATRIX_MAX_COND)) out.push({ path: mkey, message: "条件数过大（接近不可逆）" });
-    }
-  }
-  if (mag) {
-    if (!mag.offset.every(isNum)) out.push({ path: `${path}.offset`, message: "硬铁偏移必须有限" });
-    else if (Math.hypot(...mag.offset) > 1e4) out.push({ path: `${path}.offset`, message: "硬铁偏移模长过大" });
-    if (!(mag.field > 0 && mag.field <= 1e5)) out.push({ path: `${path}.field`, message: `场强 ${mag.field} μT 不合理` });
-    if (!(mag.residual >= 0 && mag.residual <= 1)) out.push({ path: `${path}.residual`, message: `残差 ${mag.residual} 应为 0..1` });
-  } else {
-    if (!acc!.bias.every(isNum)) out.push({ path: `${path}.bias`, message: "偏置必须有限" });
-    else if (Math.max(...acc!.bias.map(Math.abs)) > 0.35 * G_ACC) {
-      // 与拟合路径同一门槛（core/accelcal.ts 的 ACCEL_MAX_BIAS_G）
-      out.push({ path: `${path}.bias`, message: "偏置超过 0.35g（单位或朝向错了）" });
-    }
-    if (!acc!.rmse.every((v) => v >= 0 && v <= 0.15 * G_ACC)) {
-      out.push({ path: `${path}.rmse`, message: "残差 RMS 应为 0..0.15g（与拟合门槛一致）" });
-    }
-    for (const f of acc!.faces) {
-      if (!VALID_FACES.has(f)) {
-        out.push({ path: `${path}.faces`, message: `未知朝向 ${String(f)}` });
-        break;
-      }
-    }
-    // 六面标定至少 4 个不同朝向才有可观性（与 calibrateAccel 同一条件）
-    if (new Set(acc!.faces).size < 4) {
-      out.push({ path: `${path}.faces`, message: `覆盖朝向不足（${new Set(acc!.faces).size} 个，至少 4 个）` });
-    }
-  }
-  const count = cal.count;
-  if (!Number.isInteger(count) || count < 4) {
-    out.push({ path: `${path}.count`, message: `样本数 ${count} 非法（至少 4）` });
-  }
-  return out;
-}
-
-/** 兼容入口：磁模型合法性 */
 export function magCalibrationProblems(cal: MagCalibration, path?: string): ConfigProblem[] {
   return calibrationProblems("mag", cal, path);
 }
-/** 兼容入口：加计模型合法性 */
 export function accelCalibrationProblems(cal: AccelCalibration, path?: string): ConfigProblem[] {
   return calibrationProblems("accel", cal, path);
-}
-
-export function parseAccelCalibration(raw: unknown): AccelCalibration | null {
-  if (!raw || typeof raw !== "object") return null;
-  const o = raw as Record<string, unknown>;
-  if (!Array.isArray(o.M) || o.M.length !== 9 || !o.M.every((x) => typeof x === "number" && Number.isFinite(x))) {
-    return null;
-  }
-  const bias = numTriple(o.bias);
-  const rmse = numTriple(o.rmse);
-  if (!bias || !rmse) return null;
-  // 不再把非法 face 静默过滤掉：过滤会让"坏输入"在解析后变成"看起来正常"（ROUND12）
-  if (o.faces !== undefined && (!Array.isArray(o.faces) || !o.faces.every((f) => typeof f === "string"))) {
-    return null;
-  }
-  const faces = Array.isArray(o.faces) ? (o.faces as AccelCalibration["faces"]) : [];
-  const cal: AccelCalibration = {
-    M: o.M as number[],
-    bias,
-    rmse,
-    count: typeof o.count === "number" && Number.isFinite(o.count) ? o.count : 0,
-    faces,
-  };
-  if (o.validation && typeof o.validation === "object") {
-    const v = o.validation as Record<string, unknown>;
-    cal.validation = {
-      meanNormErrMs2: typeof v.meanNormErrMs2 === "number" && Number.isFinite(v.meanNormErrMs2) ? v.meanNormErrMs2 : NaN,
-      maxNormErrMs2: typeof v.maxNormErrMs2 === "number" && Number.isFinite(v.maxNormErrMs2) ? v.maxNormErrMs2 : NaN,
-      heldOutFaces: typeof v.heldOutFaces === "number" && Number.isFinite(v.heldOutFaces) ? v.heldOutFaces : 0,
-    };
-  }
-  if (o.fittedWith && typeof o.fittedWith === "object") {
-    const f = o.fittedWith as Record<string, unknown>;
-    const num = (x: unknown): number => (typeof x === "number" && Number.isFinite(x) ? x : 0);
-    cal.fittedWith = {
-      at: typeof f.at === "string" ? f.at : "",
-      crossAxis: num(f.crossAxis),
-      nonlin: num(f.nonlin),
-      noise: num(f.noise),
-    };
-  }
-  // 方向误差（ROUND11：曾经在解析时丢失，档案往返后这两个字段消失）
-  if (cal.validation && o.validation && typeof o.validation === "object") {
-    const v = o.validation as Record<string, unknown>;
-    const num = (x: unknown): number | undefined =>
-      typeof x === "number" && Number.isFinite(x) ? x : undefined;
-    const md = num(v.meanDirErrDeg);
-    const xd = num(v.maxDirErrDeg);
-    if (md !== undefined) cal.validation.meanDirErrDeg = md;
-    if (xd !== undefined) cal.validation.maxDirErrDeg = xd;
-  }
-  return accelCalibrationProblems(cal).length === 0 ? cal : null;
 }
 
 /** 由 seed 生成初始姿态；random 用 20–35° 均匀球面轴（与历史行为一致，但可复现） */

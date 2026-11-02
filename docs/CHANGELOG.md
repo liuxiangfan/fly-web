@@ -6,6 +6,59 @@
 >
 > 新增一轮里程碑时：在本文件顶部加一节（倒序），并在 PROJECT-STATE 的里程碑索引表里加一行。
 
+## 2026-11-01 · 阻断项修复轮（第十二轮补遗：两轮独立复核的必须修项）
+
+- **浏览器门禁本身修好了**：`scripts/browser-smoke.mjs` 顶层的 `const URL` 遮蔽全局 URL 构造函数，
+  第 12 行的 `new URL("./trace-contract.mjs", …)` 直接抛 TDZ——整条冒烟在开浏览器之前就退出，
+  **0 项执行**却只报「冒烟异常」（`tsc`/`check`/`build` 全绿，掩盖得非常好）。应用地址常量改名 `APP_URL`；
+  自愈：新建标签页失败（`Target.createTarget` 会话丢失＝浏览器进程被回收）时重启浏览器并**重建共享页面**继续跑，
+  不再让一次偶发把后面几十项静默跳过。冒烟从「0 项」变成 90 项全部真实执行。
+- **串口释放事务**（两个长期失败的连接用例暴露的真问题）：
+  ① `TransportSession.dispose()` 的 false 结果**不再永久缓存**（close 因读锁失败 → 之后重试真的能关掉端口）；
+  ② `SerialTransportSession` 的 `cancel`/`read` 结束改为**有界等待**（驱动异常让 read 永不落定时不再永久卡在
+  「重连中」），并保留 reader/opened 供下一次按真实锁状态重试 close；③ 重连同一拍内短重试释放旧会话。
+  新增契约：close 失败可重试、旧 read 僵死仍有界返回、句柄复用（旧会话未释放时新会话拒绝 open、
+  旧会话迟到的 dispose 不碰新端口）。
+- **切源取消已排程重连**：掉线 → 1 s 后重连的窗口里切到 BLE/串口/回放，旧定时器会把旧链路接回来
+  （实测 `serial=true, ble=true` 双活、回放中 `serial=true`，端口/GATT 被隐藏占用）。新增
+  `cancelPendingReconnects()`（两侧取消 + 释放 pending 会话 + 清可复用句柄）在手动连接与回放导入时调用，
+  并给两个重连回调加「来源意图/对侧活跃」校验；冒烟新增永久反例：串口待重连 → 切 BLE → 再切回串口待重连 → 导入回放，以及反向的 BLE 待重连 → 连串口。
+- **回放时间轴口径合一**：时长改为**逐帧正间隔之和**（与积分同一条有效时间轴），
+  时间列有回退时不再出现 `played 0.22 s > duration 0.18 s`（末帧−首帧会被回退段骗小）；
+  「最快」档不再把 `Infinity` 写进持久预算，切回有限倍速后墙钟 `dt=0` 不会继续狂飙；
+  `advance` 与 `advanceWork` 混用直接抛错（两套状态机不允许交叉）。
+- **实验档案闭环**（最高优先级的档案缺陷）：
+  ① 导入前拒绝「界面无法表达」的取值（`initialAttitude.kind=fixed-axis`、`estimators.*.enabled=false`）；
+  ② apply 后**逐字段读回比较**，不一致就回滚原配置并列出字段（333 Hz 回落下拉、越界滑块被夹值都不再静默成功）；
+  ③ 界面没有独立控件的 `rampEnabled`/`kalmanChi2` 改为真正写回活实例（此前导入后即丢失）；
+  ④ 零样本统计量写 `null`（不再 NaN → JSON null → 自家解析器拒绝）；
+  ⑤ `restore` 必须为 `config-only`，`seed` 必须是非负安全整数且 ≤2³²−1，`solveRateHz` 必须属于下拉五档，
+   `manualTargetDeg` 必须在 ±180° 内；⑥ 新增 `archiveExpressibilityProblems` / `archiveRoundTripProblems`
+  纯函数（Node 可测），用户导入与自动化入口共用同一条提交事务。
+- **磁校准 kind 与矩阵一致**：`kind="diag"` 不再接受 matrix（校验层拒绝），`applyMagCalibration` 按 kind 分派，
+  未声明 kind 且带矩阵的旧档案按 `full` 解释（原先会被默认成 `diag` 却走矩阵路径）；
+  生产拟合提交前过同一把合法性尺子（拟合出 offset 20000 的模型现在会明说「无法应用」，而不是先应用、导出时才暴雷）。
+- **长稳门禁不再假绿**：heap 判决只有 ≥3 个实测点才跳过首个 warm-up 点（两点样本 `[10,200]` 原先算成 0 MB 增长并 PASS）；
+  批量 soak 必须跑满 3 批（原先只要求非空，短 soak 跑成 1 批也算通过）。
+- **门禁声明纳入机器校验**：PROJECT-STATE 顶部「最新一轮」原先在 `current` 区域之外，`161 PASS`/`88 PASS`
+  这类数字可以任意过期（把 161 改成 999 仍然全绿）。现在 current 区域从 H1 下开始，区域内新增
+  `<!-- verify: check=… contracts=yes status=yes smoke=… budget=… -->` 清单：check/冒烟/预算与实测值对齐，
+  `contracts`/`status` 两个开关与 package.json 的 `check` 链对齐，并禁止 current 区域出现任何未受校验的「N PASS」。
+- **doccheck 正文配置来源**：卡尔曼一致性写死的「30 s」、圆锥写死的「12 Hz / 120°/s」、六面写死的「6 面」
+  全部改为从记录 `config`/`metrics` 渲染，并新增配置健全性关系（时长/频率/幅值/参考率/噪声/种子为正、
+  采样率不超过参考率、面数一致）——改了生成器而正文留旧值，现在会失败。
+- **验收补遗（600 s 长稳 + 视觉）**：`soak --seconds=600` 的 batch 段（3/3 批、116 采样、堆 +4.5 MB）
+  与 reconnect 段（54 次断线全部逐段恢复、122 采样、堆 +16.0 MB / 上限 24、时钟 349 s）均通过，
+  报告独立保存；六类画面截图可判读（桌面 / 390px 窄屏 / 文档页 / 打印媒体 / 万向节锁视图 / 导出弹窗），
+  布局、表格、公式、打印隐藏外壳与弹窗排版均正常。真机 30 min 与跨时段校准仍缺硬件窗口。
+- **首屏瘦身**：引导课程（13 步文案 + 卡片状态机）从首屏挪成按需 chunk（点「开始」或按 G 才加载，
+  首次点击由捕获阶段处理器「先加载、再启动」，加载失败可重试并提示）；主包 gzip **106 → 100 KB**
+  （上限 108 KB，占用 93%），新增「引导课程 JS（按需 chunk）」独立上限并计入「全部 JS 合计 gzip」。
+  冒烟用例等待 chunk 加载后再逐步点击，避免把「异步加载」误判成「课程坏了」。
+- **runTrace 截断口径**：`maxSteps` 上限之后不再记步、不再计事件，到上限即停；
+  返回新增 `truncated` 与 `fullDurationSec`，`endSec` 变成「已记录的最后时刻」——
+  此前「截断的 steps + 全时长 endSec + 全程事件计数」三者混口径，外部按 endSec 核 schedule 会得到一个不存在的完整轨迹。
+
 ## 2026-11-01 · 门禁独立判定轮（第十二轮 S4 收尾）
 
 - **doccheck**：默认模式改为**真复算**（`buildBenchmarkRecords(true)` 只算秒级可重算的三条——

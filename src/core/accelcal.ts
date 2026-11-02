@@ -13,6 +13,8 @@
  * 只有完整 M 才能把它们一起收掉。文档页给出可搬运的推导与限制。
  */
 import type { V3 } from "./quat";
+import { calibrationProblems, ACCEL_MAX_BIAS_G, ACCEL_MAX_RMSE_G, MATRIX_MAX_COND as ACCEL_MAX_COND } from "./calibration-validation";
+export { ACCEL_MAX_BIAS_G, ACCEL_MAX_RMSE_G } from "./calibration-validation";
 
 export type AccelFace = "+x" | "-x" | "+y" | "-y" | "+z" | "-z";
 
@@ -60,11 +62,7 @@ export const G_ACCEL = 9.80665;
 
 /** 条件数上限：真实器件的刻度/交叉轴矩阵条件数只有个位数（±20% 刻度误差 ≈ 1.25），
  *  50 已经非常宽松；再大说明矩阵接近不可逆，应用时会把噪声放大成百上千倍。 */
-export const ACCEL_MAX_COND = 50;
-/** 偏置上限（相对 g）：真实零偏是 g 的百分之几，0.35g 只用来拦住荒谬值 */
-export const ACCEL_MAX_BIAS_G = 0.35;
-/** 单轴残差上限（相对 g）：拟合残差比这更大说明模型与朝向不匹配 */
-export const ACCEL_MAX_RMSE_G = 0.15;
+export { MATRIX_MAX_COND as ACCEL_MAX_COND } from "./calibration-validation";
 /** 面一致性：主轴读数必须占模长的这个比例以上，其余轴不得超过这个比例 */
 const FACE_MAJOR_MIN = 0.6;
 const FACE_CROSS_MAX = 0.5;
@@ -87,7 +85,9 @@ const FACE_AXIS: Record<AccelFace, { axis: number; sign: number }> = {
  * 这种错标的标定会被应用并把解算拉偏，界面却显示「拟合成功」。
  */
 export function faceMatchesReading(s: AccelCalibrationSample): boolean {
-  const { axis, sign } = FACE_AXIS[s.face];
+  const face = FACE_AXIS[s.face];
+  if (!face || !Array.isArray(s.raw) || s.raw.length !== 3 || !s.raw.every(Number.isFinite)) return false;
+  const { axis, sign } = face;
   const norm = Math.hypot(s.raw[0], s.raw[1], s.raw[2]);
   if (!(norm > 1e-9)) return false;
   const major = s.raw[axis] * sign;
@@ -205,7 +205,7 @@ function solve4(a: number[][], b: number[]): number[] | null {
  * 朝向不足时矩阵不可观，返回 null 而不是给出一个看似正常的 M。
  */
 export function calibrateAccel(samples: readonly AccelCalibrationSample[]): AccelCalibration | null {
-  if (samples.length < 4) return null;
+  if (samples.length < 4 || samples.some(s => !faceMatchesReading(s))) return null;
   const faces = [...new Set(samples.map((s) => s.face))];
   if (faces.length < 4) return null;
 
@@ -267,13 +267,8 @@ export function calibrateAccel(samples: readonly AccelCalibrationSample[]): Acce
   const rmse: V3 = [Math.sqrt(acc[0] / n), Math.sqrt(acc[1] / n), Math.sqrt(acc[2] / n)];
   // 残差也要过门槛：模型与数据不符（例如少采了一面、或器件非线性很强）时不该报"成功"
   if (Math.max(rmse[0], rmse[1], rmse[2]) > ACCEL_MAX_RMSE_G * G_ACCEL) return null;
-  return {
-    M,
-    bias,
-    rmse,
-    count: n,
-    faces,
-  };
+  const model: AccelCalibration = { M, bias, rmse, count: n, faces };
+  return calibrationProblems("accel", model).length === 0 ? model : null;
 }
 
 /** 应用校准：raw_cal = M⁻¹·(raw − bias)。M 奇异时原样返回。 */

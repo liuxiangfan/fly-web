@@ -61,6 +61,7 @@ import { SolveLoop } from "./core/solve-loop";
 import { ReplayPlayer } from "./core/replay-player";
 import { pushBounded } from "./core/serial-queue";
 import { ReconnectPolicy } from "./core/reconnect";
+import { NotificationSession, SerialTransportSession, TransportSession } from "./core/transport-session";
 import { RUN_H } from "./core/runner";
 import {
   buildArchive as buildArchiveObject,
@@ -81,18 +82,22 @@ import {
 } from "./ui/calib-panel";
 import { InsIntegrator } from "./core/ins";
 import type { DocDemos } from "./ui/doc-demos";
-import { mountTour, TOUR_STEPS } from "./ui/tour";
 import {
   DEFAULT_EXPERIMENT_CONFIG,
   DEFAULT_ESTIMATOR_TUNING,
+  ARCHIVE_IGNORED_KEYS,
+  archiveExpressibilityProblems,
+  archiveRoundTripProblems,
   defaultExperimentConfig,
   initialAttitudeOf,
+  magCalibrationProblems,
   validateExperimentConfig,
   type ExperimentConfig,
   type EstimatorId,
   type EstimatorTuning,
   type MagCalModel,
 } from "./core/experiment-config";
+import { TraceEvents } from "./core/trace-events";
 import {
   applyTuning,
   resultDigest,
@@ -2123,6 +2128,17 @@ function magCalFit(): void {
     return;
   }
   cal.fittedWith = fingerprintOf(imuParams, model, new Date(), 50); // 记录拟合时磁模型与当前磁/加计参数（完整椭球默认目标场强 50 μT）
+  // 拟合与导入必须同一把尺子：生产拟合能产出 offset 20000 的模型，旧实现直接应用，
+  // 但同一模型写进档案后会被解析器拒绝——"标定成功、却存不下来"。
+  // 现在在提交前用同一个合法性函数判定，失败就明说，而不是先应用再在导出时暴雷。
+  const problems = magCalibrationProblems(cal);
+  if (problems.length) {
+    magCalState.message =
+      `拟合结果无法应用：${problems[0].path} ${problems[0].message}——` +
+      "多半是采样点远离球心（强磁干扰）或覆盖不足；请换位置重新采集";
+    updateMagCalUi();
+    return;
+  }
   magCalState.cal = cal;
   pushMagCalHistory(cal, model);
   magCalState.applied = true;
@@ -2896,10 +2912,7 @@ function stepOnce(): void {
   }
   if (state.playing) setPlaying(false);
   let guard = 0;
-  do {
-    stepSim();
-    guard++;
-  } while (solveState.acc !== 0 && guard < 2000);
+  while (!stepSim() && ++guard < 2000) { /* 等到生产调度真正解算，不读陈旧镜像acc */ }
   updateReadouts();
   updateLegendValues();
   attChart.render();
@@ -2980,7 +2993,10 @@ function resetSim(): void {
   solveLoop.reset();
   solveRunId++; // 新的一轮：消费快照随之作废（旧消费值不得出现在新轮记录里）
   clearSolveInput();
-  replayBacklog.length = 0; // 回放待积分队列属于上一轮
+  replayPlayer.rewind(); // 重置播放预算、未完成帧、游标（日志/倍速仍保留）
+  replayState.idx = 0;
+  replayState.acc = 0;
+  replayState.announcedEnd = false;
   still.chipUntil = -1;
   state.simTime = 0;
   simAcc = 0;
@@ -3223,6 +3239,7 @@ let sourceIntent: DataSourceKind = "simulation";
 
 /** 批量评测的执行路径（自检/冒烟用来确认走的是哪一条） */
 let batchLastMode: "worker" | "main" | null = null;
+let batchCompletedResult: { generation: number; seeds: number[]; summary: ReturnType<typeof summarizeRuns>["summary"] } | null = null;
 
 /**
  * Worker 路径：把 N 个种子的评测整体搬出主线程。
@@ -3387,6 +3404,7 @@ async function runBatch(): Promise<void> {
     // 过期批次绝不写表格：取消后旧 Worker 的回调/看门狗仍可能走到这里
     if (stale()) return;
     batchLastMode = mode;
+    batchCompletedResult = { generation: myGen, seeds: res.seeds.slice(), summary: res.summary.map((row) => ({ ...row })) };
     // 表格与状态文案在 ui/batch-table.ts（纯函数，可被 Node 断言"7 列口径/口径措辞"）
     body.innerHTML = batchRowsHtml(
       res.summary,
@@ -3462,12 +3480,16 @@ function buildArchive(): ExperimentArchive {
     finishedAtIso: new Date().toISOString(),
     metrics: ests.map((e, i) => {
       const s = metricsA[i]?.summary();
+      const n = s?.n ?? 0;
+      // 零样本必须写 null（不是 NaN）：NaN 经 JSON.stringify 变 null 后会被自己的
+      // 解析器当成"合法但为 null"的旧值路径，或直接判失败（复核反例：复位后导出→导入失败）。
+      const stat = (v: number | undefined): number | null => (n > 0 && typeof v === "number" && Number.isFinite(v) ? v : null);
       return {
         id: e.id,
-        n: s?.n ?? 0,
-        mean: s?.mean ?? NaN,
-        rmse: s?.rmse ?? NaN,
-        max: s?.max ?? NaN,
+        n,
+        mean: stat(s?.mean),
+        rmse: stat(s?.rmse),
+        max: stat(s?.max),
         convergedAt: s?.convergedAt ?? null,
       };
     }),
@@ -3515,9 +3537,13 @@ function applyArchiveConfig(cfg: ExperimentConfig): void {
   resetExperimentBaseline();
   const s = (id: string, v: number): void => setSliderValue(id, v);
   for (const [key, id, scale] of ARCHIVE_IMU_CONTROLS) s(id, (cfg.imu[key] ?? 0) * scale);
-  if (cfg.imu.gyroRangeDps > 0) setSelectValue("imu-gyro-range", String(cfg.imu.gyroRangeDps));
+  // 0 也要显式写回：旧实现在 gyroRangeDps=0（不限量程）时跳过了下拉，导入后仍停在上一个量程，
+  // 读回比较会把它当成「档案无法恢复」——其实是这里漏写。
+  setSelectValue("imu-gyro-range", String(cfg.imu.gyroRangeDps ?? 0));
   setSelectValue("scenario-select", cfg.scenario);
   setSelectValue("solve-rate", String(cfg.solveRateHz));
+  // 初始姿态是档案的一部分（random 对应「随机初始偏差」开关）；不能只靠 baseline 复位。
+  setCheckValue("init-offset-toggle", cfg.initialAttitude.kind === "random");
   if (cfg.estimators.comp.params.alpha !== undefined) s("comp-alpha", cfg.estimators.comp.params.alpha);
   if (cfg.estimators.mahony.params.kp !== undefined) s("mahony-kp", cfg.estimators.mahony.params.kp);
   if (cfg.estimators.mahony.params.ki !== undefined) s("mahony-ki", cfg.estimators.mahony.params.ki);
@@ -3570,7 +3596,34 @@ function applyArchiveConfig(cfg: ExperimentConfig): void {
   accelCalState.verifyLine = "";
   accelCalState.message = "";
   updateAccelCalUi();
+  // 逐算法参数最后写：上面的控件事件会把「全局开关」刷给所有算法（applyMagEnable /
+  // applyAccelGate / applyKalmanGate），档案里的逐算法快照必须覆盖这次广播，
+  // 否则 rampEnabled / kalmanChi2 这些界面上没有独立控件的字段会被静默丢掉。
+  applyNonUiTunings(cfg);
   resetSim();
+}
+
+/**
+ * 把档案里**界面上没有独立控件**的算法参数写回活实例。
+ *
+ * 只写这些字段（rampEnabled / kalmanChi2）：它们真实影响解算，但在界面上没有开关，
+ * 旧实现直接丢弃 → 导入后 `tuningOf()` 读回默认值，「同配置复现」不成立。
+ *
+ * 有控件的字段**故意不在这里写**：必须经过控件的 min/max/step（界面真相）。
+ * 否则档案里的 alpha=999999 会被直接塞进估计器，滑块却显示 5——读回比较通过，
+ * 界面与实际状态却对不上。不可表达的取值由导入流程的读回比较拒绝。
+ */
+function applyNonUiTunings(cfg: ExperimentConfig): void {
+  for (const e of ests) {
+    const t = cfg.estimators[e.id as EstimatorId];
+    if (!t) continue;
+    if (e.id === "comp" || e.id === "mahony" || e.id === "madg") {
+      (e as ComplementaryEstimator | MahonyEstimator | MadgwickEstimator).rampEnabled = t.rampEnabled !== false;
+    }
+    if (e.id === "kalman" && Number.isFinite(t.kalmanChi2)) {
+      (e as KalmanEstimator).gateChi2 = t.kalmanChi2 as number;
+    }
+  }
 }
 
 /** 深拷贝六面加计校准（含 validation/fittedWith/faces） */
@@ -3583,6 +3636,42 @@ function cloneAccelCalibration(cal: AccelCalibration): AccelCalibration {
     faces: [...cal.faces],
     ...(cal.validation ? { validation: { ...cal.validation } } : {}),
     ...(cal.fittedWith ? { fittedWith: { ...cal.fittedWith } } : {}),
+  };
+}
+
+/**
+ * 档案配置的**提交事务**：可表达性检查 → 应用 → 读回比较 → 失败回滚。
+ *
+ * 用户导入与自动化入口（attitudeDemo.experiment.importArchive）共用这一条路径，
+ * 否则测试会「绕过校验仍然绿」——正是复审指出的门禁盲区。
+ */
+function applyArchiveChecked(cfg: ExperimentConfig):
+  | { ok: true; notRestored: string[] }
+  | { ok: false; error: string } {
+  // ① 界面根本无法表示的取值：直接拒绝（解析成功 ≠ 能恢复）。
+  const impossible = archiveExpressibilityProblems(cfg);
+  if (impossible.length) {
+    return {
+      ok: false,
+      error: `档案里有界面无法表示的配置，未导入：${impossible.map((p) => `${p.path}（${p.message}）`).join("；")}`,
+    };
+  }
+  // ② 读回比较：控件会按 min/max/step 夹值（333 Hz → 500 Hz、999999 → 5）。
+  //    先保存原配置，apply 后逐字段核对；不一致就回滚，绝不"导入成功但跑的是另一份配置"。
+  const before = currentExperimentConfig(cfg.durationSec);
+  applyArchiveConfig(cfg);
+  const mismatch = archiveRoundTripProblems(cfg, currentExperimentConfig(cfg.durationSec));
+  if (mismatch.length) {
+    applyArchiveConfig(before);
+    return {
+      ok: false,
+      error: `档案无法在界面上完整恢复，已保持原配置：${mismatch.map((m) => `${m.path}（${m.message}）`).join("；")}`,
+    };
+  }
+  // ③ 界面不可调整的字段：由调用方明确说"本次未恢复"。
+  return {
+    ok: true,
+    notRestored: ARCHIVE_IGNORED_KEYS.filter((k) => (cfg as unknown as Record<string, unknown>)[k] !== undefined),
   };
 }
 
@@ -3599,14 +3688,22 @@ async function importArchiveFile(file: File): Promise<void> {
     // 配置已经改过之后才抛错——界面提示失败，实际状态已经变了。
     const extra = describeArchiveRun(parsed.run);
     const note = parsed.notes?.length ? `；${parsed.notes.join("；")}` : "";
-    applyArchiveConfig(cfg);
+    const applied = applyArchiveChecked(cfg);
+    if (!applied.ok) {
+      toast(applied.error, "#f85149");
+      return;
+    }
+    const ignored = applied.notRestored.length
+      ? `；界面不可调整、本次未恢复：${applied.notRestored.join(" / ")}`
+      : "";
     toast(
-      `已导入配置档案（seed ${cfg.seed}）——将从 seed 起点按同一配置重新跑${extra}${note}`,
-      parsed.notes?.length ? "#fbbf24" : "#7ee787",
+      `已导入配置档案（seed ${cfg.seed}）——将从 seed 起点按同一配置重新跑${extra}${ignored}${note}`,
+      parsed.notes?.length || applied.notRestored.length ? "#fbbf24" : "#7ee787",
     );
     console.info("配置档案导入：仅复现配置，不还原当前时刻/曲线；需要逐帧回放请导入全帧源 IMU CSV。", {
       run: parsed.run,
       notes: parsed.notes ?? [],
+      notRestored: applied.notRestored,
       migratedFrom: parsed.migratedFrom ?? null,
     });
   } catch (err) {
@@ -3912,6 +4009,7 @@ const lastSolveInput = {
 
 /** 当前实验轮次（resetSim 推进）：消费快照按轮隔离 */
 let solveRunId = 0;
+let uiTraceEvents = { alignTimes: [] as number[], eventCounts: {} as Record<string, number> };
 /** 清掉消费快照（换轮/换源/重置时调用） */
 function clearSolveInput(): void {
   lastSolveInput.runId = solveRunId;
@@ -3934,6 +4032,15 @@ function onSolveDefault(ctx: { sample: ImuSample; dt: number; accel: V3; mag: V3
   lastSolveInput.mag = [...ctx.mag];
   // 位置积分与姿态同帧：喂的是各算法自己的姿态估计 + 同一份实测加计读数
   stepIns(ctx.sample, ctx.dt, ctx.accel);
+  if (replayActive()) {
+    state.simTime = ctx.t;
+    state.lastImu = ctx.sample;
+    logAcc += ctx.dt;
+    if (logAcc + 1e-12 >= LOG_DT) {
+      logAcc %= LOG_DT; // 不积累长空洞的记录余账，也不在同一姿态伪造旧时间行
+      logRow();
+    }
+  }
 }
 
 /**
@@ -3954,6 +4061,9 @@ function consumedSnapshotFor(rowT: number): ImuSample | null {
   };
 }
 
+const serialConsumed = { count: 0, at: 0, t: 0 };
+const serialConsumptionObservers: { callback: ((event: { count: number; at: number; t: number }) => void) | null } = { callback: null };
+
 const solveLoop = new SolveLoop({
   estimators: ests,
   secondary: abState.clones,
@@ -3969,6 +4079,20 @@ const solveLoop = new SolveLoop({
     still.chipUntil = performance.now() / 1000 + 3;
   },
   onSolve: onSolveDefault,
+  onFrame: ({ sample, dt, t }) => {
+    if (replayActive()) {
+      // 原始记录只在源帧完成时写一次，保留0dt/同时间帧，不按子步造源帧。
+      recordRaw(t, sample);
+      tickAccelCalibration(t, sample);
+      collectMagSample(sample.mag);
+      if (dt === 0) { state.lastImu = sample; state.simTime = t; }
+    } else if (sourceIntent === "serial") {
+      serialConsumed.count++;
+      serialConsumed.at = Date.now();
+      serialConsumed.t = t;
+      serialConsumptionObservers.callback?.({ ...serialConsumed });
+    }
+  },
 });
 /** 界面侧的统一解算入口（真实/回放路径用）：每帧更新一次，长间隔拆子步 */
 function updateEstimatorsSubstepped(sample: ImuSample, intervalSec: number, t: number): void {
@@ -3976,7 +4100,7 @@ function updateEstimatorsSubstepped(sample: ImuSample, intervalSec: number, t: n
 }
 
 /** 模拟世界推进（固定步长 H）；估计器按「解算频率」抽帧更新 */
-function stepSim(): void {
+function stepSim(): boolean {
   // 闭环演示：控制器改用所选解算结果（而非真实姿态）计算跟踪误差——
   // 「估计漂多少，机体就飞偏多少」；选真实姿态或关闭开关时为理想飞控。
   const loopOn = ($("loop-toggle") as HTMLInputElement).checked;
@@ -3988,13 +4112,14 @@ function stepSim(): void {
   tickAccelCalibration(world.t, sample);
   // 解算抽帧 + 静止检测都在 SolveLoop 里（与 runner 同一实现）：
   // 仿真保持 500 Hz 定步长，估计器每 1/f 秒才吃一次数据（dt = 累积时长）。
-  solveLoop.step(sample, H, world.t);
+  const solved = solveLoop.step(sample, H, world.t);
   collectMagSample(sample.mag);
   logAcc += H;
   if (logAcc >= LOG_DT) {
     logAcc -= LOG_DT;
     logRow();
   }
+  return solved;
 }
 
 /**
@@ -4352,8 +4477,8 @@ window.addEventListener("keydown", (e) => {
     case "g":
     case "G":
       // 引导课程：停在课程中时再按一次 = 退出（避免只能靠鼠标点小叉）
-      if (tour.active()) tour.exit();
-      else tour.start();
+      if (tour?.active()) tour.exit();
+      else void ensureTour().then((t) => t.start()).catch(() => {});
       break;
     case "?":
       toast("快捷键：空格 暂停/继续 · R 重置 · 1/2/3 切视图 · D 文档 · G 引导课程 · Ctrl/⌘+K 搜索");
@@ -4689,8 +4814,16 @@ else setTimeout(() => void ensureDocDemos(), 1200);
    首次访问标记——本装置不落地任何持久状态（分享靠 URL 深链，见「深链分享」）。
    ========================================================================== */
 
-const tour = mountTour({
-  applyExperiment: (id) => {
+/*
+ * 引导课程**按需加载**：13 步文案（minify 后约 19 KB）只在用户点「开始」或按 G 时才需要，
+ * 放在首屏会让主包 gzip 长期贴着上限（实测 106/108 KB）。首次点击由捕获阶段处理器负责
+ * 「先加载、再启动」；加载完成后 mountTour 自己绑定的处理器接管按钮。
+ */
+type TourApi = import("./ui/tour").Tour;
+let tour: TourApi | null = null;
+let tourLoad: Promise<TourApi> | null = null;
+const tourHost = {
+  applyExperiment: (id: string): void => {
     const spec = EXPERIMENTS.find((e) => e.id === id);
     if (!spec) {
       console.warn(`引导课程引用了不存在的实验：${id}`);
@@ -4698,15 +4831,35 @@ const tour = mountTour({
     }
     applyExperiment(spec);
   },
-  openDocs: (page, anchor) => {
+  openDocs: (page: string, anchor?: string): void => {
     showDocPage(page);
     if (anchor) {
       const el = document.getElementById(anchor);
       if (el) el.scrollIntoView({ block: "start" });
     }
   },
-  toast: (msg) => toast(msg),
-});
+  toast: (msg: string): void => toast(msg),
+};
+function ensureTour(): Promise<TourApi> {
+  if (tour) return Promise.resolve(tour);
+  if (!tourLoad) {
+    tourLoad = import("./ui/tour")
+      .then(({ mountTour }) => (tour = mountTour(tourHost)))
+      .catch((err: unknown) => {
+        tourLoad = null; // 允许重试（例如离线时 chunk 没取到）
+        toast(`引导课程加载失败：${err instanceof Error ? err.message : String(err)}`, "#f85149");
+        throw err;
+      });
+  }
+  return tourLoad;
+}
+// 首次点击：模块还没加载，本次事件派发中新增的监听器不会被调用——这里自己接手启动。
+document.getElementById("tour-start")?.addEventListener("click", (ev) => {
+  if (tour) return; // 已加载：交给 mountTour 的处理器，行为与旧实现一致
+  ev.stopImmediatePropagation();
+  void ensureTour().then((t) => t.start()).catch(() => {});
+}, true);
+
 
 // ---------- 深链分享：面板状态 ↔ URL hash（#s=base64(json)） ----------
 const DEEP_KEYS = [
@@ -5299,6 +5452,8 @@ function serialBaud(): number {
 const serialState = {
   /** 连接正在进行中（防重入：见 serialConnect 注释） */
   connecting: false,
+  connectingGen: -1,
+  session: null as SerialTransportSession | null,
   port: null as SerialPortLike | null,
   reader: null as ReadableStreamDefaultReader<Uint8Array> | null,
   /**
@@ -5433,59 +5588,33 @@ async function serialConnect(): Promise<void> {
     setSerialStatus("此浏览器不支持 Web Serial（需要 Chrome/Edge 且 HTTPS 或 localhost）", true);
     return;
   }
-  // 防重入：连接过程有两个长 await（选端口对话框、open()），期间按钮仍可点。第二次进来会覆盖
-  // serialState.port 并对同一设备再 open()（报 already open）→ 「running 与真实端口脱钩」：
-  // 要么进真实模式却永远没数据，要么真正的 reader 被泄漏、之后必须刷新页面才能重连。
   if (serialState.running || serialState.connecting) return;
-  serialState.connecting = true;
-  setConnectButtonsBusy(true);
-  // 在途连接的世代：`requestPort()`/`open()` 都是长 await，期间用户可能点了「断开」、
-  // 导入了回放或又发起了 BLE 连接。完成时必须确认这条连接仍是「当前唯一意图」，
-  // 否则会出现 serial=true 与 replay=true 同时成立的互斥破坏（复核反例）。
+  // 新来源（手动连接）作废旧的重连排程；否则旧定时器会在新连接之后把旧链路接回来。
+  cancelPendingReconnects();
   const connectGen = ++connectionGeneration;
+  serialState.connecting = true;
+  serialState.connectingGen = connectGen;
+  setConnectButtonsBusy(true);
+  let session: SerialTransportSession | null = null;
+  const stale = (): boolean => connectGen !== connectionGeneration || serialState.connectingGen !== connectGen;
   try {
     const baud = serialBaud();
     const requested = await navigator.serial.requestPort();
-    if (connectGen !== connectionGeneration) {
-      // 已被取消/被其它来源取代：把刚拿到的端口关掉，不提交任何状态
-      try {
-        await requested.close();
-      } catch {
-        /* 可能还没打开 */
-      }
-      return;
-    }
+    if (stale()) return; // Unopened chooser results do not own an open-port lease.
+    session = createSerialSession(requested, connectGen);
+    serialState.session = session;
+    if (!(await session.open(baud)) || stale()) { await session.dispose(); return; }
+    if (bleState.connected || bleState.device || bleState.session) await bleDisconnect(true, "已断开 BLE，切到串口数据");
+    if (stale() || serialState.session !== session) { await session.dispose(); return; }
     serialState.port = requested;
-    await serialState.port.open({ baudRate: baud });
-    serialOpenPorts++;
-    if (connectGen !== connectionGeneration) {
-      // 过期：只有「这个端口仍是当前端口」时才关它——如果它已经被别人接管
-      // （例如用户随后又发起一次连接并复用了同一个已授权端口），关掉它等于砸别人的锅。
-      if (serialState.port === requested) {
-        releasePortHandle(requested);
-        serialState.port = null;
-      } else if (!serialState.running) {
-        releasePortHandle(requested);
-      }
-      return;
-    }
     serialState.running = true;
-    sourceIntent = "serial"; // 来源身份在此确立：此后断链重连不再退回「模拟」
-    // 记下端口句柄供断线自动重连复用（用户主动断开时清空）
+    sourceIntent = "serial";
     cancelSerialReconnect();
     serialReconnectPolicy.onSuccess();
-    serialReconnectState.lastPort = serialState.port;
+    serialReconnectState.lastPort = requested;
     serialState.baud = baud;
-    // 回放与串口是两条互斥的数据通路：主循环里回放优先，若不在这里退出回放，
-    // 串口帧会一直排队堆积（被积压保护丢掉）而界面却还在放日志——看不出所以然。
-    // 放在 open() 成功之后而不是之前：用户在选端口对话框上点取消时不该把回放停掉。
-    //
-    // 关旧链一律走「不额外递增世代」的内部版（internal=true）：本次连接已经在上面
-    // 用 connectGen 占住了意图，旧链如果再加一次世代就会把**自己**作废
-    // （复核反例 P1-B：串口→BLE 切换后 ble=false / gatt=false / 通知数 0）。
-    if (bleState.connected || bleState.device) await bleDisconnect(true, "已断开 BLE，切到串口数据");
     if (replayActive()) {
-      stopReplayData(); // 统一清理：replayState + 播放器 + 状态行（不再只清数组）
+      stopReplayData();
       toast("已退出离线回放，切到串口数据");
     }
     serialState.lastArrival = 0;
@@ -5494,15 +5623,23 @@ async function serialConnect(): Promise<void> {
     serialState.rate = 0;
     setSerialStatus(`真实 IMU 已连接（${baud} 8N1）——等待数据帧…`);
     setSerialBaudLocked(true);
-    serialReadLoop();
+    void serialReadLoop(session).catch(reportTransportError);
   } catch (err) {
+    await session?.dispose();
+    if (stale() || (session && serialState.session !== session)) return;
+    serialState.session = null;
+    serialState.port = null;
+    serialState.reader = null;
     serialState.running = false;
     setSerialBaudLocked(false);
     const msg = err instanceof Error ? err.message : String(err);
     setSerialStatus(`连接失败：${msg}（未选端口 / 端口被占用 / 波特率该平台不支持——SerialWeb 等其它工具需先断开）`, true);
   } finally {
-    serialState.connecting = false;
-    setConnectButtonsBusy(false);
+    if (serialState.connectingGen === connectGen) {
+      serialState.connecting = false;
+      serialState.connectingGen = -1;
+      setConnectButtonsBusy(bleState.connecting);
+    }
   }
 }
 
@@ -5521,8 +5658,8 @@ const serialReconnectState = {
   lastPort: null as SerialPortLike | null,
   /** 是否正处于自动重连流程（避免与用户手动连接互相打架） */
   reconnecting: false,
-  /** 断开时挂起的 reader：由下一次自动重连在**同一代内**结束/释放，避免误伤替代连接的 reader */
-  pendingReader: null as ReadableStreamDefaultReader<Uint8Array> | null,
+  /** 当前已脱离 UI 的旧会话；重连必须等待它的同一个 disposePromise。 */
+  pendingSession: null as SerialTransportSession | null,
 };
 const SERIAL_RECONNECT_MAX = 3;
 /** 自动重连成功次数（调试出口/冒烟断言用：状态条会被后续实时刷新覆盖，不能只看文案） */
@@ -5537,6 +5674,26 @@ const serialReconnectPolicy = new ReconnectPolicy({
 function cancelSerialReconnect(): void {
   serialReconnectPolicy.cancel();
   serialReconnectState.reconnecting = false;
+}
+
+/**
+ * 切换数据源前的统一事务：取消**两侧**已排程的自动重连，并放掉「可复用句柄」。
+ *
+ * 为什么必须有这一步（ROUND12 复核反例）：掉线 → 1 s 后才重连，这段窗口里用户完全可能
+ * 切到 BLE / 串口 / 回放。旧实现只清理「当前活跃」的链路，已排程的定时器照常触发，
+ * 于是 1 s 后把刚切走的来源重新接回来——实测出现 `serial=true, ble=true` 双活，
+ * 或回放中 `replay=true, serial=true`，端口/GATT 也被隐藏占用。
+ *
+ * 取消重连 ≠ 可以不关端口：pendingSession 仍要 dispose（close 会按实际结果记账）。
+ */
+function cancelPendingReconnects(): void {
+  cancelSerialReconnect();
+  cancelBleReconnect();
+  serialReconnectState.lastPort = null;
+  const pending = serialReconnectState.pendingSession;
+  serialReconnectState.pendingSession = null;
+  bleReconnectState.lastDevice = null;
+  if (pending) void pending.dispose().catch(reportTransportError);
 }
 
 /**
@@ -5557,40 +5714,17 @@ let serialOpenPorts = 0;
  * 「有开必有关」变成了自我安慰。失败次数单独计数并可从 plumbing() 读出来。
  */
 let portCloseFailures = 0;
-function releasePortHandle(port: SerialPortLike | null | undefined): void {
-  if (!port) return;
-  try {
-    void Promise.resolve(port.close()).then(
-      () => {
-        serialOpenPorts = Math.max(0, serialOpenPorts - 1);
-      },
-      () => {
-        portCloseFailures++; // 仍是 open（例如 readable 被锁）
-      },
-    );
-  } catch {
-    portCloseFailures++;
-  }
+function createSerialSession(port: SerialPortLike, gen: number): SerialTransportSession {
+  return new SerialTransportSession(port, gen,
+    () => { serialOpenPorts++; },
+    (closed) => {
+      if (closed) serialOpenPorts = Math.max(0, serialOpenPorts - 1);
+      else portCloseFailures++;
+    });
 }
 
-/**
- * 严肃关闭：先结束挂起的 read 并释放读锁，再 close；close 失败重试一次。
- * Web Serial 规定「readable 被锁时不能 close」，所以顺序必须是 cancel → release → close。
- * @returns 是否确认关闭（false = 两次都没关掉，已计入 portCloseFailures）
- */
-async function closePortVerified(port: SerialPortLike | null | undefined): Promise<boolean> {
-  if (!port) return true;
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      await port.close();
-      serialOpenPorts = Math.max(0, serialOpenPorts - 1);
-      return true;
-    } catch {
-      /* 第一次可能仍被锁：重试一次 */
-    }
-  }
-  portCloseFailures++;
-  return false;
+function reportTransportError(err: unknown): void {
+  toast(`连接操作失败：${err instanceof Error ? err.message : String(err)}`, "#f85149");
 }
 
 /**
@@ -5627,7 +5761,7 @@ function abandonSerialTransport(): void {
 function scheduleSerialReconnect(reason: string): void {
   if (!serialReconnectState.lastPort) return;
   const plan = serialReconnectPolicy.onFailure(() => {
-    void serialAutoReconnect();
+    void serialAutoReconnect().catch(reportTransportError);
   });
   if (!plan) {
     // 开关在这期间被关掉：不排程，也不能把过渡态挂着
@@ -5650,52 +5784,41 @@ function scheduleSerialReconnect(reason: string): void {
   );
 }
 
+/**
+ * 等旧串口会话真正释放。
+ *
+ * close 失败通常发生在「read 刚 cancel、驱动还没释放读锁」的窗口里。直接放弃会把这次
+ * 重连判死，退避到 2 s 后才再试（复核实测：锁 3 s 后放行，第一次重连已失败，界面停在
+ * serial=false）。同一拍内短重试几次更贴近真实时序；仍失败则交给退避状态机下一轮。
+ * 每次 dispose 都按端口实际状态重试 close（失败结果不再被永久缓存）。
+ */
+async function releaseOldSerialSession(session: SerialTransportSession): Promise<boolean> {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if (attempt > 0) await new Promise<void>((resolve) => setTimeout(resolve, 250));
+    if (await session.dispose()) return true;
+  }
+  return false;
+}
+
 async function serialAutoReconnect(): Promise<void> {
   const port = serialReconnectState.lastPort;
-  if (!port || serialState.running || !serialReconnectState.reconnecting) return;
-  // 捕获意图世代：`cancel()`/`open()` 都是 await，期间用户可能点「断开」、连 BLE 或导入回放。
-  // 过期时必须把**自己刚打开的端口**关回去，且不提交任何状态（否则会出现
-  // 「用户已断开、串口却自己活了 / 串口与回放同时成立」——复核反例 P1-A/C）。
+  if (!port || serialState.running || serialState.connecting || !serialReconnectState.reconnecting) return;
+  // 归属校验必须覆盖「来源意图」：排程后用户可能已切到 BLE / 回放，定时器到点时不能再把
+  // 串口接回来（否则三条数据通路同时活着，见 cancelPendingReconnects 的说明）。
+  if (sourceIntent === "replay" || bleState.connected || bleState.session !== null) return void abandonSerialTransport();
   const gen = connectionGeneration;
-  const stale = (): boolean =>
-    gen !== connectionGeneration ||
-    serialReconnectState.lastPort !== port ||
-    serialState.running ||
-    !serialReconnectState.reconnecting;
+  const previous = serialReconnectState.pendingSession;
+  const session = createSerialSession(port, gen);
+  const stale = (): boolean => gen !== connectionGeneration || serialReconnectState.lastPort !== port ||
+    !serialReconnectState.reconnecting || (serialState.session !== null && serialState.session !== session) ||
+    sourceIntent === "replay" || bleState.connected || bleState.session !== null;
+  serialState.session = session;
   try {
-    // 上一轮 reader 可能还锁着 readable：先 cancel/release 再重开，
-    // 否则严格端口夹具实测 open=4 / close=0（每次都撞 already open）。
-    // 只处理**自己这一代**的 reader：期间用户可能已经断开并由新连接 B 接管，
-    // 用全局 serialState.reader 会把 B 的 reader 一起放掉（ROUND11 P1 隔离续体反例）。
-    const staleReader = serialReconnectState.pendingReader;
-    serialReconnectState.pendingReader = null;
-    if (staleReader) {
-      try {
-        await staleReader.cancel();
-      } catch {
-        /* 已断开 */
-      }
-      try {
-        staleReader.releaseLock();
-      } catch {
-        /* 未锁或已释放 */
-      }
-    }
-    if (serialState.reader === staleReader) serialState.reader = null;
-    if (serialState.running) return; // B 已接管：本次重连作废
-    // 重开前必须确认端口真的关着；关不掉就**不 open**（ROUND12：旧实现忽略返回值继续 open，
-    // 结果是每次重试都撞 already open，而 close 失败次数被悄悄吞掉）
-    if (!(await closePortVerified(port))) {
-      scheduleSerialReconnect("端口未能释放（读锁未解除）");
-      return;
-    }
-    await port.open({ baudRate: serialState.baud });
-    serialOpenPorts++;
-    if (stale()) {
-      // 只有这个端口没被别人接管时才关（否则会把接替它的那条连接一起关掉）
-      if (serialState.port !== port) releasePortHandle(port);
-      return;
-    }
+    const released = previous ? await releaseOldSerialSession(previous) : true;
+    if (stale()) { await session.dispose(); return; }
+    if (!released) throw new Error("端口未能释放（读锁未解除）");
+    if (!(await session.open(serialState.baud)) || stale()) { await session.dispose(); return; }
+    serialReconnectState.pendingSession = null;
     serialState.port = port;
     serialState.running = true;
     sourceIntent = "serial";
@@ -5711,9 +5834,11 @@ async function serialAutoReconnect(): Promise<void> {
     setSerialStatus(`真实 IMU 已自动重连（${serialState.baud} 8N1）——等待数据帧…`);
     applyDataSourceSemantics();
     toast("串口已自动重连", "#7ee787");
-    serialReadLoop();
+    void serialReadLoop(session).catch(reportTransportError);
   } catch {
-    if (gen !== connectionGeneration) return; // 已作废：不再排程，也不再报错
+    await session.dispose();
+    if (stale()) return;
+    serialState.session = null;
     scheduleSerialReconnect("自动重连失败");
   }
 }
@@ -5729,14 +5854,18 @@ async function serialDisconnect(internal = false): Promise<void> {
     connectionGeneration++; // 作废任何在途的 connect await
     sourceIntent = "simulation";
   }
-  // 用户主动断开：取消待执行的重连并忘掉端口，否则「断开」按钮会立刻把设备接回来
+  const gen = connectionGeneration;
   cancelSerialReconnect();
   serialReconnectState.lastPort = null;
-  serialState.running = false;
-  serialState.connToken++; // 作废在途 reader：其 finally 不再对「新连接」收尾
-  releaseSerialReader();
-  releasePortHandle(serialState.port);
+  const session = serialState.session;
+  const pending = serialReconnectState.pendingSession;
+  serialState.session = null;
   serialState.port = null;
+  serialState.reader = null;
+  serialState.connecting = false;
+  serialState.connectingGen = -1;
+  serialState.running = false;
+  serialState.connToken++;
   serialState.buffer = new Uint8Array(0);
   serialState.queue.length = 0;
   serialState.lastTickMs = -1;
@@ -5745,98 +5874,52 @@ async function serialDisconnect(internal = false): Promise<void> {
   magCalState.collecting = false;
   setSerialBaudLocked(false);
   if (!internal) setSerialStatus("真实 IMU 已断开——回到模拟模式");
+  setConnectButtonsBusy(bleState.connecting);
+  await Promise.all([session?.dispose(), pending?.dispose()]);
+  if (gen !== connectionGeneration || serialState.session) return;
+  if (serialReconnectState.pendingSession === pending) serialReconnectState.pendingSession = null;
 }
 
-/** 取消/释放当前 reader（尽力而为；句柄可能已被替换或已释放） */
-function releaseSerialReader(): void {
-  const r = serialState.reader;
+function dropSerialSession(session: SerialTransportSession, reason: string): void {
+  if (serialState.session !== session || !serialState.running) return;
+  serialState.running = false;
+  serialState.session = null;
+  serialState.port = null;
   serialState.reader = null;
-  serialReconnectState.pendingReader = r; // 交给自动重连在同一代内释放（不碰新连接的 reader）
-  if (!r) return;
-  try {
-    void r.cancel().catch(() => undefined);
-  } catch {
-    /* 已断开 */
-  }
-  try {
-    r.releaseLock();
-  } catch {
-    /* 已释放/被替换 */
-  }
+  serialState.connToken++;
+  serialReconnectState.pendingSession = session;
+  void session.dispose().catch(reportTransportError);
+  serialState.queue.length = 0;
+  serialState.lastTickMs = -1;
+  setSerialBaudLocked(false);
+  handleSerialDrop(reason);
 }
 
-async function serialReadLoop(): Promise<void> {
-  const port = serialState.port;
-  if (!port?.readable || !serialState.running) return;
-  // 本次读循环自己的连接令牌 + 自己捕获的句柄：finally 只允许处理**自己这条连接**。
+async function serialReadLoop(session: SerialTransportSession): Promise<void> {
+  const current = (): boolean => serialState.session === session && serialState.running && !session.disposed;
   const token = ++serialState.connToken;
-  const reader = port.readable.getReader();
-  serialState.reader = reader;
   try {
-    while (serialState.running && serialState.connToken === token) {
-      const { value, done } = await reader.read();
-      // await 之后必须再验归属（ROUND11 P1）：旧连接在 read 挂起期间被断开、
-      // 新连接 B 已接管时，旧 reader 迟到的 value 会被解析进 **B 的队列**（实测 gyro=[7,0,0]）。
-      // 旧实现只在 await **前**检查过一次令牌，因此挡不住这种迟到。
-      if (serialState.connToken !== token) break;
-      if (done) break;
-      if (!value) continue;
+    const reading = session.read(() => current() && serialState.connToken === token, (value) => {
       if (serialProtocol() === "text") {
-        // 文本协议：解码成字符串，按行切
         serialState.text += textDecoder.decode(value, { stream: true });
-        if (serialState.text.length > 8192) serialState.text = serialState.text.slice(-8192); // 防粘成一行时炸内存
-        serialDrainBuffer();
+        if (serialState.text.length > 8192) serialState.text = serialState.text.slice(-8192);
       } else {
-        // 二进制 / MAVLink：拼字节缓冲（上限防溢出：一帧 28B（MAVLink 最长 ~280B），4KB 足够）
         const merged = new Uint8Array(serialState.buffer.length + value.length);
         merged.set(serialState.buffer);
         merged.set(value, serialState.buffer.length);
         serialState.buffer = merged.length > 4096 ? merged.subarray(merged.length - 4096) : merged;
-        serialDrainBuffer();
       }
-    }
+      serialDrainBuffer();
+    });
+    serialState.reader = session.reader;
+    await reading;
   } catch {
-    /* 断线/拔出：落到下面的收尾 */
+    /* Read error / getReader failure both dispose the captured session. */
   } finally {
-    // 释放**捕获的**那个 reader，而不是 serialState.reader：断开流程会把它置成 null、
-    // 重连时会换成新 reader——那时 releaseLock() 会抛（null.releaseLock / 重复释放），
-    // 变成未处理的 Promise 拒绝并污染控制台。
-    try {
-      reader.releaseLock();
-    } catch {
-      /* 已被 cancel/close 或已替换，忽略 */
+    if (current() && serialState.connToken === token) {
+      dropSerialSession(session, "真实 IMU 连接中断（设备拔出或重置？）");
     }
-    // 归属检查：令牌已不是自己 → 说明这条连接的句柄已被断开/替换流程接管，
-    // 或者已经有更新的连接（B）在跑。此刻收尾会把 B 一起打死
-    // （复核反例：A.read 挂起 → 新 B 连接 → A 返回 done，旧 finally 将 B.running=false、B 队列清零）。
-    if (serialState.connToken !== token) return;
-    if (serialState.running) {
-      // 异常断开（拔线）：回到 idle；若开着自动重连则排程重试（用户主动断开不会走到这里）
-      serialState.running = false;
-      const droppedPort = serialState.port;
-      serialState.port = null;
-      serialState.reader = null;
-      serialState.connToken++; // 本 reader 到此为止：后续任何路径都不再把它当成"当前"
-      // 顺序（ROUND11 P1）：cancel → 释放读锁 → close。旧实现先 close，严格夹具里
-      // 因为 readable 仍被锁而 close 失败（"stream locked"），端口一直占着，重连全撞 already open。
-      void (async (): Promise<void> => {
-        try {
-          await reader.cancel();
-        } catch {
-          /* 已断开 */
-        }
-        try {
-          reader.releaseLock();
-        } catch {
-          /* 已释放 */
-        }
-        await closePortVerified(droppedPort);
-      })();
-      serialState.queue.length = 0;
-      serialState.lastTickMs = -1;
-      setSerialBaudLocked(false);
-      handleSerialDrop("真实 IMU 连接中断（设备拔出或重置？）");
-    }
+    await session.dispose();
   }
 }
 
@@ -5924,7 +6007,7 @@ function serialDrainBinary(): void {
 
 function serialToggle(): void {
   if (serialState.running) {
-    void serialDisconnect().then(() => applyDataSourceSemantics());
+    void serialDisconnect().then(() => applyDataSourceSemantics()).catch(reportTransportError);
   } else {
     void serialConnect().then(() => {
       if (serialState.running) {
@@ -5938,7 +6021,7 @@ function serialToggle(): void {
         serialState.backlogDropped = 0;
         resetSim();
       }
-    });
+    }).catch(reportTransportError);
   }
 }
 $("btn-serial").addEventListener("click", () => serialToggle());
@@ -6103,83 +6186,27 @@ function replayDuration(): number {
  */
 const replayPlayer = new ReplayPlayer();
 
-/**
- * 回放的**待积分队列**（ROUND12 核心契约）。
- *
- * 为什么需要它：播放器按「录制时间 × 倍速」消费帧，遇到一段 300 s 的空洞时会一次把
- * `dtSec=300` 交给积分；旧实现单拍最多积分 `maxSubsteps×50 ms = 200 s`，剩下 100 s
- * 只记了个数就再也不处理——界面显示"回放完成"，估计器/INS 却少走了 1/3 的时间。
- * 现在：本拍只从队首积分 `REPLAY_TICK_BUDGET`（0.5 s = 10 个 50 ms 子步），
- * 余下的留在队列里，**后续每一拍继续补**，直到队列排空才允许宣告回放结束。
- * 后到的帧只能排在队尾（FIFO），不会超车——时间轴因此严格单调。
- */
-const replayBacklog: Array<{ sample: ImuSample; dt: number; truth: Quat | null }> = [];
-/**
- * 每拍最多积分多少秒。取值权衡：5 s @500 Hz = 2500 个子步（几毫秒 CPU，不会卡帧），
- * 同时"最快"档 4000 帧 / 40 s 的日志只要 8 拍就补完（旧值 0.5 s 要 80 拍，实测会超时）。
- * 真正的安全约束是**子步 ≤50 ms**，这个预算只决定"分几拍做完"，不影响精度。
- */
+/** 单帧背压：播放器仅在积分回执完成后推进，离线日志不丢弃。 */
 const REPLAY_TICK_BUDGET = 5;
-/** 待积分总量上限（秒）：病态日志也不允许无界增长；超出丢最旧并计数 */
-const REPLAY_BACKLOG_MAX_SEC = 600;
-/** 队列条数上限（防内存）：4000 帧的最快档在预算内不会被丢 */
-const REPLAY_BACKLOG_MAX = 20000;
-/** 因队列上限被丢弃的帧数（>0 会显示在状态行里） */
-let replayBacklogDropped = 0;
-
-/** 还有多少秒没积分（状态行显示；>0 时不允许宣告回放完成） */
-function replayPendingSec(): number {
-  let sum = 0;
-  for (const it of replayBacklog) sum += it.dt;
-  return sum;
-}
-
+function replayPendingSec(): number { return replayPlayer.pendingSec; }
 function stepReplayPlayback(dtAnim: number): void {
-  const steps = replayPlayer.advance(dtAnim);
-  const RAD2 = Math.PI / 180;
-  for (const { frame: f, dtSec } of steps) {
-    const sample: ImuSample = {
-      gyro: [f.gyroDps[0] * RAD2, f.gyroDps[1] * RAD2, f.gyroDps[2] * RAD2],
-      accel: [...f.accelMs2],
-      mag: [...f.magUt],
-    };
-    // 外部真值：只在日志帧自带 qTrue 且整份日志都有时启用（parseImuCsv 已保证）
-    if (replayBacklog.length >= REPLAY_BACKLOG_MAX || replayPendingSec() > REPLAY_BACKLOG_MAX_SEC) {
-      const droppedItem = replayBacklog.shift();
-      if (droppedItem) replayBacklogDropped++;
+  replayPlayer.advanceWork(dtAnim, (work) => {
+    if (work.first) {
+      const f = work.frame;
+      const sample: ImuSample = {
+        gyro: f.gyroDps.map((v) => v * Math.PI / 180) as V3,
+        accel: [...f.accelMs2], mag: [...f.magUt],
+      };
+      if (!solveLoop.enqueueFrame(sample, work.dtSec, work.tSec)) return null;
+      state.lastImu = sample;
+      state.externalTruth = f.qTrue ? { ...f.qTrue } : null;
     }
-    replayBacklog.push({ sample, dt: dtSec, truth: f.qTrue ? { ...f.qTrue } : null });
-  }
-  // 本拍只积分预算内的部分；剩余留在队列里等下一拍（时间不丢、步长不放大）
-  let budget = REPLAY_TICK_BUDGET;
-  while (replayBacklog.length && budget > 1e-12) {
-    const item = replayBacklog[0] as { sample: ImuSample; dt: number; truth: Quat | null };
-    const chunk = Math.min(item.dt, budget);
-    state.lastImu = item.sample;
-    state.externalTruth = item.truth;
-    state.simTime += chunk;
-    updateEstimatorsSubstepped(item.sample, chunk, state.simTime);
-    recordRaw(state.simTime, item.sample);
-    tickAccelCalibration(state.simTime, item.sample);
-    collectMagSample(item.sample.mag);
-    logAcc += chunk;
-    if (logAcc >= LOG_DT) {
-      logAcc -= LOG_DT;
-      logRow();
-    }
-    item.dt -= chunk;
-    budget -= chunk;
-    if (item.dt <= 1e-12) replayBacklog.shift();
-  }
-  // 完成条件：播放器到底 **且** 待积分队列排空（否则会提前宣称完成、少算一截时间）
-  if (replayPlayer.done && replayBacklog.length === 0 && !replayState.announcedEnd) {
+    return solveLoop.drain(0.05, 4000, work.budgetSec).processedSec;
+  }, REPLAY_TICK_BUDGET);
+  if (replayPlayer.done && solveLoop.pendingSec === 0 && !replayState.announcedEnd) {
     replayState.announcedEnd = true;
     updateReplayStatus();
-    toast(
-      `回放完成：${replayPlayer.frameCount} 帧 / ${replayPlayer.durationSec.toFixed(1)} s —— 曲线与评测表保留本轮结果` +
-        (replayBacklogDropped ? `（队列上限丢弃 ${replayBacklogDropped} 帧）` : ""),
-      "#7ee787",
-    );
+    toast(`回放完成：${replayPlayer.frameCount} 帧 / ${replayPlayer.durationSec.toFixed(1)} s —— 曲线与评测表保留本轮结果`, '#7ee787');
   }
 }
 
@@ -6195,8 +6222,8 @@ function updateReplayStatus(): void {
   const total = replayPlayer.durationSec;
   const done = replayPlayer.playedSec;
   rp.idx = replayPlayer.cursor; // 面板/自动化读到的进度与播放器一致
-  const ended = rp.idx >= rp.frames.length && replayBacklog.length === 0;
-  chip.classList.toggle("warn", ended || replayBacklogDropped > 0);
+  const ended = replayPlayer.done && solveLoop.pendingSec === 0;
+  chip.classList.toggle("warn", ended);
   const calLabel = rp.imuCalibrated === true
     ? "日志已校准"
     : rp.applyCalibration
@@ -6209,18 +6236,21 @@ function updateReplayStatus(): void {
     `${rp.idx}/${rp.frames.length} 帧 · IMU ${calLabel}` +
     // 长空洞需要多拍补积分：把「还剩多少秒没算」如实显示出来，而不是提前报完成
     (pending > 0.05 ? ` · 待积分 ${pending.toFixed(1)} s` : "") +
-    (replayBacklogDropped ? ` · 丢弃 ${replayBacklogDropped} 帧` : "");
+    (solveLoop.droppedFrames ? ` · 解算入口拒绝 ${solveLoop.droppedFrames} 帧` : "");
   chip.classList.remove("hidden");
 }
 
 /** 进入回放模式：清掉串口状态，切到「无真值」语义 */
 function startReplay(res: ReplayParseResult, fileName: string): void {
+  // 回放是第三条数据通路：进入前必须把两侧**已排程**的重连一起取消，
+  // 而不只是断开「此刻还活着」的连接（复核实测：回放 1.5 s 后串口自己接了回来）。
+  cancelPendingReconnects();
   connectionGeneration++; // 回放导入作废在途串口/BLE 连接
-  if (serialState.running || serialState.port) void serialDisconnect(true);
+  if (serialState.running || serialState.port) void serialDisconnect(true).catch(reportTransportError);
   // BLE 也要断：三条数据通路（串口 / BLE / 回放）互斥。漏掉 BLE 时，回放期间通知仍在往同一条
   // 队列里灌帧（状态条显示的还是 BLE 帧率），退出回放的瞬间这批积压帧会被打进估计器。
   // 内部版不递增世代：本次意图已由上面那次 ++ 占住。
-  if (bleState.connected || bleState.device) void bleDisconnect(true, "已断开 BLE，切到离线回放");
+  if (bleState.connected || bleState.device) void bleDisconnect(true, "已断开 BLE，切到离线回放").catch(reportTransportError);
   sourceIntent = "replay";
   replayState.frames = res.frames;
   replayState.idx = 0;
@@ -6273,8 +6303,7 @@ function startReplay(res: ReplayParseResult, fileName: string): void {
  * 之后任何走播放器的路径都会消费到「已经不该存在」的日志。
  */
 function stopReplayData(): void {
-  replayBacklog.length = 0;
-  replayBacklogDropped = 0;
+  solveLoop.reset();
   replayState.frames = [];
   replayState.idx = 0;
   replayState.acc = 0;
@@ -6413,9 +6442,19 @@ declare global {
   }
 }
 
+interface BleSession {
+  generation: number;
+  device: BleDeviceLike;
+  lease: TransportSession<BleDeviceLike>;
+  notifications: NotificationSession<BleCharacteristicLike>;
+  lost: () => void;
+}
+
 const bleState = {
   /** 连接正在进行中（防重入） */
   connecting: false,
+  connectingGen: -1,
+  session: null as BleSession | null,
   device: null as BleDeviceLike | null,
   char: null as BleCharacteristicLike | null,
   connected: false,
@@ -6455,71 +6494,41 @@ function syncBleUi(): void {
  *   切到回放，完成后仍会提交 ble=true，于是回放与 BLE 同时活、旧通知继续往新实验写帧。
  * @returns 是否成功提交（true = 现在订阅的就是该特征）
  */
-async function bleSubscribe(char: BleCharacteristicLike, gen?: number, subToken?: number): Promise<boolean> {
-  const stale = (): boolean =>
-    (gen !== undefined && gen !== connectionGeneration) ||
-    (subToken !== undefined && subToken !== bleSubToken);
-  if (stale()) return false;
-  const prevChar = bleState.char;
-  if (bleState.char && bleState.char !== char) {
-    const prev = bleState.char;
-    try {
-      await prev.stopNotifications();
-    } catch {
-      /* 设备可能已断开，忽略 */
-    }
-    // 摘掉旧特征上的监听：不摘的话「A→B→A」来回切一次，A 上就多一个监听器，
-    // 同一帧被消费 N 次（帧率虚高、同一 IMU 样本以 dt≈1 ms 反复积分，姿态随之失真）。
-    try {
-      prev.removeEventListener?.("characteristicvaluechanged", onBleNotify);
-    } catch {
-      /* 假设备/老实现可能没有 removeEventListener */
-    }
-  }
-  if (stale()) return false; // 退订 await 期间被切源
-  // 先订阅、**成功之后**才挂监听并提交。
-  //
-  // 顺序很关键（ROUND11 P1）：把「幂等的先摘再挂」放在 await 之前，会让**过期尝试的收尾**
-  // 摘掉**已提交尝试**挂的那个监听——两次快速切换（同一个 onBleNotify 引用）之后监听数为 0，
-  // 通知一条都进不来（冒烟实测）。现在只有真正提交的那一次会碰监听。
+function createBleSession(device: BleDeviceLike, gen: number): BleSession {
+  const session = { generation: gen, device } as BleSession;
+  session.notifications = new NotificationSession({
+    valid: () => bleState.session === session && !session.lease.disposed &&
+      (bleState.connected || gen === connectionGeneration),
+    attach: (char, listener) => char.addEventListener("characteristicvaluechanged", listener),
+    detach: (char, listener) => char.removeEventListener?.("characteristicvaluechanged", listener),
+    notify: onBleNotify,
+  });
+  session.lost = () => onBleDeviceLost(session);
+  session.lease = new TransportSession(device, gen, async (mine) => {
+    await session.notifications.dispose();
+    device.removeEventListener?.("gattserverdisconnected", session.lost);
+    if (mine) closeBleGatt(device);
+    return true;
+  });
+  return session;
+}
+
+async function bleSubscribe(char: BleCharacteristicLike, gen = connectionGeneration, subToken = bleSubToken): Promise<boolean> {
+  const session = bleState.session;
+  if (!session || session.lease.disposed || gen !== connectionGeneration || subToken !== bleSubToken) return false;
+  const current = (): boolean => bleState.session === session && !session.lease.disposed &&
+    gen === connectionGeneration && subToken === bleSubToken;
   try {
-    await char.startNotifications();
+    const ok = await session.notifications.subscribe(char, current);
+    if (!current()) return false;
+    bleState.char = session.notifications.current;
+    return ok;
   } catch (err) {
-    // 失败回滚：既不能留下"已连接但订阅已停"的假状态，也不能把上一个可用订阅弄丢——
-    // 尝试恢复原特征；恢复不成就明确断开，而不是继续假装连接着（ROUND12）
-    const prev = prevChar;
-    if (prev && prev !== char) {
-      try {
-        await prev.startNotifications();
-        prev.addEventListener?.("characteristicvaluechanged", onBleNotify);
-        bleState.char = prev;
-      } catch {
-        void bleDisconnect(false, "BLE 特征切换失败——已断开，请重连");
-      }
-    }
+    if (!current()) return false;
+    bleState.char = session.notifications.current;
+    if (!bleState.char) await bleDisconnect(false, "BLE 特征切换失败——已断开，请重连");
     throw err;
   }
-  if (stale()) {
-    // 过期尝试只退订**自己那条**：如果这个特征已经被更新的意图提交（bleState.char === char），
-    // 退订会把新订阅一起停掉——实测"监听还在、通知却停了"（ROUND12）。
-    if (bleState.char !== char) {
-      try {
-        await char.stopNotifications();
-      } catch {
-        /* 忽略 */
-      }
-    }
-    return false;
-  }
-  // 幂等：先摘再挂（同一个特征被重复订阅时不会叠加监听）
-  try {
-    char.removeEventListener?.("characteristicvaluechanged", onBleNotify);
-  } catch {
-    /* 假设备/老实现可能没有 removeEventListener */
-  }
-  char.addEventListener("characteristicvaluechanged", onBleNotify);
-  bleState.char = char;
-  return true;
 }
 
 /**
@@ -6581,35 +6590,36 @@ function cancelBleReconnect(): void {
 
 async function bleAutoReconnect(): Promise<void> {
   const device = bleReconnectState.lastDevice;
-  if (!device || bleState.connected || !bleReconnectState.reconnecting) return;
-  // 与串口同样的意图世代校验：GATT/服务/特征/订阅全是 await，
-  // 期间用户可能断开、切串口或导入回放（复核反例 P1-A：自动 GATT 挂起 → 导入回放 → 旧 await 完成仍 connected=true）。
+  if (!device || bleState.connected || bleState.connecting || !bleReconnectState.reconnecting) return;
+  // 同串口：排程后用户可能已切到串口/回放，定时器到点不得把 BLE 接回来。
+  if (sourceIntent === "replay" || serialState.running || serialState.session !== null || serialState.port !== null) {
+    return void abandonBleTransport();
+  }
   const gen = connectionGeneration;
-  const stale = (): boolean =>
-    gen !== connectionGeneration ||
-    bleReconnectState.lastDevice !== device ||
-    bleState.connected ||
-    !bleReconnectState.reconnecting;
-  let server: { getPrimaryService(uuid: string): Promise<BleServiceLike> } | undefined;
+  const session = createBleSession(device, gen);
+  const stale = (): boolean => gen !== connectionGeneration || bleState.session !== session ||
+    session.lease.disposed || bleReconnectState.lastDevice !== device || !bleReconnectState.reconnecting ||
+    sourceIntent === "replay" || serialState.running || serialState.session !== null || serialState.port !== null;
+  bleState.session = session;
+  let notifiers: BleCharacteristicLike[] = [];
   try {
-    server = await device.gatt?.connect();
-    if (!server) throw new Error("GATT 重连失败");
-    if (stale()) return disposeBleAttempt(device);
-    const service = await server.getPrimaryService(bleReconnectState.lastServiceUuid || bleServiceUuid());
-    const chars = await service.getCharacteristics();
-    if (stale()) return disposeBleAttempt(device);
-    const notifiers = chars.filter((c: BleCharacteristicLike) => c.properties.notify || c.properties.indicate);
-    if (!notifiers.length) throw new Error("服务下没有可通知特征");
-    const preferred = bleReconnectState.lastCharUuid
-      ? notifiers.find((c) => c.uuid === bleReconnectState.lastCharUuid)
-      : undefined;
+    await session.lease.setup(async () => {
+      const server = await device.gatt?.connect();
+      if (stale()) return;
+      if (!server) throw new Error("GATT 重连失败");
+      const service = await server.getPrimaryService(bleReconnectState.lastServiceUuid || bleServiceUuid());
+      if (stale()) return;
+      const chars = await service.getCharacteristics();
+      if (stale()) return;
+      notifiers = chars.filter((c) => c.properties.notify || c.properties.indicate);
+      if (!notifiers.length) throw new Error("服务下没有可通知特征");
+    });
+    if (stale()) { await disposeBleAttempt(session); return; }
+    const preferred = notifiers.find((c) => c.uuid === bleReconnectState.lastCharUuid) ?? notifiers[0];
+    const ok = await bleSubscribe(preferred, gen);
+    if (!ok || stale()) { await disposeBleAttempt(session); return; }
+    device.addEventListener("gattserverdisconnected", session.lost);
     bleState.notifiers = notifiers;
-    const ok = await bleSubscribe(preferred ?? notifiers[0], gen);
-    if (!ok || stale()) return disposeBleAttempt(device, bleState.char);
-    // 失败重连会摘掉掉线监听；成功重连必须**重新挂上**，否则下一次真掉线没人接（ROUND12 实测：
-    // 第二次掉线后 GATT 断开、状态仍显示已连接、也没有重连）
-    device.removeEventListener?.("gattserverdisconnected", onBleDeviceLost);
-    device.addEventListener("gattserverdisconnected", onBleDeviceLost);
     bleState.device = device;
     bleState.connected = true;
     sourceIntent = "ble";
@@ -6622,8 +6632,11 @@ async function bleAutoReconnect(): Promise<void> {
     applyDataSourceSemantics();
     toast("BLE 已自动重连", "#7ee787");
   } catch {
-    if (stale()) return; // 已作废：不排程、不报错（用户已经换源了）
-    disposeBleAttempt(device, bleState.char);
+    await disposeBleAttempt(session);
+    if (gen !== connectionGeneration || bleState.session !== session ||
+      bleReconnectState.lastDevice !== device || !bleReconnectState.reconnecting) return;
+    bleState.session = null;
+    bleState.char = null;
     scheduleBleReconnect("BLE 自动重连失败");
   }
 }
@@ -6642,33 +6655,14 @@ function closeBleGatt(device: BleDeviceLike | null): void {
  * ROUND11 P1：初连在「服务下没有 notify 特征」等失败分支上直接 return，旧实现既不断 GATT
  * 也不摘监听——状态里 connected=false，物理上却仍连着，还留着一个掉线回调等着搞下一次连接。
  */
-function disposeBleAttempt(
-  device: BleDeviceLike | null,
-  char?: BleCharacteristicLike | null,
-): void {
-  if (char) {
-    try {
-      char.removeEventListener?.("characteristicvaluechanged", onBleNotify);
-    } catch {
-      /* 忽略 */
-    }
-  }
-  if (device) {
-    try {
-      device.removeEventListener?.("gattserverdisconnected", onBleDeviceLost);
-    } catch {
-      /* 忽略 */
-    }
-    closeBleGatt(device);
-  }
-  if (bleState.device === device) bleState.device = null;
-  if (bleState.char && bleState.char === char) bleState.char = null;
+async function disposeBleAttempt(session: BleSession | null): Promise<void> {
+  await session?.lease.dispose();
 }
 
 function scheduleBleReconnect(reason: string): void {
   if (!bleReconnectState.lastDevice) return;
   const plan = bleReconnectPolicy.onFailure(() => {
-    void bleAutoReconnect();
+    void bleAutoReconnect().catch(reportTransportError);
   });
   if (!plan) {
     abandonBleTransport();
@@ -6703,17 +6697,15 @@ function abandonBleTransport(): void {
  * 新串口/新 BLE 的状态（实测：旧 lost 回调把新 B 的队列清零）。只有「当前会话的那台设备」
  * 才有资格触发断开收尾。
  */
-function onBleDeviceLost(ev?: { target?: unknown }): void {
-  const target = (ev?.target ?? null) as BleDeviceLike | null;
-  if (target && target !== bleState.device && target !== bleReconnectState.lastDevice) return;
-  if (!target && !bleState.connected && !bleReconnectState.lastDevice) return;
-  if (ev?.target && bleState.device && target !== bleState.device) return;
+function onBleDeviceLost(session: BleSession): void {
+  if (bleState.session !== session || session.lease.disposed || !bleState.connected) return;
   const hadDevice = bleReconnectState.lastDevice !== null;
   const willRetry = hadDevice && serialReconnectState.enabled;
   // 顺序与串口一致：**先**进入过渡态，**再**刷新数据源语义。
   // 反了就会 resetSim()——复核反例 P1-D：BLE 掉线后 t 从 24 s 回到 0、reset=1。
   bleReconnectState.reconnecting = willRetry;
-  bleCleanup("BLE 连接已中断（设备离开范围 / 关机 / 被别的程序占用）", true);
+  bleCleanup("BLE 连接已中断（设备离开范围 / 关机 / 被别的程序占用）", true, session);
+  void disposeBleAttempt(session).catch(reportTransportError);
   if (willRetry) scheduleBleReconnect("BLE 连接中断");
   else abandonBleTransport();
 }
@@ -6727,16 +6719,10 @@ function onBleDeviceLost(ev?: { target?: unknown }): void {
 function bleCleanup(
   message: string,
   warn = false,
-  target?: { device: BleDeviceLike | null; char: BleCharacteristicLike | null },
+  target?: BleSession,
 ): void {
-  const mine = !target || target.device === null || target.device === bleState.device;
-  // 摘监听：否则特征对象仍持有回调（断开后复用同一对象时会重复消费）
-  try {
-    (target?.char ?? bleState.char)?.removeEventListener?.("characteristicvaluechanged", onBleNotify);
-  } catch {
-    /* 忽略 */
-  }
-  if (!mine) return; // 不是自己的会话：到此为止
+  if (target && bleState.session !== target) return;
+  bleState.session = null;
   bleState.connected = false;
   bleState.char = null;
   bleState.device = null;
@@ -6771,57 +6757,50 @@ async function bleConnect(): Promise<void> {
   // 清掉 bleState，而第一次随后才置 connected=true，就会出现「设备物理上还连着、通知还在往队列里
   // 灌，但代码已经不认它」的僵尸连接——只能刷新页面。
   if (bleState.connected || bleState.connecting) return;
+  // 与串口同理：手动连 BLE 之前取消两侧的旧重连排程，避免「掉线的串口 1 s 后自己接回来」。
+  cancelPendingReconnects();
   // 先占住本次意图："我要连 BLE"。之后的「清旧链」一律用不递增世代的内部版，
   // 否则串口断开时的 ++ 会把**本次 BLE 连接自己**作废
   // （复核反例 P1-B：已连串口后发起 BLE，实测 serial=false/ble=false/gatt=false/通知数 0）。
   const connectGen = ++connectionGeneration;
-  // 与串口 / 回放互斥：三条数据通路同时活着只会互相打架
-  if (serialState.running || serialState.port) await serialDisconnect(true);
-  if (replayActive()) stopReplay();
   bleState.connecting = true;
-  let lastAttemptDevice: BleDeviceLike | null = null;
+  bleState.connectingGen = connectGen;
+  let session: BleSession | null = null;
+  const stale = (): boolean => connectGen !== connectionGeneration || bleState.connectingGen !== connectGen ||
+    (session !== null && (bleState.session !== session || session.lease.disposed));
   setConnectButtonsBusy(true);
   try {
+    if (serialState.running || serialState.port || serialState.session) await serialDisconnect(true);
+    if (stale()) return;
+    if (replayActive()) stopReplay();
     bleStatus("正在弹出设备选择框…（需要你点一下授权）");
     const device = await bt.requestDevice({ filters: [{ services: [serviceUuid] }] });
-    lastAttemptDevice = device;
-    if (connectGen !== connectionGeneration) return disposeBleAttempt(device);
+    if (stale()) return; // A chooser result has no GATT resources to disconnect.
+    session = createBleSession(device, connectGen);
+    bleState.session = session;
     bleStatus(`已选 ${device.name ?? device.id ?? "未命名设备"} · 正在连接 GATT…`);
-    // 同一个物理设备重复连接时浏览器可能复用同一个 BluetoothDevice 对象，
-    // 因此监听器要「先摘再挂」——否则连 5 次就挂 5 个回调（与特征上的监听器同一类问题）。
-    device.removeEventListener?.("gattserverdisconnected", onBleDeviceLost);
-    device.addEventListener("gattserverdisconnected", onBleDeviceLost);
-    const server = await device.gatt?.connect();
-    if (!server) throw new Error("GATT 连接失败");
-    if (connectGen !== connectionGeneration) return void closeBleGatt(device);
-    const service = await server.getPrimaryService(serviceUuid);
-    const chars = await service.getCharacteristics();
-    if (connectGen !== connectionGeneration) return void closeBleGatt(device);
-    const notifiers = chars.filter((c) => c.properties.notify || c.properties.indicate);
-    if (notifiers.length === 0) {
-      // 先真正释放这条链路（摘监听 + 断 GATT），再刷新文案：
-      // 否则状态显示未连接、物理上却连着，还留着掉线回调干扰后续连接（ROUND11 P1）
-      disposeBleAttempt(device);
-      bleCleanup(
-        `这个服务下没有支持通知（notify/indicate）的特征——UUID 可能选错了（该服务有 ${chars.length} 个特征）`,
-        true,
-      );
-      return;
-    }
+    let notifiers: BleCharacteristicLike[] = [];
+    await session.lease.setup(async () => {
+      const server = await device.gatt?.connect();
+      if (stale()) return;
+      if (!server) throw new Error("GATT 连接失败");
+      const service = await server.getPrimaryService(serviceUuid);
+      if (stale()) return;
+      const chars = await service.getCharacteristics();
+      if (stale()) return;
+      notifiers = chars.filter((c) => c.properties.notify || c.properties.indicate);
+      if (!notifiers.length) throw new Error("服务下没有支持通知（notify/indicate）的特征，请检查服务 UUID");
+    });
+    if (stale()) { await disposeBleAttempt(session); return; }
+    const ok = await bleSubscribe(notifiers[0], connectGen);
+    if (!ok || stale()) { await disposeBleAttempt(session); return; }
+    device.addEventListener("gattserverdisconnected", session.lost);
     bleState.notifiers = notifiers;
-    // 填充特征下拉；只有一个时直接订阅，多个时默认第一个并让用户可切
     const sel = document.getElementById("ble-char") as HTMLSelectElement | null;
     if (sel) {
       sel.innerHTML = notifiers.map((c) => `<option value="${c.uuid}">${c.uuid}</option>`).join("");
       sel.selectedIndex = 0;
       document.getElementById("ble-char-row")?.classList.remove("hidden");
-    }
-    // 订阅也要带世代：startNotifications 是 await，期间用户可能断开/切源（复核 P1-A）
-    const ok = await bleSubscribe(notifiers[0], connectGen);
-    if (!ok || connectGen !== connectionGeneration) {
-      // 连接期间用户已「断开」/切到别的来源：不提交状态，并把本次尝试的资源真正释放掉
-      disposeBleAttempt(device, bleState.char);
-      return;
     }
     bleState.device = device;
     bleState.connected = true;
@@ -6850,13 +6829,17 @@ async function bleConnect(): Promise<void> {
     const cancelled = /cancel|chooser|user/i.test(msg);
     // ROUND12：异常分支也必须**按归属**释放本次尝试（旧实现直接调用无 target 的全局
     // bleCleanup：新串口连接已建立的队列会被清空，服务发现抛错时 GATT 与掉线监听还会残留）
-    if (connectGen === connectionGeneration) {
-      disposeBleAttempt(lastAttemptDevice, bleState.char);
-      bleCleanup(cancelled ? "已取消设备选择" : `BLE 连接失败：${msg}`, !cancelled);
+    await disposeBleAttempt(session);
+    if (connectGen === connectionGeneration && bleState.connectingGen === connectGen &&
+      (!session || bleState.session === session)) {
+      bleCleanup(cancelled ? "已取消设备选择" : `BLE 连接失败：${msg}`, !cancelled, session ?? undefined);
     }
   } finally {
-    bleState.connecting = false;
-    setConnectButtonsBusy(false);
+    if (bleState.connectingGen === connectGen) {
+      bleState.connecting = false;
+      bleState.connectingGen = -1;
+      setConnectButtonsBusy(serialState.connecting);
+    }
   }
 }
 
@@ -6873,20 +6856,18 @@ async function bleDisconnect(
     connectionGeneration++; // 作废在途 connect await
     sourceIntent = "simulation";
   }
-  // 用户主动断开：取消排程并忘掉设备（否则会立刻自动接回来）
+  const gen = connectionGeneration;
   cancelBleReconnect();
-  const device = bleState.device; // 必须在 await 之前捕获：await 期间可能有新连接接管
+  const session = bleState.session;
   bleReconnectState.lastDevice = null;
-  const char = bleState.char;
-  bleState.char = null; // 先摘「当前订阅」身份：之后到达的通知立即失效（onBleNotify 归属校验）
-  try {
-    await char?.stopNotifications();
-  } catch {
-    /* 已断开 */
-  }
-  // 只关**自己**捕获的那台设备（await 期间可能有新连接接管：那份 device 必须保持不动）
-  closeBleGatt(device);
-  bleCleanup(message, false, { device, char });
+  ++bleSubToken;
+  bleState.connecting = false;
+  bleState.connectingGen = -1;
+  if (session) void session.lease.dispose(); // Invalidate immediately, before UI cleanup.
+  bleCleanup(message, false, session ?? undefined);
+  setConnectButtonsBusy(serialState.connecting);
+  await disposeBleAttempt(session);
+  if (gen !== connectionGeneration || bleState.session) return;
 }
 
 /* 自动重连开关（串口与 BLE 共用）：关掉时立刻取消已排程的重试 */
@@ -6909,41 +6890,16 @@ try {
     const port = (ev as unknown as { port?: SerialPortLike }).port;
     if (!serialState.running) return;
     if (port && serialState.port && port !== serialState.port) return;
-    serialState.running = false;
-    serialState.connToken++; // 作废在途 reader（它随后读到 done/异常时不许再对「新连接」收尾）
-    const deadPort = serialState.port;
-    const deadReader = serialState.reader;
-    serialState.port = null;
-    serialState.reader = null;
-    // ROUND12：系统级拔线时挂起的 read 仍**持着读锁**，此时 close 必然失败（"stream locked"），
-    // 端口会一直占着、重连全部撞 already open。必须真正走一遍
-    // 「cancel → 等 read 结束 → 释放锁 → close」，并把 reader 交给重连在同一代内收尾。
-    serialReconnectState.pendingReader = deadReader;
-    void (async (): Promise<void> => {
-      try {
-        await deadReader?.cancel();
-      } catch {
-        /* 已断开 */
-      }
-      try {
-        deadReader?.releaseLock();
-      } catch {
-        /* 已释放 */
-      }
-      await closePortVerified(deadPort);
-    })();
-    serialState.queue.length = 0;
-    serialState.lastTickMs = -1;
-    setSerialBaudLocked(false);
-    handleSerialDrop("真实 IMU 已拔出（系统断开事件）");
+    const session = serialState.session;
+    if (session) dropSerialSession(session, "真实 IMU 已拔出（系统断开事件）");
   });
 } catch {
   /* 不支持或不可用：不影响其它功能 */
 }
 
 document.getElementById("btn-ble")?.addEventListener("click", () => {
-  if (bleState.connected) void bleDisconnect();
-  else void bleConnect();
+  if (bleState.connected) void bleDisconnect().catch(reportTransportError);
+  else void bleConnect().catch(reportTransportError);
 });
 document.getElementById("ble-service")?.addEventListener("change", syncBleUi);
 document.getElementById("ble-char")?.addEventListener("change", () => {
@@ -6995,6 +6951,8 @@ resetSim(); // 统一时钟/统计/曲线起点（不改变已还原的深链参
   controls,
   state,
   ests,
+  serialConsumption: () => ({ ...serialConsumed }),
+  installSerialConsumptionObserver: (callback: ((event: {count:number;at:number;t:number}) => void) | null): void => { serialConsumptionObservers.callback = callback; },
   world,
   imuParams,
   solveState,
@@ -7100,6 +7058,7 @@ resetSim(); // 统一时钟/统计/曲线起点（不改变已还原的深链参
     config: (durationSec = 30): ExperimentConfig => currentExperimentConfig(durationSec),
     /** 批量评测的执行路径（自动化验收用）：worker = Web Worker，main = 主线程分片回退 */
     batchMode: (): "worker" | "main" | null => batchLastMode,
+    batchResult: () => batchCompletedResult ? { ...batchCompletedResult, seeds: batchCompletedResult.seeds.slice(), summary: batchCompletedResult.summary.map((row) => ({ ...row })) } : null,
     /** 批量评测的运行/取消状态（自动化验收用）：running 期间再点按钮 = 取消 */
     batchState: (): { running: boolean; activeJob: number; cancels: number; button: string; generation: number } => ({
       running: batchRunning,
@@ -7156,10 +7115,13 @@ resetSim(); // 统一时钟/统计/曲线起点（不改变已还原的深链参
         raw: { gyro: number[]; accel: number[]; mag: number[] };
         consumed: { accel: number[]; mag: number[] };
       }> = [];
+      const events = new TraceEvents();
       let rec = true;
       solveLoop.setHooks({
+        onAlign: (ev) => { still.chipUntil = performance.now() / 1000 + 3; events.align(ev.t); },
         onSolve: (ctx) => {
           onSolveDefault(ctx);
+          events.solve(ests);
           if (rec) {
             frames.push({
               t: ctx.t,
@@ -7175,10 +7137,12 @@ resetSim(); // 统一时钟/统计/曲线起点（不改变已还原的深链参
       for (let i = 0; i < n; i++) stepSim();
       rec = false;
       // 还原默认钩子（INS 仍在推进，但不再记录）
-      solveLoop.setHooks({ onSolve: onSolveDefault });
+      solveLoop.setHooks({ onSolve: onSolveDefault, onAlign: () => { still.chipUntil = performance.now() / 1000 + 3; } });
+      uiTraceEvents = { alignTimes: events.alignTimes, eventCounts: events.eventCounts };
       return frames;
     },
     /** runner 侧逐帧 trace（与 traceFrames 同口径：时间 + 五算法姿态） */
+    traceEvents: () => ({ alignTimes: uiTraceEvents.alignTimes.slice(), eventCounts: { ...uiTraceEvents.eventCounts } }),
     traceFramesRunner: (steps: number) => {
       const cfg = { ...currentExperimentConfig(1), durationSec: Math.max(0.002, steps * RUN_H) };
       const tr = runTrace(cfg, Math.max(1, Math.floor(steps)));
@@ -7192,6 +7156,7 @@ resetSim(); // 统一时钟/统计/曲线起点（不改变已还原的深链参
           consumed: st.consumed,
         })),
         eventCounts: tr.eventCounts,
+        alignTimes: tr.alignTimes,
         estimatorIds: tr.estimatorIds,
         endSec: tr.endSec,
       };
@@ -7225,11 +7190,13 @@ resetSim(); // 统一时钟/统计/曲线起点（不改变已还原的深链参
       accelApplied?: boolean;
       magOffset?: V3;
       seed?: number;
+      notRestored?: string[];
     } => {
       const parsed = parseArchive(rawArchive);
       if (!parsed.ok) return { ok: false, error: parsed.error };
       const cfg = parsed.config;
-      applyArchiveConfig(cfg);
+      const applied = applyArchiveChecked(cfg);
+      if (!applied.ok) return { ok: false, error: applied.error };
       return {
         ok: true,
         config: currentExperimentConfig(cfg.durationSec),
@@ -7238,6 +7205,7 @@ resetSim(); // 统一时钟/统计/曲线起点（不改变已还原的深链参
         accelApplied: accelCalState.applied && accelCalState.cal !== null,
         magOffset: magCalState.cal ? ([...magCalState.cal.offset] as V3) : undefined,
         seed: experimentConfig.seed,
+        notRestored: applied.notRestored,
       };
     },
   },
@@ -7340,13 +7308,14 @@ resetSim(); // 统一时钟/统计/曲线起点（不改变已还原的深链参
     return true;
   },
   /** 引导课程的入口（自动化测试用；正常路径是右侧栏「引导课程」面板上的按钮） */
-  tour: {    start: (): void => tour.start(),
-    next: (): void => tour.next(),
-    prev: (): void => tour.prev(),
-    goto: (n: number): void => tour.goto(n),
-    exit: (): void => tour.exit(),
+  tour: {
+    start: (): void => { void ensureTour().then((t) => t.start()).catch(() => {}); },
+    next: (): void => tour?.next(),
+    prev: (): void => tour?.prev(),
+    goto: (n: number): void => tour?.goto(n),
+    exit: (): void => tour?.exit(),
     get info() {
-      return { active: tour.active(), index: tour.index(), total: TOUR_STEPS.length };
+      return { active: tour?.active() ?? false, index: tour?.index() ?? 0, total: tour?.total() ?? 0 };
     },
   },
   /** 离线回放的调试/自动化入口：直接喂 CSV 文本（绕开文件选择框，便于 E2E 测试） */

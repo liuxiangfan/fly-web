@@ -31,6 +31,7 @@ import {
   type EstimatorTuning,
 } from "./experiment-config";
 
+import { TraceEvents } from "./trace-events";
 export const RUN_HZ = 500;
 export const RUN_H = 1 / RUN_HZ;
 /** 详细运行（runExperimentDetailed）保留的误差序列上限：诊断用途，长跑同样封顶 */
@@ -80,7 +81,7 @@ export interface HeadlessRunResult {
   /** 参与统计的样本时间窗（秒） */
   window: { startSec: number; endSec: number };
   metrics: EstimatorRunMetrics[];
-  /** 本次运行使用的种子（Worker 聚合路径会补上；主线程 runCore 不填） */
+  /** 本次运行使用的种子（Worker 聚合路径会补上；runTask 不填） */
   seed?: number;
   finalQuats: Record<EstimatorId, Quat>;
   events: RunEvent[];
@@ -103,9 +104,10 @@ export interface RunTermination {
   reason: "completed" | "cancelled";
   requestedEndSec: number;
   endSec: number;
-  lastSolveSec: number;
+  /** 无估计器更新时为 null，不能用世界终点冒充一次解算。 */
+  lastSolveSec: number | null;
   pendingTailSec: number;
-  /** 触发取消的进度钩子时刻（仅在 reason="cancelled" 时有意义） */
+  /** 触发取消的世界时刻（进度钩子或 shouldCancel；仅 reason="cancelled" 时有意义） */
   cancelledAtSec?: number;
 }
 
@@ -119,11 +121,13 @@ export interface RunEvent {
 export interface RunHooks {
   /**
    * 每处理约 progressEverySec 秒调用一次；返回 false 可提前终止。
-   * Worker 用它发心跳/响应取消（progressEverySec 调到 0.5 即可）；
-   * 主线程路径用它做进度与中途取消。
+   * Worker 用它发心跳；异步路径另外在分片之间让出事件循环，才能实际接收入站 cancel。
+   * 同步路径可在钩子里直接中止。
    */
   onProgress?: (t: number) => boolean | void;
   progressEverySec?: number;
+  /** 每个世界步开始前检查，不依赖进度回调频率；true 表示取消。 */
+  shouldCancel?: () => boolean;
   /** **自检专用**：覆盖 STATS_CAP，用来验证「样本截断不改变均值/稳态/分位数口径」 */
   statsCapOverride?: number;
 }
@@ -385,7 +389,7 @@ export class MetricAccumulator {
   }
 
   /**
-   * @param completed 本次运行是否**跑满**了请求时长（由 runCore 的显式终止口径给出）。
+   * @param completed 本次运行是否**跑满**了请求时长（由 runTask 的显式终止口径给出）。
    *   旧实现用「endT < 预定 99%」猜提前终止，会把正常跑完的短运行误判成 early-stop，
    *   也会漏掉真正的取消——这里改成由调用方明确告知。
    */
@@ -444,7 +448,48 @@ export class MetricAccumulator {
  * @param hooks 进度/中止钩子；Web Worker、Node 脚本与 UI 都可注入
  */
 export function runExperiment(configIn: ExperimentConfig, hooks: RunHooks = {}): HeadlessRunResult {
-  return runCore(configIn, hooks, false);
+  return exhaustTask(runTask(configIn, hooks, false));
+}
+
+export interface AsyncRunHooks extends RunHooks {
+  /** 每片世界步数，默认 128，硬上限 512；只改变调度，不改变数值路径。 */
+  stepsPerSlice?: number;
+}
+
+/** 真正让出 macrotask：Promise.resolve() 只清空微任务，收不到 Worker 入站消息。 */
+const yieldToMessages = (): Promise<void> => new Promise(resolve => setTimeout(resolve, 0));
+
+/** 同一 generator 的异步出口；每有限步交还事件循环，cancel 可在单种子中途生效。 */
+export function runExperimentAsync(configIn: ExperimentConfig, hooks: AsyncRunHooks = {}): Promise<HeadlessRunResult> {
+  return exhaustTaskAsync(runTask(configIn, hooks, false), hooks.stepsPerSlice);
+}
+
+function exhaustTask<T>(task: Generator<void, T, void>): T {
+  for (;;) {
+    const step = task.next();
+    if (step.done) return step.value;
+  }
+}
+
+async function exhaustTaskAsync<T>(task: Generator<void, T, void>, stepsPerSlice = 128): Promise<T> {
+  const budget = Number.isFinite(stepsPerSlice) ? Math.max(1, Math.min(512, Math.floor(stepsPerSlice))) : 128;
+  // start 后立即 cancel（含只需一片的短任务）也应有一次入站处理机会。
+  await yieldToMessages();
+  for (;;) {
+    for (let i = 0; i < budget; i++) {
+      const step = task.next();
+      if (step.done) return step.value;
+    }
+    await yieldToMessages();
+  }
+}
+
+/** 仅非整步末尾缩短 h；整步时长继续用原 RUN_H，保持默认/golden 的逐位路径。 */
+function runStepSize(step: number, totalSteps: number, durationSec: number, currentSec: number): number {
+  if (step + 1 < totalSteps) return RUN_H;
+  const remainder = durationSec - (totalSteps - 1) * RUN_H;
+  if (Math.abs(remainder - RUN_H) <= Number.EPSILON * Math.max(1, durationSec) * 8) return RUN_H;
+  return Math.max(0, Math.min(RUN_H, durationSec - currentSec));
 }
 
 /**
@@ -477,8 +522,18 @@ export interface TraceResult {
   eventCounts: Record<string, number>;
   /** 每次静止粗对准发生的时刻（秒）：用来核验 `aligned` 标在**正确的那一步**上 */
   alignTimes: number[];
-  /** 实际总时长（秒） */
+  /**
+   * **被记录下来的**最后时刻（秒）。
+   *
+   * 截断时它短于配置时长：旧实现无论是否被 maxSteps 截断都返回 world.t，
+   * 于是「截断的 steps + 全时长 endSec + 全程事件计数」混在一起，外部按 endSec
+   * 去核 schedule 会得到一个根本不存在的完整轨迹（复核 E）。
+   */
   endSec: number;
+  /** 配置要求的完整时长（秒）：`truncated` 为真时用来对照 */
+  fullDurationSec: number;
+  /** 是否因为 maxSteps 上限而提前停止（事件计数与 steps 都只覆盖到 endSec） */
+  truncated: boolean;
   /** 五算法 id（按 steps[].quats 的顺序）——比较器据此校验列数与身份 */
   estimatorIds: string[];
 }
@@ -497,11 +552,8 @@ export function runTrace(
   for (const e of ests) e.reset(q0);
 
   const steps: TraceStep[] = [];
-  const eventCounts: Record<string, number> = {};
-  const alignTimes: number[] = [];
-  // 门控拒绝是"每个估计器各自累计"的，这里按增量统计，事件计数才不是空的
-  // （复核 P2-4：violent/8 s 场景实跑有 162 条 gate-reject，trace.eventCounts 却是 {}）
-  let gateRejects = 0;
+  const traceEvents = new TraceEvents();
+  const { eventCounts, alignTimes } = traceEvents;
   const loop = new SolveLoop({
     estimators: ests,
     solveRateHz: config.solveRateHz,
@@ -511,41 +563,37 @@ export function runTrace(
     },
     magEnabled: config.estimators.comp.magEnabled,
     autoCoarseAlign: config.autoCoarseAlign !== false,
-    onAlign: (ev) => {
-      eventCounts.align = (eventCounts.align ?? 0) + 1;
-      alignTimes.push(ev.t);
-    },
+    // 上限之后**不再记步、也不再计事件**：否则 alignTimes/事件计数会覆盖到 steps 里
+    // 根本不存在的时刻，与「逐帧对齐」的契约自相矛盾。
+    onAlign: (ev) => { if (steps.length < maxSteps) traceEvents.align(ev.t); },
     onSolve: ({ t, dt, sample, accel, mag, aligned }) => {
-      if (steps.length < maxSteps) {
-        steps.push({
-          t,
-          dt,
-          quats: ests.map((e) => ({ ...e.q })),
-          aligned,
-          raw: { gyro: [...sample.gyro] as V3, accel: [...sample.accel] as V3, mag: [...sample.mag] as V3 },
-          consumed: { accel: [...accel] as V3, mag: [...mag] as V3 },
-        });
-      }
-      // 门控拒绝：估计器只暴露"这一帧是否被拒"（detail.gateMode），所以按帧累计，
-      // 与 runCore 的口径一致（1 = 拒、2 = 从拒恢复）。旧实现在这里读一个不存在的
-      // 累计字段，于是 trace.eventCounts 永远是 {}（复核 P2-4）。
-      for (let i = 0; i < ests.length; i++) {
-        const gm = ests[i].telemetry.detail.gateMode;
-        if (gm === 1) {
-          gateRejects++;
-          eventCounts["gate-reject"] = (eventCounts["gate-reject"] ?? 0) + 1;
-        } else if (gm === 2 && gateRejects > 0) {
-          eventCounts["gate-recovery"] = (eventCounts["gate-recovery"] ?? 0) + 1;
-        }
-      }
+      if (steps.length >= maxSteps) return;
+      steps.push({
+        t,
+        dt,
+        quats: ests.map((e) => ({ ...e.q })),
+        aligned,
+        raw: { gyro: [...sample.gyro] as V3, accel: [...sample.accel] as V3, mag: [...sample.mag] as V3 },
+        consumed: { accel: [...accel] as V3, mag: [...mag] as V3 },
+      });
+      traceEvents.solve(ests);
     },
   });
   const totalSteps = Math.ceil(config.durationSec / RUN_H);
   for (let step = 0; step < totalSteps; step++) {
-    const sample = world.step(RUN_H, config.imu);
-    loop.step(sample, RUN_H, world.t);
+    if (steps.length >= maxSteps) break; // 到上限就停：不再空跑，endSec 才是真实记录终点
+    const h = runStepSize(step, totalSteps, config.durationSec, world.t);
+    const sample = world.step(h, config.imu);
+    loop.step(sample, h, world.t);
   }
-  return { steps, eventCounts, alignTimes, endSec: world.t, estimatorIds: ests.map((e) => e.id) };
+  const truncated = steps.length >= maxSteps && world.t < config.durationSec - 1e-9;
+  return {
+    steps, eventCounts, alignTimes,
+    endSec: world.t,
+    fullDurationSec: config.durationSec,
+    truncated,
+    estimatorIds: ests.map((e) => e.id),
+  };
 }
 
 /** 单种子结果里各算法的姿态误差时间序列（供曲线叠加、诊断） */
@@ -561,28 +609,36 @@ export function runExperimentDetailed(
   configIn: ExperimentConfig,
   hooks: RunHooks = {},
 ): HeadlessRunResult & { series: ErrorSeries[] } {
-  return runCore(configIn, hooks, true);
+  return exhaustTask(runTask(configIn, hooks, true));
+}
+
+/** 详细异步出口与同步详细出口使用同一序列/事件累计，可用于逐点契约检查。 */
+export function runExperimentDetailedAsync(
+  configIn: ExperimentConfig,
+  hooks: AsyncRunHooks = {},
+): Promise<HeadlessRunResult & { series: ErrorSeries[] }> {
+  return exhaustTaskAsync(runTask(configIn, hooks, true), hooks.stepsPerSlice);
 }
 
 /**
- * 唯一的运行内核：`runExperiment` 与 `runExperimentDetailed` 只是它的两个出口，
+ * 唯一的运行内核：同步出口耗尽 generator，异步出口有限步后让出事件循环。
  * 任何语义改动（粗对准、稳态窗口、SO(3) 误差分解、校准链）都只需在这里改一次。
  */
-function runCore(
+function runTask(
   configIn: ExperimentConfig,
   hooks: RunHooks,
   keepSeries: false,
-): HeadlessRunResult;
-function runCore(
+): Generator<void, HeadlessRunResult, void>;
+function runTask(
   configIn: ExperimentConfig,
   hooks: RunHooks,
   keepSeries: true,
-): HeadlessRunResult & { series: ErrorSeries[] };
-function runCore(
+): Generator<void, HeadlessRunResult & { series: ErrorSeries[] }, void>;
+function* runTask(
   configIn: ExperimentConfig,
   hooks: RunHooks,
   keepSeries: boolean,
-): HeadlessRunResult & { series?: ErrorSeries[] } {
+): Generator<void, HeadlessRunResult & { series?: ErrorSeries[] }, void> {
   const config = cloneExperimentConfig(configIn);
   const world = new World(scenarios[config.scenario] ?? scenarios.hover, config.seed);
   // 手动剧本的目标角来自配置（不是全局可变对象）——否则「同配置同 seed」并不可复现
@@ -607,7 +663,7 @@ function runCore(
     : null;
   const events: RunEvent[] = [];
   /** 最后一次估计器更新的时刻（抽帧解算时可能早于世界结束时间） */
-  let lastSolve = NaN;
+  let lastSolve: number | null = null;
   // 解算调度与静止粗对准与界面**共用同一份实现**（core/solve-loop.ts）：
   // 任何阈值、检查顺序、冷却时长的差异都在这一处被消除，
   // 「批量结论能否代表界面」才有可验证的前提（冒烟里用同 seed 逐帧比对）。
@@ -668,8 +724,13 @@ function runCore(
   const totalSteps = Math.ceil(config.durationSec / RUN_H);
   let cancelledAtSec: number | null = null;
   for (let step = 0; step < totalSteps; step++) {
-    const sample = world.step(RUN_H, config.imu);
-    loop.step(sample, RUN_H, world.t);
+    if (hooks.shouldCancel?.()) {
+      cancelledAtSec = world.t;
+      break;
+    }
+    const h = runStepSize(step, totalSteps, config.durationSec, world.t);
+    const sample = world.step(h, config.imu);
+    loop.step(sample, h, world.t);
     if (world.t >= nextProgress) {
       nextProgress += every;
       if (hooks.onProgress?.(world.t) === false) {
@@ -677,16 +738,19 @@ function runCore(
         break;
       }
     }
+    yield;
   }
+  // 最后一个步后的让出也可能收到取消，不把末片取消记成正常完成。
+  if (cancelledAtSec === null && hooks.shouldCancel?.()) cancelledAtSec = world.t;
 
   // 终止口径：请求时长 / 实际结束 / 最后一次解算 / 尾巴长度，四项分开报（复核 P2-1）
-  const lastSolveSec = Number.isFinite(lastSolve) ? lastSolve : world.t;
+  const lastSolveSec = lastSolve;
   const termination: RunTermination = {
     reason: cancelledAtSec === null ? "completed" : "cancelled",
     requestedEndSec: config.durationSec,
     endSec: world.t,
     lastSolveSec,
-    pendingTailSec: Math.max(0, world.t - lastSolveSec),
+    pendingTailSec: Math.max(0, world.t - (lastSolveSec ?? 0)),
     ...(cancelledAtSec === null ? {} : { cancelledAtSec }),
   };
 

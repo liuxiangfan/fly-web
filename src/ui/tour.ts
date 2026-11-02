@@ -228,6 +228,8 @@ export interface Tour {
   active(): boolean;
   /** 当前步序号（1 起，未开始时为 0） */
   index(): number;
+  /** 总步数（供主程序在课程加载后显示进度，避免把 13 硬编码到 main） */
+  total(): number;
 }
 
 const $t = (id: string): HTMLElement | null => document.getElementById(id);
@@ -344,6 +346,7 @@ export function mountTour(host: TourHost): Tour {
     },
     active: () => i >= 0,
     index: () => i + 1,
+    total: () => TOUR_STEPS.length,
   };
 
   nextBtn?.addEventListener("click", () => tour.next());

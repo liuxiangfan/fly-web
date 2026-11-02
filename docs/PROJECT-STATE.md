@@ -1,120 +1,43 @@
 # 项目状态 · 四元数姿态解算学习演示装置
 
-> **最新一轮：2026-11-01「按 ROUND12 的 S0–S3 修复」已实施**（详见 [`CHANGELOG.md`](CHANGELOG.md) 顶部）。
-> 门禁（严格顺序）：`npx tsc --noEmit` → `npm run check`（**161 PASS / 0 FAIL**）→ `npm run build` →
-> `npm run budget`（**13 项**）→ `npx tsx scripts/doccheck.ts --recompute` → `npm run smoke`（**88 PASS / 0 FAIL**）全绿。
-> **S1 真正分拍**：`SolveLoop` 改为 FIFO 待积分队列（单拍 ≤maxSubsteps 个子步、每步 ≤50 ms，
-> 余量由后续拍继续补，`pendingSec` 可读）；回放侧 `replayBacklog` 每拍 ≤5 s，
-> **播放器到底且队列排空**才宣告完成，状态行显示「待积分 x.x s」；消费快照带 `runId`，换轮即作废。
-> **S2 连接事务**：系统拔线走 `cancel→释放读锁→close`、close 失败不 open、BLE 异常按归属释放、
-> 过期订阅不再退订已提交的新订阅、订阅失败回滚且拒绝可见、重连成功恢复掉线监听。
-> **S3 递归 strict**：嵌套字段/枚举类型校验 + 当前 schema 必需字段；磁 full 必须带 matrix 且对称正定；
-> 加计按结构验（不套用 SPD）；偏置/残差门槛与拟合一致；count/faces 下限；不再静默过滤非法 face。
-> **S0 预算回到原线**：文档演示改按需 chunk，首屏 **270.3 KB / gzip 102.1 KB**（原线 285/108 以内），
-> 新增「全部 JS 合计 gzip ≤272 KB」硬线，按需 chunk/Worker/SW/three 一并封顶。
-> **S4 门禁自身也已落地**：trace 比较器现在核**固定 schedule/算法身份/双侧 dt/raw/consumed 一致性/对齐事件**
-> （11 种畸形输入必须失败，新增 dt 不一致、缺输入、对齐标记不一致、帧数不足）；doccheck 默认就做
-> **小基准只读复算**（圆锥/Wahba/六面加计），正文数字块按**记录里的实际时长/种子数/样本量**渲染，
-> 并校验种子唯一、窗口与配置一致；statuscheck 用文档里 `<!-- history:begin/end -->` 机器边界区分
-> 当前口径与历史（不再靠"第一个日期行"猜）；soak 增加**逐段恢复**（每次重连后累计帧必须增长）、
-> **堆缺测即失败**（可用 `--allowNoHeap` 显式跳过）、批量必须声明**期望种子数**；
-> 加计采面新增**时间加权密度**（10 段每段 ≥2 样本，专拦"短簇+稀疏补点"）。
-> **仍未做**：600 s 软件长稳、串口/BLE 各 30 min 真机、可判读图像的桌面/窄屏/文档/打印视觉验收。
-> 上一轮复核报告 [`QUALITY-REVIEW-2026-11-01-ROUND12.md`](QUALITY-REVIEW-2026-11-01-ROUND12.md) 列出了本轮的原始反例与验收标准。
+<!-- current:begin -->
 
-> **第十一轮历史实施：[`QUALITY-REVIEW-2026-11-01-ROUND11.md`](QUALITY-REVIEW-2026-11-01-ROUND11.md)（当前未完成项以ROUND12为准）。**
-> 2026-11-01 第十一轮按 ROUND11 的 R1–R5 **已实施并验收**：`tsc` / `check`（**161 PASS / 0 FAIL**：152 子检查 + 9 状态）/
-> `build` / `budget`（**11 项**）/ `doccheck --recompute` / `smoke`（**88 PASS / 0 FAIL**）全绿。
-> 已修（每条都有永久负例）：**逐子步即时回调**（INS 东向位置 3.925 m → 1.556 m；0 dt 不再积分；
-> 子步长度永不因上限放大，超限部分记 `deferredSec`）；**连接会话所有权**（read await 后验令牌挡住迟到数据、
-> `cancel→释放锁→close` 与 `closePortFailures` 真实记账、重连不误伤替代 reader、BLE 初连失败断 GATT 摘监听、
-> 回调按设备身份归属、订阅先 start 后挂监听）；**录制/消费契约**（`onSolve` 冻结实际消费输入、源列按逐行
-> `sourceCalibrated` 标 `# imu=`、混语义拒绝）；**strict 输入**（原始结构校验、未来版本拒绝、notes 展示、
-> 先算提示再提交）与**共用校准合法性**（对称正定/增益/偏置/残差/faces）+ 采面连续时间覆盖；
-> **门禁自身**（soak CLI 双写法、`opens ≥ 断链数`、doccheck 关系约束与零引用失败、窄屏错误汇总）；
-> **预算计量**（sw.js 单列，主包上限据实测增量 285/108 → 288/110 KB）。
-> **仍未验收**：真机 30 min（串口/BLE 各一段：拔插/离开范围/休眠/复位）、10 分钟软件长稳、
-> 可判读的桌面/窄屏/文档/打印视觉验收（截图通道仍返回 Media omitted）；另：trace 比较器尚未比较双侧
-> dt/IMU/事件、Worker 协作取消仍收不到消息、跨时段校准数据与真实硬件标定未验。
-> 上一轮报告 [`QUALITY-REVIEW-2026-11-01-ROUND10.md`](QUALITY-REVIEW-2026-11-01-ROUND10.md) 为历史实施记录。
-
-> **历史实施：2026-11-01「复核修复轮（第十轮，按 ROUND8 的 A–E）」**（详见 [`CHANGELOG.md`](CHANGELOG.md) 顶部；当前残留以ROUND11为准）。
-> 本轮门禁：`npx tsc --noEmit` / `npm run check`（**153 项 = 124 数值 + 10 几何 + 15 HTML + 3 文档**）/ `npm run build` /
-> `npm run budget`（10 项）全绿；`npm run smoke` **85 PASS / 0 FAIL**；`npm run soak` 两种模式（batch / reconnect）均 pass。
-> 修复内容与负例一一对应：**连接所有权**（一次切源只递增一次世代、内部 dispose 不再自我作废、订阅/自动重连每个 await 后验世代、
-> read 循环带连接令牌、端口有开必有关、重连耗尽不冻结、`sourceIntent` 保持断链期间的来源身份）；
-> **导出/回放不可变**（每行冻结当时喂给解算的读数、导出不重算历史、全帧源 IMU 按来源标 `# imu=`、校准日志锁定校准开关、
-> 30 s 空洞按真实 30 s 播放）；**校准契约**（错朝向立即拒绝、条件数/镜像/偏置/残差门槛、留一带方向误差、
-> 档案严格 schema 不再静默丢模型、Applied 不能无模型、导入清两侧采集并深拷贝）；
-> **生产负面测试**（`applyFrame` 子步时间递增且单次对准事件、`termination` 显式终止口径、trace 带 dt/raw/consumed 与
-> 正确 `aligned`、统计用例直接驱动生产累加器、低采样历史多留一个周期）；**门禁治理**（trace 比较器 7 种畸形输入必须失败、
-> soak 真实丢弃计数与逐段增长、statuscheck 项数取自脚本实际输出、doccheck 严格 schema + 正文数字块核对 + `--recompute` 只读复算、
-> 对比度负对照）。
-> **仍未做**：真机 30 min 现场验收（串口/BLE 各一段，含拔插/离开范围/休眠/设备复位）与图像通道可用的桌面/窄屏/文档/打印视觉验收
-> ——这两项保持「未验收」标签，不用软件 mock 顶替。上一轮报告 [`QUALITY-REVIEW-2026-11-01-ROUND8.md`](QUALITY-REVIEW-2026-11-01-ROUND8.md)
-> 与 [`QUALITY-REVIEW-2026-11-01-ROUND10.md`](QUALITY-REVIEW-2026-11-01-ROUND10.md)（本轮结项说明）可对照阅读。
-
-> **最新恢复入口：[`QUALITY-REVIEW-2026-10-31-ROUND7.md`](QUALITY-REVIEW-2026-10-31-ROUND7.md)。**
-> 本轮独立复核未修产品源码：现有 `check` 为 **149 PASS / 0 FAIL**（117 数值 + 10 几何 + 15 HTML + 1 文档引用 + 6 状态断言），smoke 为 **76 PASS / 0 FAIL**，预算实为 **10 项**。
-> 但已有定向反例证实：取消旧任务仍会回写/串批、重连空窗混入仿真、后段验证75%训练泄漏、验证模型使用错误2k、退化校准被当成功、导出历史/语义不闭环、采样率×延迟与小数日志时间差错误、周期分位数混叠、manual目标不在配置。
-> “逐帧一致”目前只比终点，“全部15页对比度”漏扫5页；以下旧里程碑的“完成/已修”需以ROUND7证据与W0–W6工单重新验收，不能直接沿用。
-> 新跑 `soak --seconds=120 --interval=10000 --batch` **退出码1**：零错误/容量/堆检查通过，时钟推进16.7→51.1秒未达到阈值。视觉截图无法判读，本轮视觉验收未完成。真机30分钟仍未做。
-> 测试日志在 `.audit-current/`（D盘）。
->
-> **第九轮已按 W0–W5 修复**（详见 ROUND7 第 6b 节）：批次世代（取消后 17 s 无回写）、连接世代与断线冻结数据流、
-> 传感器延迟按采样时刻寻址（50 Hz 下 100 ms→28 ms）、日志浮点时间（Σdt 0.805→1.000000 s）、手动目标进配置、
-> 统计改定长蓄水池（10 Hz P95 从混叠的 1.25° 修回 9.98°）与预定切点精确稳态、SO(3) 用 log 旋转向量
-> （90°/180° 精确）、校准合成复用生产链路且后段留出改为前段训练、退化/朝向/点数不足一律拒绝、
-> 档案不再伪造训练样本、逐帧 trace 升级为**逐步比较**（2000 步、时间差 0、最大姿态差 5.12e-6°）、
-> 对比度逐页核对（15/15）、doccheck 增加数值健全性、soak 逐批记录批量并要求帧计数不倒退。
-> **仍未做**：真机 30 min 现场验收（需要硬件窗口，保持未验收标签）。
-
-> **下一轮实施先读 [`NEXT-ITERATION-ROADMAP.md`](NEXT-ITERATION-ROADMAP.md)**：
-> 2026-10-30 只读审查形成的任务书（P0 事实校正 → P1 可复现实验内核 → P2 批量评测 →
-> P3 时间/采样/记录 → P4 卡尔曼诊断 → P5 新实验 → P6 文档重组），含逐项验收标准。
->
-<!-- counts: experiments=19 demos=8 selftest=124 smoke=88 docpages=15 -->
-> **本文件是项目的恢复锚点。** 会话上下文被压缩后，从这里可以快速接续全部关键信息。
-<!-- history:begin 历史里程碑（不参与当前计数/口径校验） -->
-> 最后更新：2026-10-31（**闭环一致性轮**：第四轮质量复核指出的四条 P1 全部落地——
-> ① 配置档案不再丢校准（校准对象/模型/「是否应用」三者一起往返，迁移与校验补 `parseMagCalibration`/`parseAccelCalibration`）；
-> ② 导出 IMU 列显式声明语义 `# imu=raw|calibrated`，回放据此决定是否补校准（默认 raw → 补校准；calibrated → 自动关闭，禁止二次校准），
-> 回放面板新增「回放应用校准」开关并在状态条显示 IMU 语义；
-> ③ 外部真值回放的「真值波形」改用日志真值（重力/磁场投影 + 相邻真值姿态差分角速度），不再拿模拟 world 冒充日志真值；
-> ④ runner 与界面同语义：抽出唯一运行内核、补静止粗对准状态机（`autoCoarseAlign`，可用配置关）、稳态窗口可指定绝对起点 `steadyFromSec`；
-> 另：冻结配置改为 A/B 克隆的唯一来源（`applyTuning` 装配）、采样率下噪声按 √(fs/500) 换算、倾角/偏航改用 SO(3) 小角分解（欧拉分解留作对照）。
-> 第五轮复核修正 SO(3) 的**世界系**约定、校准验证集重叠与加计验证硬编码模型；第六轮（可验证性轮）再做四件事：
-> ① **统一仿真调度** `core/solve-loop.ts`——界面与 runner/Worker 共用同一份「抽帧 + 静止粗对准」，
-> 冒烟同 seed **逐步比较 2000 步**（时间差 0、最大单步姿态差 5.12e-6°，即双精度舍入级）；期间发现并修复两处真问题：
-> 对准检查顺序两边差一帧、抽帧把余量重复计入 dt（12 s 仿真积出 13.2 s 角增量）；
-> ② 有界统计的**稳态窗口改时间分桶**（长跑不再依赖按序号抽样的蓄水池）+「截断不改变数值口径」断言；
-> ③ Worker 协议补 **jobId/取消/心跳/停滞看门狗**（30×30 档可取消，取消后状态完全恢复）；
-> ④ 校准**器件指纹与失效提示**（改了交叉轴/拟合模型就提示"标定基于旧模型"）+ `npm run soak` 长稳脚本。
-> **剩余重点**（见 `QUALITY-REVIEW-2026-10-31-ROUND5.md`）：真机长时间验收、校准跨时段独立验证、数据源/回放调度继续模块化。
-> **当前验证口径以脚本实际输出为准**：数值自检 124 + 场景几何 10 + HTML 契约 15 + 文档基准 4 +
-> 浏览器冒烟 88（`npm run statuscheck` 会把这些计数与源码实测值对齐，数字过期即失败）；`npm run check` / `npm run smoke` / `npm run budget` / `npm run benchmark` / `npm run doccheck`）
->
-> 2026-10-30（**可复现与结论可信轮**：P0 教材事实校正（Wahba 方向/Joseph/互补 α/Madgwick
-> 稳态公式/随机游走增长律/INS 垂直通道边界/可观性分层/游离章节归位）；新增版本化实验配置、种子化
-> 独立随机流、完整实验基线、same-start A/B、无 DOM runner、多种子批量评测、实验档案 JSON、
-> benchmark/doccheck、单步与三图共享游标、卡尔曼 NIS/NEES 与 χ² 门控、回放有效性/外部真值/时间完整性、
-> TRIAD/Wahba 与圆锥-混叠演示、加速度计六面校准核心；数学原理拆为「主线推导」与「专题与直觉」两页。
-> **当前验证口径以脚本实际输出为准**：数值自检 87 + 场景几何 10 + HTML 契约 15 + 文档基准 1 +
-> 浏览器冒烟 55；`npm run check` / `npm run smoke` / `npm run budget` / `npm run benchmark` / `npm run doccheck`）
->
-> 2026-10-28（**文档条理与可读性轮**：README 双语（+`README.en.md`）；
-> **每个文档页补「读完这一页你应该能回答」**、数学原理补 19 章索引与章末小结 + 公式汇总、
-> 滤波算法讲解补小结；14 个分页全部可寻址；产物预算拆成「外壳 59 KB 硬上限 / 内联文档宽松上限」共 9 项。
-> （当轮计数：静态自检 105 + 冒烟 51）上一轮（测试盲区审计）见里程碑）
->
-> 2026-10-28（**测试盲区审计轮**：用户要求「查找问题、我要完美的项目」。这轮不重复跑已有测试，
-> 而是系统性打它们的盲区——覆盖度测量（c8）、对抗性输入扫描、mock 忠实性、文档数字复核。
-> 查出并修掉 **14 类真问题**（详见下面里程碑），其中三条最值钱：实验库的「门控滞回」实验**从来不触发它要演示的机制**、
-> 「陀螺刻度/失准/群延迟」四个文档功能**零测试覆盖**（文档却写着「自检实测」）、
-> 假 BLE mock 比真实 EventTarget 宽容，掩盖了监听器泄漏；
-> （当轮计数：数值自检 80 + 场景几何 10 + HTML 契约 14 + 冒烟 50 + 产物预算 7）
-
-<!-- history:end -->
+> **最新一轮：2026-11-01「按两轮独立复核的阻断项修复」**（详见 [`CHANGELOG.md`](CHANGELOG.md) 顶部）。
+> 门禁自述（严格顺序）：`npx tsc --noEmit` → `npm run check` → `npm run build` → `npm run budget` →
+> `npx tsx scripts/doccheck.ts --recompute` → `npm run smoke`；各项计数见上方 verify 清单
+> （与 `npm run statuscheck` 的实测值逐项核对，数字过期即失败）。
+> **浏览器门禁本身修好了**：`scripts/browser-smoke.mjs` 顶层的 `const URL` 遮蔽了全局 URL 构造函数，
+> 于是它自己第 12 行的 `new URL()` 抛 TDZ——整条冒烟在开浏览器之前就退出，**一项都没跑**却只报「异常」。
+> 改名 `APP_URL` 后 90 项全部真实执行；并把「新建标签页失败（浏览器进程被回收）」改成自动重启浏览器继续，
+> 一次偶发不再让后面几十项静默跳过。
+> **连接释放事务**：`dispose()` 的失败结果不再被永久缓存（close 因读锁失败 → 之后重试真的能关掉），
+> 旧 `read` 永不落定时按有界时间推进并如实记账（不再永久卡在「重连中」）；掉线重连**已排程**期间切换来源
+> （串口 → BLE → 回放）会取消两侧排程并释放端口，旧定时器不再把旧链路接回来。
+> **回放时间轴口径合一**：时长 = 逐帧正间隔之和（时间列有回退时不再出现 `played > duration`）；
+> 「最快」档不再把 `Infinity` 写进持久预算，切回有限倍速后墙钟 `dt=0` 不会继续狂飙。
+> **实验档案闭环**：导入先拒绝「界面无法表达」的取值（固定轴初始姿态、关闭单个算法），apply 后逐字段
+> 读回比较，不一致就**回滚并列出字段**（333 Hz / 越界滑块不再被静默夹值）；界面没有控件的
+> `rampEnabled` / `kalmanChi2` 改为真正写回活实例；零样本统计量写 `null`（不再 NaN → null 自拒）；
+> `restore` / `seed` / `solveRateHz` / `manualTargetDeg` 按界面可表达的枚举与范围严格校验。
+> **校准与长稳门禁**：磁 `kind=diag` 不得携带 matrix（应用路径按 kind 分派，模型标签与解算一致），
+> 生产拟合提交前过同一把合法性尺子；soak 两点堆测量不再把 190 MB 增长算成 0，批量必须跑满 3 批。
+> **首屏再瘦身**：引导课程（13 步文案，minify 后约 12 KB）改为按需 chunk，主包 gzip 106 → **100 KB**
+> （上限 108 KB，占用 93%）；预算新增「引导课程 chunk」独立上限并计入「全部 JS 合计」。
+> **顶部声明纳入机器校验**：current 区域内的 `verify` 清单把 check / smoke / budget 与 package.json 的
+> check 链一起核对，「N PASS」这类会在门禁外过期的数字一旦写回 current 区域就会失败。
+> **doccheck 正文与 runTrace 截断也已收口**：卡尔曼/圆锥/六面的正文数字改由记录配置渲染并加配置健全性关系；
+> `runTrace` 到步数上限即停，`endSec` = 已记录的最后时刻（新增 `truncated`/`fullDurationSec`），
+> 不再出现「截断的 steps + 全时长 endSec + 全程事件计数」的混口径。
+> **长稳与视觉证据（本轮实测）**：`soak --seconds=600` 两段独立报告均通过——
+> **batch**：3/3 批跑满、116 个采样点、堆增长 +4.5 MB（上限 24）；
+> **reconnect**：54 次断线 **54 次逐段恢复**（每段都用真实消费计数增长证明首帧来自新连接）、
+> 122 个采样点、堆增长 +16.0 MB（上限 24），时钟在冻结窗口之外持续推进。
+> 报告：`docs/generated/soak-batch-600.json`、`docs/generated/soak-reconnect-600.json`。
+> **视觉验收**：六张截图均**可判读**（`screenshots/va-*.png`，该目录在 .gitignore 内，属本地证据）：
+> 桌面 1440×900 主界面（左栏读数 / 3D 场景 / 三块曲线无重叠与截断）、窄屏 390×844（正确堆叠、无横向溢出）、
+> 文档页（左目录 + 右页内目录 + 公式与提示框排版正常）、打印媒体（应用外壳隐藏、表格与公式完整）、
+> 万向节锁视图（三环 + 轴标签 + 「只剩 2 个自由度」引导文案）、导出弹窗（四档选项 + 列数提示 + 说明文字）。
+> **仍未做**：串口/BLE 各 30 min 真机（拔插 / 离开范围 / 休眠 / 设备复位）、跨时段真实磁校准数据。
 
 ## 一句话
 
@@ -124,19 +47,23 @@
 **已部署**：GitHub Actions → Cloudflare Workers，域名 `fly_web.070616.xyz`
 （备用 quaternion-attitude-demo.liu06167492.workers.dev），push 即自动上线。
 
+<!-- counts: experiments=19 demos=8 selftest=124 smoke=90 docpages=15 -->
+<!-- verify: check=153 contracts=yes status=yes smoke=90 budget=14 -->
+数值自检 124 + 场景几何 10 + HTML 契约 15 + 文档基准 4
 ## 技术栈与命令
 
 - Vite + TypeScript（无框架）+ Three.js（three ^0.170）
 - `npm run dev` / `npm run build`（= `tsc --noEmit && vite build` → `dist/`）/ `npm run preview`
-- `npm run check` = `selftest`（**124 项数值**）+ `scenecheck`（10 项三维场景几何）+ `htmlcheck`（**15 项** HTML↔TS 契约/可访问性/静态资源/文档结构）+ `doccheck`（引用 + 严格 schema + 关系约束 + 正文数字块 + 小基准复算 4 项）+ `statuscheck`（**计数一致性**），共 **153 项**
-- `npm run budget` = 产物体积预算（总量/字体/字体文件数/index.html/index.html gzip/主包 JS/文档演示 chunk/SW/Worker/全部 JS 合计 gzip/主包 gzip，**13 项上限**；
-  防「一次误 import 多背一兆字体」回归。index.html 上限 600 KB（外壳 100 KB / 内联文档 700 KB 分开算）、主包 JS 285 KB / gzip 108 KB（原线）、文档演示 chunk 24 KB、懒加载 Worker 64 KB、Service Worker 8 KB、全部 JS 合计 gzip 272 KB 各自单列，按实测内容走；**13 项上限**）
+- `npm run check` = `selftest`（**124 项数值**）+ `scenecheck`（10 项三维场景几何）+ `htmlcheck`（**15 项** HTML↔TS 契约/可访问性/静态资源/文档结构）+ `doccheck`（引用 + 严格 schema + 关系约束 + 正文数字块 + 小基准复算 4 项），共 **153 项**；随后再跑 `contracts`（时间分拍 / 档案 schema / 连接生命周期 / Worker 协作取消 / trace 逐帧 / soak 与状态契约，输出项数另计）与 `statuscheck`（**计数与门禁清单一致性**）
+- `npm run budget` = 产物体积预算（总量/字体/字体文件数/index.html/index.html gzip/主包 JS/文档演示 chunk/引导课程 chunk/SW/Worker/全部 JS 合计 gzip/主包 gzip，**14 项上限**；
+  防「一次误 import 多背一兆字体」回归。index.html 上限 600 KB（外壳 100 KB / 内联文档 700 KB 分开算）、主包 JS 285 KB / gzip 108 KB（原线，实测 gzip 100 KB）、文档演示 chunk 24 KB、引导课程 chunk 16 KB（点「开始」才加载）、懒加载 Worker 64 KB、Service Worker 8 KB、全部 JS 合计 gzip 272 KB 各自单列，按实测内容走）
 - `scripts/shot.mjs` = 开发用截图工具（`--width/--height/--el/--dofile/--json`，页面内脚本求值后截图）
 - 诊断脚本：`scripts/diag.ts`（收敛时间线）、`scripts/diag-violent.ts`（剧烈机动复现）
 - 源码改动后必须 `npm run build` 并在浏览器 **Ctrl+F5 强刷**（preview 服务的是构建产物）
 - 部署：`.github/workflows/deploy.yml`（wrangler v4），依赖 GitHub secrets 里的 Cloudflare 凭据
 - Git：`github.com/liuxiangfan/fly-web`，master 与远端同步
   （近期提交：50bf534 玻璃盒+MARG+四元数视图 → 7ea40b6 四元数视图重做+文档页 → 本轮文档重做+数学模块）
+
 
 ## 架构（src/）
 
@@ -239,8 +166,9 @@
   调试出口 `attitudeDemo.experiment.batchMode()` 可确认本次走的是哪条。
 - **断线自动重连**：串口与 BLE 共用开关 `#serial-autoreconnect`（默认开），异常断开按 1s/2s/4s 退避最多 3 次；
   **用户主动断开不重连**（`cancelSerialReconnect` + 清掉 `lastPort`/`lastDevice`）。重连成功计数经 `plumbing().reconnects` 暴露给自动化。
-- **计数不能靠人记**：`npm run statuscheck` 从源码里数（实验库组数、文档演示画布数、自检/冒烟用例数、文档分页数），
-  与 PROJECT-STATE 顶部 `<!-- counts: … -->` 声明比对，不一致即失败。新增功能后**先跑它**再改文档。
+- **计数不能靠人记**：`npm run statuscheck` 从源码里数（实验库组数、文档演示画布数、自检/冒烟用例数、文档分页数、
+  四类子检查项数、预算项数），与 current 区域顶部的 counts / verify 声明逐项比对，不一致即失败
+  （正文里**不要**再原样写出 counts 注释的写法，否则会被当成第二份声明）。新增功能后**先跑它**再改文档。
 - **噪声口径**：`gyroNoiseDps`/`accelNoise`/`magNoise` 是 **500 Hz 基准下的每样本 σ**（等价噪声密度）。
   改动这些语义时要同时改 `world.ts:noiseScaledParams` 与文档措辞，不要两套口径混用。
 - **统计指标口径**：批量表的「倾角/偏航 P95」是 SO(3) 小角分解（`so3ErrorSplit`，世界系按重力方向拆），
@@ -351,9 +279,10 @@
 
 ## 验证体系
 
-- `npx tsc --noEmit` → `npm run check`（111 数值 + 10 几何 + 15 HTML 契约 + 1 文档基准引用 + 计数一致性，全 PASS）
-  → `npm run build` → `npm run budget`（8 项上限，含懒加载 Worker 单独一项）→ `npm run smoke`（**68 项**浏览器端到端，需 preview）
-  → `npm run benchmark`（手动复算文档基准）/ `npm run doccheck`·`npm run statuscheck`（已并入 check）
+- `npx tsc --noEmit` → `npm run check`（124 数值 + 10 几何 + 15 HTML 契约 + 4 文档基准 + 契约脚本 + 计数与门禁清单核对，全部通过）
+  → `npm run build` → `npm run budget`（14 项上限，含文档演示 / 引导课程 chunk / SW / Worker / 全部 JS gzip 合计）
+  → `npm run smoke`（90 项浏览器端到端，需 preview）→ `npm run soak`（长稳，单独跑）
+  → `npm run benchmark`（手动复算文档基准）/ `npm run doccheck --recompute`（全量只读复算）
 - 冒烟里有三条「守机制而不是守功能」的用例，值钱的地方在于它们抓的是**会悄悄坏掉**的东西：
   · **文档页八个演示必须真的在动**：三次采样画布、比对降采样指纹。重绘点只有 `docDemos.step(dt)`，
     所以「指纹变了」等价于「主循环 → 模块的步进链路是通的」。判「画过了」用的是**非白像素占比 < 一半**
@@ -461,3 +390,125 @@
   按文本找第一个出现位置会插错地方。插入后**必须**跑 `npm run htmlcheck`——它现在有两条结构性契约
   （`.ctl` 位于文档页内、`.doc-pages` 直接子元素全是分页），本轮两条都当场抓出了我插错的内容。
 - **SW 更新**：导航 network-first 才能保证部署后一次刷新生效；若改成 cache-first 必须同步提升 CACHE 版本。
+
+
+> **本文件是项目的恢复锚点。** 会话上下文被压缩后，从这里可以快速接续全部关键信息。
+<!-- current:end -->
+
+<!-- history:begin 历史里程碑（不参与当前计数/口径校验） -->
+> 最后更新：2026-10-31（**闭环一致性轮**：第四轮质量复核指出的四条 P1 全部落地——
+> ① 配置档案不再丢校准（校准对象/模型/「是否应用」三者一起往返，迁移与校验补 `parseMagCalibration`/`parseAccelCalibration`）；
+> ② 导出 IMU 列显式声明语义 `# imu=raw|calibrated`，回放据此决定是否补校准（默认 raw → 补校准；calibrated → 自动关闭，禁止二次校准），
+> 回放面板新增「回放应用校准」开关并在状态条显示 IMU 语义；
+> ③ 外部真值回放的「真值波形」改用日志真值（重力/磁场投影 + 相邻真值姿态差分角速度），不再拿模拟 world 冒充日志真值；
+> ④ runner 与界面同语义：抽出唯一运行内核、补静止粗对准状态机（`autoCoarseAlign`，可用配置关）、稳态窗口可指定绝对起点 `steadyFromSec`；
+> 另：冻结配置改为 A/B 克隆的唯一来源（`applyTuning` 装配）、采样率下噪声按 √(fs/500) 换算、倾角/偏航改用 SO(3) 小角分解（欧拉分解留作对照）。
+> 第五轮复核修正 SO(3) 的**世界系**约定、校准验证集重叠与加计验证硬编码模型；第六轮（可验证性轮）再做四件事：
+> ① **统一仿真调度** `core/solve-loop.ts`——界面与 runner/Worker 共用同一份「抽帧 + 静止粗对准」，
+> 冒烟同 seed **逐步比较 2000 步**（时间差 0、最大单步姿态差 5.12e-6°，即双精度舍入级）；期间发现并修复两处真问题：
+> 对准检查顺序两边差一帧、抽帧把余量重复计入 dt（12 s 仿真积出 13.2 s 角增量）；
+> ② 有界统计的**稳态窗口改时间分桶**（长跑不再依赖按序号抽样的蓄水池）+「截断不改变数值口径」断言；
+> ③ Worker 协议补 **jobId/取消/心跳/停滞看门狗**（30×30 档可取消，取消后状态完全恢复）；
+> ④ 校准**器件指纹与失效提示**（改了交叉轴/拟合模型就提示"标定基于旧模型"）+ `npm run soak` 长稳脚本。
+> **剩余重点**（见 `QUALITY-REVIEW-2026-10-31-ROUND5.md`）：真机长时间验收、校准跨时段独立验证、数据源/回放调度继续模块化。
+> **当前验证口径以脚本实际输出为准**：数值自检 124 + 场景几何 10 + HTML 契约 15 + 文档基准 4 +
+> 浏览器冒烟 88（`npm run statuscheck` 会把这些计数与源码实测值对齐，数字过期即失败）；`npm run check` / `npm run smoke` / `npm run budget` / `npm run benchmark` / `npm run doccheck`）
+>
+> 2026-10-30（**可复现与结论可信轮**：P0 教材事实校正（Wahba 方向/Joseph/互补 α/Madgwick
+> 稳态公式/随机游走增长律/INS 垂直通道边界/可观性分层/游离章节归位）；新增版本化实验配置、种子化
+> 独立随机流、完整实验基线、same-start A/B、无 DOM runner、多种子批量评测、实验档案 JSON、
+> benchmark/doccheck、单步与三图共享游标、卡尔曼 NIS/NEES 与 χ² 门控、回放有效性/外部真值/时间完整性、
+> TRIAD/Wahba 与圆锥-混叠演示、加速度计六面校准核心；数学原理拆为「主线推导」与「专题与直觉」两页。
+> **当前验证口径以脚本实际输出为准**：数值自检 87 + 场景几何 10 + HTML 契约 15 + 文档基准 1 +
+> 浏览器冒烟 55；`npm run check` / `npm run smoke` / `npm run budget` / `npm run benchmark` / `npm run doccheck`）
+>
+> 2026-10-28（**文档条理与可读性轮**：README 双语（+`README.en.md`）；
+> **每个文档页补「读完这一页你应该能回答」**、数学原理补 19 章索引与章末小结 + 公式汇总、
+> 滤波算法讲解补小结；14 个分页全部可寻址；产物预算拆成「外壳 59 KB 硬上限 / 内联文档宽松上限」共 9 项。
+> （当轮计数：静态自检 105 + 冒烟 51）上一轮（测试盲区审计）见里程碑）
+>
+> 2026-10-28（**测试盲区审计轮**：用户要求「查找问题、我要完美的项目」。这轮不重复跑已有测试，
+> 而是系统性打它们的盲区——覆盖度测量（c8）、对抗性输入扫描、mock 忠实性、文档数字复核。
+> 查出并修掉 **14 类真问题**（详见下面里程碑），其中三条最值钱：实验库的「门控滞回」实验**从来不触发它要演示的机制**、
+> 「陀螺刻度/失准/群延迟」四个文档功能**零测试覆盖**（文档却写着「自检实测」）、
+> 假 BLE mock 比真实 EventTarget 宽容，掩盖了监听器泄漏；
+> （当轮计数：数值自检 80 + 场景几何 10 + HTML 契约 14 + 冒烟 50 + 产物预算 7）
+
+<!-- history:end -->
+
+<!-- history:begin 早期里程碑（不参与当前计数/口径校验） -->
+
+> **最新一轮：2026-11-01「按 ROUND12 的 S0–S3 修复」已实施**（详见 [`CHANGELOG.md`](CHANGELOG.md) 顶部）。
+> 门禁（严格顺序）：`npx tsc --noEmit` → `npm run check`（**161 PASS / 0 FAIL**）→ `npm run build` →
+> `npm run budget`（**13 项**）→ `npx tsx scripts/doccheck.ts --recompute` → `npm run smoke`（**88 PASS / 0 FAIL**）全绿。
+> **S1 真正分拍**：`SolveLoop` 改为 FIFO 待积分队列（单拍 ≤maxSubsteps 个子步、每步 ≤50 ms，
+> 余量由后续拍继续补，`pendingSec` 可读）；回放侧 `replayBacklog` 每拍 ≤5 s，
+> **播放器到底且队列排空**才宣告完成，状态行显示「待积分 x.x s」；消费快照带 `runId`，换轮即作废。
+> **S2 连接事务**：系统拔线走 `cancel→释放读锁→close`、close 失败不 open、BLE 异常按归属释放、
+> 过期订阅不再退订已提交的新订阅、订阅失败回滚且拒绝可见、重连成功恢复掉线监听。
+> **S3 递归 strict**：嵌套字段/枚举类型校验 + 当前 schema 必需字段；磁 full 必须带 matrix 且对称正定；
+> 加计按结构验（不套用 SPD）；偏置/残差门槛与拟合一致；count/faces 下限；不再静默过滤非法 face。
+> **S0 预算回到原线**：文档演示改按需 chunk，首屏 **270.3 KB / gzip 102.1 KB**（原线 285/108 以内），
+> 新增「全部 JS 合计 gzip ≤272 KB」硬线，按需 chunk/Worker/SW/three 一并封顶。
+> **S4 门禁自身也已落地**：trace 比较器现在核**固定 schedule/算法身份/双侧 dt/raw/consumed 一致性/对齐事件**
+> （11 种畸形输入必须失败，新增 dt 不一致、缺输入、对齐标记不一致、帧数不足）；doccheck 默认就做
+> **小基准只读复算**（圆锥/Wahba/六面加计），正文数字块按**记录里的实际时长/种子数/样本量**渲染，
+> 当前与历史声明使用独立机器区域；长稳按真实消费事件验证每段恢复。
+> **堆缺测即失败**（可用 `--allowNoHeap` 显式跳过）、批量必须声明**期望种子数**；
+> 加计采面新增**时间加权密度**（10 段每段 ≥2 样本，专拦"短簇+稀疏补点"）。
+> **仍未做**：600 s 软件长稳、串口/BLE 各 30 min 真机、可判读图像的桌面/窄屏/文档/打印视觉验收。
+> 上一轮复核报告 [`QUALITY-REVIEW-2026-11-01-ROUND12.md`](QUALITY-REVIEW-2026-11-01-ROUND12.md) 列出了本轮的原始反例与验收标准。
+
+> **第十一轮历史实施：[`QUALITY-REVIEW-2026-11-01-ROUND11.md`](QUALITY-REVIEW-2026-11-01-ROUND11.md)（当前未完成项以ROUND12为准）。**
+> 2026-11-01 第十一轮按 ROUND11 的 R1–R5 **已实施并验收**：`tsc` / `check`（**161 PASS / 0 FAIL**：152 子检查 + 9 状态）/
+> `build` / `budget`（**11 项**）/ `doccheck --recompute` / `smoke`（**88 PASS / 0 FAIL**）全绿。
+> 已修（每条都有永久负例）：**逐子步即时回调**（INS 东向位置 3.925 m → 1.556 m；0 dt 不再积分；
+> 子步长度永不因上限放大，超限部分记 `deferredSec`）；**连接会话所有权**（read await 后验令牌挡住迟到数据、
+> `cancel→释放锁→close` 与 `closePortFailures` 真实记账、重连不误伤替代 reader、BLE 初连失败断 GATT 摘监听、
+> 回调按设备身份归属、订阅先 start 后挂监听）；**录制/消费契约**（`onSolve` 冻结实际消费输入、源列按逐行
+> `sourceCalibrated` 标 `# imu=`、混语义拒绝）；**strict 输入**（原始结构校验、未来版本拒绝、notes 展示、
+> 先算提示再提交）与**共用校准合法性**（对称正定/增益/偏置/残差/faces）+ 采面连续时间覆盖；
+> **门禁自身**（soak CLI 双写法、`opens ≥ 断链数`、doccheck 关系约束与零引用失败、窄屏错误汇总）；
+> **预算计量**（sw.js 单列，主包上限据实测增量 285/108 → 288/110 KB）。
+> **仍未验收**：真机 30 min（串口/BLE 各一段：拔插/离开范围/休眠/复位）、10 分钟软件长稳、
+> 可判读的桌面/窄屏/文档/打印视觉验收（截图通道仍返回 Media omitted）；另：trace 比较器尚未比较双侧
+> dt/IMU/事件、Worker 协作取消仍收不到消息、跨时段校准数据与真实硬件标定未验。
+> 上一轮报告 [`QUALITY-REVIEW-2026-11-01-ROUND10.md`](QUALITY-REVIEW-2026-11-01-ROUND10.md) 为历史实施记录。
+
+> **历史实施：2026-11-01「复核修复轮（第十轮，按 ROUND8 的 A–E）」**（详见 [`CHANGELOG.md`](CHANGELOG.md) 顶部；当前残留以ROUND11为准）。
+> 本轮门禁：`npx tsc --noEmit` / `npm run check`（**153 项 = 124 数值 + 10 几何 + 15 HTML + 3 文档**）/ `npm run build` /
+> `npm run budget`（10 项）全绿；`npm run smoke` **85 PASS / 0 FAIL**；`npm run soak` 两种模式（batch / reconnect）均 pass。
+> 修复内容与负例一一对应：**连接所有权**（一次切源只递增一次世代、内部 dispose 不再自我作废、订阅/自动重连每个 await 后验世代、
+> read 循环带连接令牌、端口有开必有关、重连耗尽不冻结、`sourceIntent` 保持断链期间的来源身份）；
+> **导出/回放不可变**（每行冻结当时喂给解算的读数、导出不重算历史、全帧源 IMU 按来源标 `# imu=`、校准日志锁定校准开关、
+> 30 s 空洞按真实 30 s 播放）；**校准契约**（错朝向立即拒绝、条件数/镜像/偏置/残差门槛、留一带方向误差、
+> 档案严格 schema 不再静默丢模型、Applied 不能无模型、导入清两侧采集并深拷贝）；
+> **生产负面测试**（`applyFrame` 子步时间递增且单次对准事件、`termination` 显式终止口径、trace 带 dt/raw/consumed 与
+> 正确 `aligned`、统计用例直接驱动生产累加器、低采样历史多留一个周期）；**门禁治理**（trace 比较器 7 种畸形输入必须失败、
+> soak 真实丢弃计数与逐段增长、statuscheck 项数取自脚本实际输出、doccheck 严格 schema + 正文数字块核对 + `--recompute` 只读复算、
+> 对比度负对照）。
+> **仍未做**：真机 30 min 现场验收（串口/BLE 各一段，含拔插/离开范围/休眠/设备复位）与图像通道可用的桌面/窄屏/文档/打印视觉验收
+> ——这两项保持「未验收」标签，不用软件 mock 顶替。上一轮报告 [`QUALITY-REVIEW-2026-11-01-ROUND8.md`](QUALITY-REVIEW-2026-11-01-ROUND8.md)
+> 与 [`QUALITY-REVIEW-2026-11-01-ROUND10.md`](QUALITY-REVIEW-2026-11-01-ROUND10.md)（本轮结项说明）可对照阅读。
+
+> **最新恢复入口：[`QUALITY-REVIEW-2026-10-31-ROUND7.md`](QUALITY-REVIEW-2026-10-31-ROUND7.md)。**
+> 本轮独立复核未修产品源码：现有 `check` 为 **149 PASS / 0 FAIL**（117 数值 + 10 几何 + 15 HTML + 1 文档引用 + 6 状态断言），smoke 为 **76 PASS / 0 FAIL**，预算实为 **10 项**。
+> 但已有定向反例证实：取消旧任务仍会回写/串批、重连空窗混入仿真、后段验证75%训练泄漏、验证模型使用错误2k、退化校准被当成功、导出历史/语义不闭环、采样率×延迟与小数日志时间差错误、周期分位数混叠、manual目标不在配置。
+> “逐帧一致”目前只比终点，“全部15页对比度”漏扫5页；以下旧里程碑的“完成/已修”需以ROUND7证据与W0–W6工单重新验收，不能直接沿用。
+> 新跑 `soak --seconds=120 --interval=10000 --batch` **退出码1**：零错误/容量/堆检查通过，时钟推进16.7→51.1秒未达到阈值。视觉截图无法判读，本轮视觉验收未完成。真机30分钟仍未做。
+> 测试日志在 `.audit-current/`（D盘）。
+>
+> **第九轮已按 W0–W5 修复**（详见 ROUND7 第 6b 节）：批次世代（取消后 17 s 无回写）、连接世代与断线冻结数据流、
+> 传感器延迟按采样时刻寻址（50 Hz 下 100 ms→28 ms）、日志浮点时间（Σdt 0.805→1.000000 s）、手动目标进配置、
+> 统计改定长蓄水池（10 Hz P95 从混叠的 1.25° 修回 9.98°）与预定切点精确稳态、SO(3) 用 log 旋转向量
+> （90°/180° 精确）、校准合成复用生产链路且后段留出改为前段训练、退化/朝向/点数不足一律拒绝、
+> 档案不再伪造训练样本、逐帧 trace 升级为**逐步比较**（2000 步、时间差 0、最大姿态差 5.12e-6°）、
+> 对比度逐页核对（15/15）、doccheck 增加数值健全性、soak 逐批记录批量并要求帧计数不倒退。
+> **仍未做**：真机 30 min 现场验收（需要硬件窗口，保持未验收标签）。
+
+> **下一轮实施先读 [`NEXT-ITERATION-ROADMAP.md`](NEXT-ITERATION-ROADMAP.md)**：
+> 2026-10-30 只读审查形成的任务书（P0 事实校正 → P1 可复现实验内核 → P2 批量评测 →
+> P3 时间/采样/记录 → P4 卡尔曼诊断 → P5 新实验 → P6 文档重组），含逐项验收标准。
+>
+
+<!-- history:end -->

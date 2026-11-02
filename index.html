@@ -5287,7 +5287,7 @@ export function applyMagCalibration(m, cal) {
 <ul class="bench-numbers">
 <li><b>悬停 30 s</b>（10 种子配对，15000 样本/次）：Mahony RMSE P50 <span class="mono">1.06°</span>、稳态 P95 <span class="mono">0.79°</span>；卡尔曼 RMSE P50 <span class="mono">1.20°</span>、稳态 P95 <span class="mono">1.13°</span></li>
 <li><b>卡尔曼一致性</b>（30 s）：姿态 NEES <span class="mono">29.17</span>（自由度 3）、重力 NIS <span class="mono">3.99</span>、重力接受率 <span class="mono">100.0%</span></li>
-<li><b>圆锥误差-采样率</b>（12 Hz / 120°/s）：500 Hz <span class="mono">0.019°</span> → 250 Hz <span class="mono">0.058°</span> → 125 Hz <span class="mono">0.211°</span> → 100 Hz <span class="mono">0.326°</span> → 50 Hz <span class="mono">1.320°</span>——误差随采样率下降而单调上升</li>
+<li><b>圆锥误差-采样率</b>（12 Hz / 120°/s，4 s，以 20000 Hz 为参考）：500 Hz <span class="mono">0.019°</span> → 250 Hz <span class="mono">0.058°</span> → 125 Hz <span class="mono">0.211°</span> → 100 Hz <span class="mono">0.326°</span> → 50 Hz <span class="mono">1.320°</span>——误差随采样率下降而单调上升</li>
 <li><b>TRIAD / QUEST 干净解</b>：误差 <span class="mono">0.000000°</span> / <span class="mono">0.000000°</span>（1e-12 量级）</li>
 <li><b>六面加计校准恢复</b>：残差 RMS x/y/z = <span class="mono">0.0035</span> / <span class="mono">0.0058</span> / <span class="mono">0.0074</span> m/s²（6 面）</li>
 </ul>

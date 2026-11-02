@@ -11,9 +11,8 @@
 import {
   EXPERIMENT_SCHEMA_VERSION,
   migrateExperimentConfig,
-  parseAccelCalibration,
-  parseMagCalibration,
-  validateExperimentConfig,
+  experimentConfigProblems,
+  cloneExperimentConfig,
   type ExperimentConfig,
 } from "./experiment-config";
 
@@ -31,9 +30,14 @@ export interface ArchiveRunInfo {
   metrics: Array<{
     id: string;
     n: number;
-    mean: number;
-    rmse: number;
-    max: number;
+    /**
+     * 无样本（n=0）时必须是 null：既不能声称一个 0 统计量，也不能写 NaN——
+     * `JSON.stringify` 会把 NaN 变成 null，于是「刚复位就导出」的档案会被自家解析器
+     * 以 `run.metrics[0].mean 须为非负有限数` 拒绝（复核反例）。
+     */
+    mean: number | null;
+    rmse: number | null;
+    max: number | null;
     convergedAt: number | null;
   }>;
 }
@@ -51,87 +55,33 @@ export function buildArchive(config: ExperimentConfig, run: ArchiveRunInfo): Exp
   return { schema: ARCHIVE_SCHEMA, kind: ARCHIVE_KIND, restore: "config-only", config, run };
 }
 
-/**
- * 原始配置的字段类型检查（只看"声明了但类型不对"的字段）。
- * 当前 schema 的档案出现任何一条都不再导入；旧版本降级为 notes（并已用默认值）。
- */
-function configTypeProblems(cfg: Record<string, unknown>): string[] {
-  const isObj = (v: unknown): boolean => !!v && typeof v === "object" && !Array.isArray(v);
-  const isNum = (v: unknown): boolean => typeof v === "number" && Number.isFinite(v);
-  const isTriple = (v: unknown): boolean => Array.isArray(v) && v.length === 3 && v.every(isNum);
-  if (cfg.schemaVersion !== undefined && !isNum(cfg.schemaVersion)) {
-    return [`schemaVersion 应为数值（实际 ${typeof cfg.schemaVersion}）`];
-  }
-  const checks: Array<[string, (v: unknown) => boolean, string]> = [
-    ["seed", isNum, "数值"],
-    ["durationSec", (v) => isNum(v) && (v as number) > 0, "正数"],
-    ["solveRateHz", (v) => isNum(v) && (v as number) > 0, "正数"],
-    ["magTargetUts", (v) => isNum(v) && (v as number) > 0, "正数"],
-    ["scenario", (v) => typeof v === "string" && v.length > 0, "非空字符串"],
-    ["magModel", (v) => v === "diag" || v === "full", "diag/full"],
-    ["magCalibrationApplied", (v) => typeof v === "boolean", "布尔"],
-    ["accelCalibrationApplied", (v) => typeof v === "boolean", "布尔"],
-    ["autoCoarseAlign", (v) => typeof v === "boolean", "布尔"],
-    ["manualTargetDeg", isTriple, "3 个有限数"],
-    ["steadyFromSec", (v) => v === null || isNum(v), "数值或 null"],
-    ["imu", isObj, "对象"],
-    ["estimators", isObj, "对象"],
-    ["initialAttitude", isObj, "对象"],
-  ];
-  const out: string[] = [];
-  for (const [k, ok, want] of checks) {
-    if (cfg[k] !== undefined && !ok(cfg[k])) out.push(`${k} 应为${want}（实际 ${typeof cfg[k]}）`);
-  }
-  const ia = cfg.initialAttitude as Record<string, unknown> | undefined;
-  if (ia && isObj(ia)) {
-    const kind = ia.kind;
-    if (kind !== undefined && kind !== "level" && kind !== "fixed-axis" && kind !== "random") {
-      out.push(`initialAttitude.kind 未知：${String(kind)}`);
-    }
-    if (ia.axis !== undefined && !isTriple(ia.axis)) out.push("initialAttitude.axis 应为 3 个有限数");
-    if (ia.angleDeg !== undefined && !isNum(ia.angleDeg)) out.push("initialAttitude.angleDeg 应为数值");
-  }
-  // **递归**校验（ROUND12）：旧实现只看顶层已声明字段，于是 imu.gyroNoiseDps="oops"、
-  // mahony.params.kp="oops"、空 imu/estimators 对象都会被静默补成默认值并 ok=true
-  const imu = cfg.imu;
-  if (imu !== undefined) {
-    if (!isObj(imu)) out.push("imu 应为对象");
-    else {
-      for (const [k, v] of Object.entries(imu as Record<string, unknown>)) {
-        if (!isNum(v)) out.push(`imu.${k} 应为数值（实际 ${typeof v}）`);
+/** run 也属于不可信档案输入：声明了就完整校验，返回具体字段路径。 */
+function runProblem(raw: unknown): string | null {
+  const obj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+  const num = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v) && v >= 0;
+  if (!obj(raw)) return "run 须为对象";
+  if (!num(raw.elapsedSec)) return "run.elapsedSec 须为非负有限数";
+  if (typeof raw.dataSource !== "string" || !raw.dataSource) return "run.dataSource 须为非空字符串";
+  if (!["groundTruth", "mahony", "external", "none"].includes(raw.reference as string)) return "run.reference 未知误差参考";
+  if (typeof raw.finishedAtIso !== "string" || !raw.finishedAtIso || !Number.isFinite(Date.parse(raw.finishedAtIso))) return "run.finishedAtIso 须为合法时间字符串";
+  if (!Array.isArray(raw.metrics)) return "run.metrics 须为数组";
+  for (let i = 0; i < raw.metrics.length; i++) {
+    const m = raw.metrics[i], p = `run.metrics[${i}]`;
+    if (!obj(m)) return `${p} 须为对象`;
+    if (typeof m.id !== "string" || !m.id) return `${p}.id 须为非空字符串`;
+    if (!num(m.n) || !Number.isInteger(m.n)) return `${p}.n 须为非负整数`;
+    // n=0（还没有样本）时统计量只能是 null；n>0 时必须是非负有限数。
+    // 两种情况分开判，避免「NaN 序列化成 null 后恰好通过」这种假合法。
+    if (m.n === 0) {
+      for (const k of ["mean", "rmse", "max"]) {
+        if (m[k] !== null) return `${p}.${k} 在 n=0 时必须为 null（无样本不得声称统计量）`;
       }
+    } else {
+      for (const k of ["mean", "rmse", "max"]) if (!num(m[k])) return `${p}.${k} 须为非负有限数`;
     }
+    if (m.convergedAt !== null && !num(m.convergedAt)) return `${p}.convergedAt 须为非负有限数或 null`;
   }
-  const ests = cfg.estimators;
-  if (ests !== undefined) {
-    if (!isObj(ests)) out.push("estimators 应为对象");
-    else {
-      for (const [id, t] of Object.entries(ests as Record<string, unknown>)) {
-        if (!isObj(t)) {
-          out.push(`estimators.${id} 应为对象`);
-          continue;
-        }
-        const r = t as Record<string, unknown>;
-        for (const k of ["enabled", "magEnabled", "accelGate", "gateRecovery", "rampEnabled"]) {
-          if (r[k] !== undefined && typeof r[k] !== "boolean") out.push(`estimators.${id}.${k} 应为布尔`);
-        }
-        if (r.gateDeg !== undefined && !isNum(r.gateDeg)) out.push(`estimators.${id}.gateDeg 应为数值`);
-        if (r.gateMagPct !== undefined && !isNum(r.gateMagPct)) out.push(`estimators.${id}.gateMagPct 应为数值`);
-        if (r.magMode !== undefined && r.magMode !== "yaw" && r.magMode !== "full") {
-          out.push(`estimators.${id}.magMode 未知：${String(r.magMode)}`);
-        }
-        if (r.params !== undefined) {
-          if (!isObj(r.params)) out.push(`estimators.${id}.params 应为对象`);
-          else {
-            for (const [pk, pv] of Object.entries(r.params as Record<string, unknown>)) {
-              if (!isNum(pv)) out.push(`estimators.${id}.params.${pk} 应为数值（实际 ${typeof pv}）`);
-            }
-          }
-        }
-      }
-    }
-  }
-  return out;
+  return null;
 }
 
 export type ArchiveParse =
@@ -153,6 +103,11 @@ export function parseArchive(raw: unknown): ArchiveParse {
   if (o.kind !== ARCHIVE_KIND || o.schema !== ARCHIVE_SCHEMA) {
     return { ok: false, error: `档案格式不识别（需要 schema=${ARCHIVE_SCHEMA} 的 ${ARCHIVE_KIND}）` };
   }
+  // restore 是**能力声明**，不是装饰字段：本页只能还原配置（不还原时刻/曲线/A-B 分叉）。
+  // 旧实现不校验它，于是 restore:"full" 的档案也返回 ok:true——用户以为整个现场都恢复了。
+  if (o.restore !== "config-only") {
+    return { ok: false, error: '档案 restore 须为 "config-only"（本页只还原配置，不还原当前时刻/曲线；逐帧复现请用全帧 IMU CSV）' };
+  }
   // 原始结构先验（ROUND11 P1）：旧实现直接调用宽松迁移，于是「durationSec 是字符串」
   // 「initialAttitude.axis 里是字符串」这类坏输入被静默修好并以 ok=true 返回，
   // 用户看到的是"成功恢复同一配置"。现在当前 schema 的档案按字段类型严格验，
@@ -161,46 +116,32 @@ export function parseArchive(raw: unknown): ArchiveParse {
     return { ok: false, error: "档案缺少 config 对象（不是对象或为数组）" };
   }
   const rawCfg = o.config as unknown as Record<string, unknown>;
-  const declaredVersion = typeof rawCfg.schemaVersion === "number" ? rawCfg.schemaVersion : null;
-  if (declaredVersion !== null && declaredVersion > EXPERIMENT_SCHEMA_VERSION) {
-    return {
-      ok: false,
-      error: `档案来自更新的 schema v${declaredVersion}（本装置支持到 v${EXPERIMENT_SCHEMA_VERSION}）——请升级页面后再导入`,
-    };
+  const version = rawCfg.schemaVersion;
+  if (version !== undefined && (typeof version !== "number" || !Number.isFinite(version) || !Number.isInteger(version) || version < 1)) {
+    return { ok: false, error: "schemaVersion 非法：须为支持的正整数版本" };
+  }
+  const declaredVersion = version as number | undefined;
+  if (declaredVersion !== undefined && declaredVersion > EXPERIMENT_SCHEMA_VERSION) {
+    return { ok: false, error: `schemaVersion v${declaredVersion} 来自更新版本（支持到 v${EXPERIMENT_SCHEMA_VERSION}）——请升级页面` };
   }
   const strict = declaredVersion === EXPERIMENT_SCHEMA_VERSION;
-  const typeProblems = configTypeProblems(rawCfg);
-  if (strict) {
-    // 当前 schema 的档案必须是**完整**配置：缺字段不再"补默认值当成功"（ROUND12）
-    const required = ["seed", "scenario", "durationSec", "solveRateHz", "imu", "estimators", "initialAttitude"];
-    const missing = required.filter((k) => rawCfg[k] === undefined);
-    if (missing.length) return { ok: false, error: `档案缺少必需字段：${missing.join(", ")}` };
-    if (typeProblems.length) return { ok: false, error: `档案字段类型不合法：${typeProblems[0]}` };
-  }
-  if (strict) {
-    // 严格模式：校准字段只要"声明了"就必须解析成功
-    if (rawCfg.magCalibration != null && parseMagCalibration(rawCfg.magCalibration) === null) {
-      return { ok: false, error: "档案的磁校准模型不可用（奇异/镜像/条件数过大或字段缺失）——请在源端重新拟合并导出" };
-    }
-    if (rawCfg.accelCalibration != null && parseAccelCalibration(rawCfg.accelCalibration) === null) {
-      return { ok: false, error: "档案的加计校准模型不可用（M 奇异/镜像/条件数过大或字段缺失）——请在源端重新拟合并导出" };
-    }
-  }
-  const config = migrateExperimentConfig(o.config);
-  const problems = validateExperimentConfig(config);
-  if (problems.length) return { ok: false, error: `档案配置不合法：${problems[0].path} ${problems[0].message}` };
+  const problems = experimentConfigProblems(rawCfg, strict);
+  if (strict && problems.length) return { ok: false, error: `档案配置不合法：${problems[0].path} ${problems[0].message}` };
+  // v3 直接复制已经验证的原始配置，不经过 migration 补默认值。
+  const config = strict ? cloneExperimentConfig(rawCfg as unknown as ExperimentConfig) : migrateExperimentConfig(rawCfg);
   const notes: string[] = [];
   if (!strict) {
-    for (const p of typeProblems) notes.push(`字段类型不合法（已用默认值）：${p}`);
-    notes.push(
-      declaredVersion !== null
-        ? `档案 schema v${declaredVersion} → 已迁移到 v${EXPERIMENT_SCHEMA_VERSION}`
-        : `档案未声明 schemaVersion → 按当前 v${EXPERIMENT_SCHEMA_VERSION} 迁移`,
-    );
-    if (rawCfg && rawCfg.magCalibration != null && config.magCalibration === null) notes.push("磁校准模型不可用，已丢弃");
-    if (rawCfg && rawCfg.accelCalibration != null && !config.accelCalibration) notes.push("加计校准模型不可用，已丢弃");
+    for (const p of problems) notes.push(`旧版字段已迁移/修正：${p.path} ${p.message}`);
+    notes.push(declaredVersion !== undefined ? `档案 schema v${declaredVersion} → 已迁移到 v${EXPERIMENT_SCHEMA_VERSION}` : `档案未声明 schemaVersion → 旧版迁移到 v${EXPERIMENT_SCHEMA_VERSION}`);
+    if (rawCfg.magCalibration != null && config.magCalibration === null) notes.push("磁校准模型不可用，已丢弃");
+    if (rawCfg.accelCalibration != null && !config.accelCalibration) notes.push("加计校准模型不可用，已丢弃");
+    const migratedProblems = experimentConfigProblems(config);
+    if (migratedProblems.length) return { ok: false, error: `迁移后的档案配置不合法：${migratedProblems[0].path} ${migratedProblems[0].message}` };
   }
-  const run = o.run && typeof o.run === "object" && !Array.isArray(o.run) ? (o.run as ArchiveRunInfo) : null;
+  const runError = o.run == null ? null : runProblem(o.run);
+  if (runError) return { ok: false, error: `档案运行信息不合法：${runError}` };
+  const run = o.run == null ? null : { ...o.run, metrics: o.run.metrics.map(m => ({ ...m })) };
+
   return { ok: true, config, run, ...(strict ? {} : { migratedFrom: declaredVersion ?? undefined }), notes };
 }
 

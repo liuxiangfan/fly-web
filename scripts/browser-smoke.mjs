@@ -8,11 +8,15 @@
  * 文档对话框焦点、A/B 图例、深链恢复、3D canvas 与帧率、控制台错误。
  */
 import puppeteer from "puppeteer-core";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-const URL = process.env.SMOKE_URL ?? "http://127.0.0.1:4173/";
+// 注意：应用地址常量不要命名为 `URL`——模块顶层的 `const URL` 会遮蔽全局 URL 构造函数，
+// 在其声明之前调用 `new URL()` 会抛 "Cannot access 'URL' before initialization"。
+const APP_URL = process.env.SMOKE_URL ?? "http://127.0.0.1:4173/";
+// trace 比较器必须与 Node 契约测试共用同一份源码：注入页面后由浏览器侧再次执行。
+const traceContractSource = readFileSync(new URL("./trace-contract.mjs", import.meta.url), "utf8").replace(/^export /gm, "");
 const CANDIDATES = [
   process.env.CHROME_PATH,
   process.env.EDGE_PATH,
@@ -41,54 +45,105 @@ const check = (name, cond, detail) => {
 // 固定 user-data-dir：Windows 上 Puppeteer 的临时 profile 清理偶尔 EBUSY，
 // 会让「测试全部通过」的进程以异常退出码结束。这里自己管目录并在收尾时容错删除。
 // 目录名带 pid：上一次失败留下的 Edge/Chrome 进程会锁住同名 profile（crashpad
-// 目录名带 pid：上一次失败留下的 Edge/Chrome 进程会锁住同名 profile（crashpad
 // "Settings version is not 1"），换一个新目录即可让下一次冒烟继续跑；可用 SMOKE_PROFILE 覆盖。
 // 逐个尝试候选浏览器：某些 Windows 环境下 Edge 的 crashpad 会启动失败，直接换 Chrome 即可，
 // 而不是让整条冒烟因为「第一个存在的可执行文件打不开」而红掉。
 let browser = null;
 let profileDir = process.env.SMOKE_PROFILE ?? "";
-for (const [i, exe] of candidates.entries()) {
-  const dir = process.env.SMOKE_PROFILE ?? join(tmpdir(), `quat-demo-smoke-profile-${process.pid}-${i}`);
-  try {
-    browser = await puppeteer.launch({
-      executablePath: exe,
-      headless: "new",
-      userDataDir: dir,
-      args: [
-        "--no-sandbox",
-        "--disable-dev-shm-usage",
-        "--use-angle=swiftshader",
-        "--enable-unsafe-swiftshader",
-        "--hide-scrollbars",
-        // CI 的 headless Chrome 会把页面当成「后台标签页」→ rAF 被节流甚至停摆，
-        // 仿真时钟不动，冒烟第一步（等待 t>2s）就会超时 15 秒。
-        // 这三个标志是标准的抑制手段：关掉定时器节流、关掉窗口遮挡降级、关掉渲染进程降级。
-        "--disable-background-timer-throttling",
-        "--disable-backgrounding-occluded-windows",
-        "--disable-renderer-backgrounding",
-      ],
-    });
-    profileDir = dir;
-    console.log(`[INFO] 使用浏览器：${exe}`);
-    break;
-  } catch (err) {
-    console.error(`[warn] 启动失败，尝试下一个候选：${exe} — ${err instanceof Error ? err.message.split("\n")[0] : String(err)}`);
+const launchBrowser = async () => {
+  for (const [i, exe] of candidates.entries()) {
+    const dir = process.env.SMOKE_PROFILE ?? join(tmpdir(), `quat-demo-smoke-profile-${process.pid}-${i}-${Date.now()}`);
+    try {
+      browser = await puppeteer.launch({
+        executablePath: exe,
+        headless: "new",
+        userDataDir: dir,
+        args: [
+          "--no-sandbox",
+          "--disable-dev-shm-usage",
+          "--use-angle=swiftshader",
+          "--enable-unsafe-swiftshader",
+          "--hide-scrollbars",
+          // CI 的 headless Chrome 会把页面当成「后台标签页」→ rAF 被节流甚至停摆，
+          // 仿真时钟不动，冒烟第一步（等待 t>2s）就会超时 15 秒。
+          // 这三个标志是标准的抑制手段：关掉定时器节流、关掉窗口遮挡降级、关掉渲染进程降级。
+          "--disable-background-timer-throttling",
+          "--disable-backgrounding-occluded-windows",
+          "--disable-renderer-backgrounding",
+        ],
+      });
+      profileDir = dir;
+      console.log(`[INFO] 使用浏览器：${exe}`);
+      return;
+    } catch (err) {
+      console.error(`[warn] 启动失败，尝试下一个候选：${exe} — ${err instanceof Error ? err.message.split("\n")[0] : String(err)}`);
+    }
   }
-}
-if (!browser) {
   console.error("所有候选浏览器都无法启动；可用 CHROME_PATH 指定一个能跑 headless 的可执行文件");
   process.exit(2);
-}
-const page = await browser.newPage();
-await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1 });
+};
+await launchBrowser();
+
+/**
+ * 开新页面，并在浏览器进程被回收时**重启一次再继续**。
+ *
+ * 为什么需要：整条冒烟会开十几次标签页（每页一个 WebGL 上下文，软件渲染下更吃内存），
+ * 偶发 `Protocol error (Target.createTarget): Session with given id not found`——
+ * 浏览器进程已经没了。旧实现直接抛异常，整条冒烟在第 68 项就中断，后面几十项一条没跑，
+ * 却报「冒烟异常」而不是指出真实失败项。这里重启浏览器后重试，其余用例照常执行。
+ */
 const errors = [];
-page.on("console", (msg) => {
-  if (msg.type() === "error") errors.push(msg.text());
-});
-page.on("pageerror", (err) => errors.push(String(err)));
+/** 共享页面的监听：浏览器重启后要重新挂（页面对象换了一个）。 */
+const attachSharedListeners = (target) => {
+  target.on("console", (msg) => {
+    if (msg.type() === "error") errors.push(msg.text());
+  });
+  target.on("pageerror", (err) => errors.push(String(err)));
+};
+let page = null;
+/**
+ * 开新页面；浏览器进程被回收时**重启一次再继续**。
+ *
+ * 为什么需要：整条冒烟会开十几次标签页（每页一个 WebGL 上下文，软件渲染下更吃内存），
+ * 偶发 `Protocol error (Target.createTarget): Session with given id not found`——
+ * 浏览器进程已经没了。旧实现直接抛异常，整条冒烟在第 68 项就中断，后面几十项一条没跑，
+ * 却只报「冒烟异常」，看不出真实失败项。
+ *
+ * 重启后**共享页面也必须一起重建**：它还挂在死掉的浏览器上，后面的用例一 `evaluate`
+ * 就报 `Attempted to use detached Frame`（实测踩到）。这里重生一个同样的共享页面。
+ */
+const newPage = async () => {
+  try {
+    return await browser.newPage();
+  } catch (err) {
+    console.warn(`[warn] 新建标签页失败（${err instanceof Error ? err.message.split("\n")[0] : String(err)}）——重启浏览器后重试`);
+    try { await browser.close(); } catch { /* 已经死了 */ }
+    browser = null;
+    await launchBrowser();
+    if (page) {
+      try { await page.close(); } catch { /* 已随进程消失 */ }
+      page = await browser.newPage();
+      await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1 });
+      attachSharedListeners(page);
+      // 重启后的共享页面必须**重新载入应用**：后面的用例直接读 DOM，
+      // 空白页只会以「Cannot read properties of null」的形式误报成产品缺陷（实测踩到）。
+      try {
+        await page.goto(APP_URL, { waitUntil: "domcontentloaded", timeout: 20000 });
+        await page.waitForFunction(
+          () => document.getElementById("fps")?.textContent !== "-- fps",
+          { timeout: 30000 },
+        );
+      } catch { /* 让具体用例自己的 waitFor 报更准确的失败 */ }
+    }
+    return browser.newPage();
+  }
+};
+page = await browser.newPage();
+await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1 });
+attachSharedListeners(page);
 
 try {
-  await page.goto(URL, { waitUntil: "domcontentloaded", timeout: 20000 });
+  await page.goto(APP_URL, { waitUntil: "domcontentloaded", timeout: 20000 });
   // 等待真实仿真推进（rAF）——隐藏标签页会冻结，headless 新模式下正常运行
   await page.waitForFunction(
     () => parseFloat((document.getElementById("clock")?.textContent ?? "").replace("t = ", "")) > 2,
@@ -732,6 +787,21 @@ try {
     const before = window.attitudeDemo.calibration();
     const cfgBefore = window.attitudeDemo.experiment.config(6);
     const archive = window.attitudeDemo.experiment.archive();
+    const strip = (c) => {
+      const { durationSec, steadyFromSec, autoCoarseAlign, ...rest } = c;
+      return rest;
+    };
+    // 负面对照：解析能过、但界面无法表达/会夹值的档案必须拒绝，而且不得改动当前配置
+    const badSpeed = JSON.parse(JSON.stringify(archive));
+    badSpeed.config.solveRateHz = 333;
+    const badSpeedRes = window.attitudeDemo.experiment.importArchive(badSpeed);
+    const badSlider = JSON.parse(JSON.stringify(archive));
+    badSlider.config.imu.gyroBiasDps = 999999; // 滑块上限 5 → 会被静默夹值
+    const badSliderRes = window.attitudeDemo.experiment.importArchive(badSlider);
+    const fixedAxis = JSON.parse(JSON.stringify(archive));
+    fixedAxis.config.initialAttitude = { kind: "fixed-axis", axis: [0, 0, 1], angleDeg: 30 };
+    const fixedAxisRes = window.attitudeDemo.experiment.importArchive(fixedAxis);
+    const cfgAfterNegatives = window.attitudeDemo.experiment.config(6);
     // 先人为破坏状态：切回对角模型并清空两个校准
     const sel = document.getElementById("magcal-model");
     sel.value = "diag";
@@ -746,6 +816,8 @@ try {
     const cfgAfter = window.attitudeDemo.experiment.config(6);
     return {
       before, cleared, after, res,
+      badSpeedRes, badSliderRes, fixedAxisRes,
+      negConfigUnchanged: JSON.stringify(strip(cfgAfterNegatives)) === JSON.stringify(strip(cfgBefore)),
       modelOg: document.getElementById("magcal-model").value,
       magChecked: document.getElementById("magcal-apply").checked,
       accelChecked: document.getElementById("accelcal-apply").checked,
@@ -755,16 +827,28 @@ try {
   const sameOffset =
     JSON.stringify(archiveRoundTrip.cfgBefore.magCalibration?.offset) ===
     JSON.stringify(archiveRoundTrip.cfgAfter.magCalibration?.offset);
+  // 完整配置往返：除界面不可调整的三个字段外，导入后必须逐字段一致
+  const stripCfg = (c) => {
+    const { durationSec, steadyFromSec, autoCoarseAlign, ...rest } = c;
+    return JSON.stringify(rest);
+  };
+  const sameConfig = stripCfg(archiveRoundTrip.cfgBefore) === stripCfg(archiveRoundTrip.cfgAfter);
   check(
-    "配置档案：磁/加计校准对象+模型+应用状态往返恢复（不再丢校准）",
+    "配置档案：完整配置往返一致（含初始姿态/门控/逐算法参数），不可表达的值拒绝且不改状态",
     archiveRoundTrip.before.magApplied && archiveRoundTrip.before.accelApplied &&
       !archiveRoundTrip.cleared.hasMag && !archiveRoundTrip.cleared.hasAccel &&
       archiveRoundTrip.res.ok && archiveRoundTrip.after.magApplied && archiveRoundTrip.after.accelApplied &&
       archiveRoundTrip.modelOg === "full" && archiveRoundTrip.magChecked && archiveRoundTrip.accelChecked &&
-      sameOffset,
+      sameOffset && sameConfig && archiveRoundTrip.negConfigUnchanged &&
+      archiveRoundTrip.badSpeedRes.ok === false && /solveRateHz/.test(archiveRoundTrip.badSpeedRes.error ?? "") &&
+      archiveRoundTrip.badSliderRes.ok === false && /gyroBiasDps/.test(archiveRoundTrip.badSliderRes.error ?? "") &&
+      archiveRoundTrip.fixedAxisRes.ok === false && /initialAttitude/.test(archiveRoundTrip.fixedAxisRes.error ?? ""),
     `校准前=${JSON.stringify(archiveRoundTrip.before)}；清空后 hasMag=${archiveRoundTrip.cleared.hasMag}；` +
       `导入后=${JSON.stringify(archiveRoundTrip.after)}、model=${archiveRoundTrip.modelOg}、` +
-      `checkbox=${archiveRoundTrip.magChecked}/${archiveRoundTrip.accelChecked}、offset 一致=${sameOffset}`,
+      `checkbox=${archiveRoundTrip.magChecked}/${archiveRoundTrip.accelChecked}、offset 一致=${sameOffset}、` +
+      `整份配置一致=${sameConfig}；负例：333Hz=${JSON.stringify(archiveRoundTrip.badSpeedRes)}、` +
+      `越界滑块=${JSON.stringify(archiveRoundTrip.badSliderRes)}、固定轴=${JSON.stringify(archiveRoundTrip.fixedAxisRes)}、` +
+      `负例后配置未变=${archiveRoundTrip.negConfigUnchanged}`,
   );
 
   // 导出 IMU 列语义：默认 raw 标注，勾选「校准后」写 calibrated（回放自动关闭校准）
@@ -871,9 +955,19 @@ try {
     if (document.getElementById("btn-pause").textContent === "继续") document.getElementById("btn-pause").click();
     // 铺一个已知的、非平凡的磁标定（offset=[5,0,0]，已应用），再让它重新记录：
     // 这样 before/after 的校准列本来就不同，才谈得上「改标定后必须不变」。
+    // 注意必须构造**真正的对角模型**：带上 matrix 的 "diag" 会被解析器拒绝
+    // （应用路径优先用 matrix，模型标签与实际不一致——那种档案本来就不该存在）。
     const arch = JSON.parse(JSON.stringify(window.attitudeDemo.experiment.archive()));
-    const baseMag = arch.config?.magCalibration ?? { offset: [0, 0, 0], scale: [1, 1, 1], field: 50, residual: 0, count: 0 };
-    arch.config = { ...arch.config, magModel: "diag", magCalibration: { ...baseMag, kind: "diag", offset: [5, 0, 0] }, magCalibrationApplied: true };
+    arch.config = {
+      ...arch.config,
+      magModel: "diag",
+      magCalibration: {
+        offset: [5, 0, 0], scale: [1, 1, 1], field: 50, residual: 0, count: 120, kind: "diag",
+      },
+      // magTargetUts 在应用里由「当前标定的 field」派生，档案里两者必须自洽（否则读回比较会拒绝）。
+      magTargetUts: 50,
+      magCalibrationApplied: true,
+    };
     const seedImp = window.attitudeDemo.experiment.importArchive(arch);
     await sleep(200);
     if (document.getElementById("btn-pause").textContent === "继续") document.getElementById("btn-pause").click();
@@ -1132,7 +1226,7 @@ try {
 
   // 复核反例回归：断线重连的过渡态必须**冻结**数据流（不得混入模拟 IMU、不得重置本轮时钟）
   const reconnectFreeze = await (async () => {
-    const pg = await browser.newPage();
+    const pg = await newPage();
     await pg.setViewport({ width: 1280, height: 800 });
     const errs = [];
     pg.on("console", (m) => m.type() === "error" && errs.push(m.text()));
@@ -1183,7 +1277,7 @@ try {
       let stream = makeStream(30);
       Object.defineProperty(navigator, "serial", { configurable: true, value: { requestPort: async () => port } });
     });
-    await pg.goto(URL, { waitUntil: "domcontentloaded" });
+    await pg.goto(APP_URL, { waitUntil: "domcontentloaded" });
     await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 15000 });
     await pg.evaluate(() => {
       const sec = document.getElementById("sec-imu");
@@ -1278,7 +1372,7 @@ try {
 
   // 主线程回退路径也必须能取消：禁用 Worker → 批次仍在跑 → 点「取消」应立刻停
   const mainCancel = await (async () => {
-    const pg = await browser.newPage();
+    const pg = await newPage();
     await pg.setViewport({ width: 1280, height: 800 });
     const errs = [];
     pg.on("console", (m) => m.type() === "error" && errs.push(m.text()));
@@ -1287,7 +1381,7 @@ try {
       // 没有 Worker 的浏览器环境：批量评测必须回退到主线程分片，且取消按钮仍然管用
       window.Worker = undefined;
     });
-    await pg.goto(URL, { waitUntil: "domcontentloaded" });
+    await pg.goto(APP_URL, { waitUntil: "domcontentloaded" });
     await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 15000 });
     await pg.evaluate(() => {
       document.getElementById("sec-experiments").classList.remove("collapsed");
@@ -1388,7 +1482,7 @@ try {
   // 两条路径现在共用 core/solve-loop.ts 的调度，同 seed 下应当只差双精度舍入。
   // 这是「批量结论能代表界面」的可验证前提——第五轮复核时 runner 把粗对准放在解算之前，
   // 与界面差一帧遥测，靠肉眼看曲线永远发现不了。
-  const frameParity = await page.evaluate(async () => {
+  const frameParity = await page.evaluate(async (contractSource) => {
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     const set = (id, v) => {
       const el = document.getElementById(id);
@@ -1416,88 +1510,12 @@ try {
     const uiFrames = window.attitudeDemo.experiment.traceFrames(STEPS);
     const runner = window.attitudeDemo.experiment.traceFramesRunner(STEPS);
     const runnerFrames = runner.steps;
-    const R2D = 57.29578;
-    const qDiffDeg = (qa, qb) => {
-      const dot = Math.abs(qa.w * qb.w + qa.x * qb.x + qa.y * qb.y + qa.z * qb.z);
-      return 2 * Math.acos(Math.min(1, dot)) * R2D;
-    };
-    const isUnit = (q) => Math.abs(Math.hypot(q.w, q.x, q.y, q.z) - 1) < 1e-9;
-    const allFinite = (q) => [q.w, q.x, q.y, q.z].every((v) => Number.isFinite(v));
-    /**
-     * 比较器本体：先验 schema（帧数精确相等、五算法、有限单位四元数、时间严格递增），
-     * 再比数值。返回 {ok, reason, maxStepDiff, maxTimeDiff, worstAt}。
-     * 这样"双方都只有 1501 帧""runner 多尾帧""中途 NaN""非单位 w=2"这些畸形输入
-     * 会当场失败，而不是靠一个 1e-3° 的阈值蒙过去（复核 6.2）。
-     */
-    const RUN_H = 1 / 500;
-    const EXPECTED_IDS = "pure,comp,mahony,madg,kalman";
-    const finiteV3 = (v) => Array.isArray(v) && v.length === 3 && v.every((x) => Number.isFinite(x));
-    const compare = (aFrames, bFrames, bIds, expectedEndSec, expectedFrames) => {
-      const fail = (reason) => ({ ok: false, reason, maxStepDiff: NaN, maxTimeDiff: NaN, worstAt: -1, compared: 0 });
-      if (!Array.isArray(bIds) || bIds.length !== 5) return fail(`runner 算法数 ${bIds?.length}`);
-      // 固定 schedule 与算法身份：删帧/改身份都必须失败（ROUND12：旧比较器只比 t/q 与形状）
-      if (Array.isArray(bIds) && bIds.join(",") !== EXPECTED_IDS) return fail(`runner 算法身份不对：${bIds.join(",")}`);
-      if (Number.isFinite(expectedFrames) && aFrames.length !== expectedFrames) {
-        return fail(`界面帧数 ${aFrames.length} ≠ 期望 ${expectedFrames}`);
-      }
-      if (aFrames.length !== bFrames.length) return fail(`帧数不等 ${aFrames.length}/${bFrames.length}`);
-      if (aFrames.length === 0) return fail("空 trace");
-      // 独立于"两边相等"的期望：trace 必须真的跑到请求的结束时刻。
-      // 只比"两边帧数相同"时，**双方一起被截断**（各 1501 帧）会照样通过（复核 6.2）。
-      if (
-        Number.isFinite(expectedEndSec) &&
-        Math.abs(aFrames[aFrames.length - 1].t - expectedEndSec) > 1e-6
-      ) {
-        return fail(`末帧 t=${aFrames[aFrames.length - 1].t} ≠ 期望 ${expectedEndSec}`);
-      }
-      let maxStepDiff = 0;
-      let maxTimeDiff = 0;
-      let worstAt = -1;
-      let prevT = -Infinity;
-      for (let i = 0; i < aFrames.length; i++) {
-        const a = aFrames[i];
-        const b = bFrames[i];
-        if (a.quats.length !== 5 || b.quats.length !== 5) return fail(`第 ${i} 帧算法数 ${a.quats.length}/${b.quats.length}`);
-        for (const q of [...a.quats, ...b.quats]) {
-          if (!allFinite(q) || !isUnit(q)) return fail(`第 ${i} 帧四元数非有限单位`);
-        }
-        if (!(a.t > prevT) || !(b.t > prevT)) return fail(`第 ${i} 帧时间非严格递增`);
-        prevT = a.t;
-        maxTimeDiff = Math.max(maxTimeDiff, Math.abs(a.t - b.t));
-        // 双侧 dt 与输入契约：dt 必须相等且有限，raw/consumed 必须齐备、有限、且两侧一致
-        if (!(Number.isFinite(a.dt) && Number.isFinite(b.dt) && a.dt > 0)) return fail(`第 ${i} 帧 dt 非法：${a.dt}/${b.dt}`);
-        if (Math.abs(a.dt - b.dt) > 1e-12) return fail(`第 ${i} 帧 dt 不一致：${a.dt} vs ${b.dt}`);
-        for (const f of [a, b]) {
-          if (!f.raw || !f.consumed) return fail(`第 ${i} 帧缺 raw/consumed`);
-          if (!finiteV3(f.raw.gyro) || !finiteV3(f.raw.accel) || !finiteV3(f.raw.mag)) return fail(`第 ${i} 帧 raw 非有限`);
-          if (!finiteV3(f.consumed.accel) || !finiteV3(f.consumed.mag)) return fail(`第 ${i} 帧 consumed 非有限`);
-        }
-        // 同一份输入必须给出同一份观测（两侧校准链一致）
-        for (const key of ["gyro", "accel", "mag"]) {
-          if (a.raw[key].some((v, idx) => Math.abs(v - b.raw[key][idx]) > 1e-9)) return fail(`第 ${i} 帧 raw.${key} 两侧不一致`);
-        }
-        if (a.consumed.accel.some((v, idx) => Math.abs(v - b.consumed.accel[idx]) > 1e-9) ||
-            a.consumed.mag.some((v, idx) => Math.abs(v - b.consumed.mag[idx]) > 1e-9)) {
-          return fail(`第 ${i} 帧 consumed 两侧不一致`);
-        }
-        if (a.aligned !== b.aligned) return fail(`第 ${i} 帧 aligned 标记不一致`);
-        for (let k = 0; k < 5; k++) {
-          const d = qDiffDeg(a.quats[k], b.quats[k]);
-          if (d > maxStepDiff) {
-            maxStepDiff = d;
-            worstAt = i;
-          }
-        }
-      }
-      // 数值门槛也在比较器内部：负面对照必须经过同一套判据，否则"中途偏 10°"这类
-      // 只有在调用方额外检查时才失败——比较器本身等于没在比（复核 6.2）。
-      if (!(maxTimeDiff < 1e-12)) return { ...fail(`时间差 ${maxTimeDiff}`), compared: aFrames.length };
-      if (!(maxStepDiff < 1e-3)) {
-        return { ...fail(`姿态差 ${maxStepDiff}°（第 ${worstAt} 步）`), compared: aFrames.length, worstAt, maxStepDiff };
-      }
-      return { ok: true, reason: "", maxStepDiff, maxTimeDiff, worstAt, compared: aFrames.length };
-    };
-    const main = compare(uiFrames, runnerFrames, runner.estimatorIds, END, STEPS);
+    const R2D = 180 / Math.PI;
+    const { compareTrace } = (0, eval)(`(() => {${contractSource}; return { compareTrace };})()`);
+    const compare = (a, b, ids, end, count) => compareTrace(a, b, ids, end, count);
+    const main = compareTrace(uiFrames, runnerFrames, runner.estimatorIds, END, STEPS, {
+      leftEvents: window.attitudeDemo.experiment.traceEvents(), rightEvents: runner,
+    });
     // 事件契约：界面侧标到 aligned 的步数必须等于 runner 的 alignTimes 条数
     const uiAligned = uiFrames.filter((f) => f.aligned).length;
     const alignConsistent = uiAligned === (runner.alignTimes?.length ?? 0);
@@ -1585,7 +1603,7 @@ try {
       eventCounts: runner.eventCounts,
       runnerIds: runner.estimatorIds,
     };
-  });
+  }, traceContractSource);
   check(
     "界面与 runner **逐帧**一致：帧数/五算法/有限单位四元数/严格时序 + 11 种畸形输入必须失败",
     frameParity.ok === true &&
@@ -1814,7 +1832,7 @@ try {
   // 假设备暴露一个 GATT 服务 + 一个 notify 特征，用 20 字节分片发 28 字节二进制帧，
   // 专门验证「BLE 通知天然分片、装置靠流式缓冲重组」这件事。
   const runBleCase = async (protocol) => {
-    const pg = await browser.newPage();
+    const pg = await newPage();
     await pg.setViewport({ width: 1280, height: 800, deviceScaleFactor: 1 });
     const errs = [];
     pg.on("console", (m) => m.type() === "error" && errs.push(m.text()));
@@ -1910,7 +1928,7 @@ try {
         }
       };
     }, protocol);
-    await pg.goto(URL, { waitUntil: "domcontentloaded" });
+    await pg.goto(APP_URL, { waitUntil: "domcontentloaded" });
     await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 15000 });
     await pg.evaluate((proto) => {
       const sec = document.getElementById("sec-imu");
@@ -1986,7 +2004,7 @@ try {
   // 这些用例是复核里那些反例（旧 await 完成后仍提交状态 / 旧 reader 打死新连接 /
   // 耗尽后永久冻结）的永久化版本。
   const makeFakeSerialPage = async (opts = {}) => {
-    const pg = await browser.newPage();
+    const pg = await newPage();
     await pg.setViewport({ width: 1280, height: 800, deviceScaleFactor: 1 });
     const errs = [];
     pg.on("console", (m) => m.type() === "error" && errs.push(m.text()));
@@ -2092,7 +2110,7 @@ try {
       };
       Object.defineProperty(navigator, "serial", { configurable: true, value: serial });
     });
-    await pg.goto(URL, { waitUntil: "domcontentloaded" });
+    await pg.goto(APP_URL, { waitUntil: "domcontentloaded" });
     await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 15000 });
     await pg.evaluate(() => {
       const sec = document.getElementById("sec-imu");
@@ -2140,11 +2158,24 @@ try {
       addEventListener: () => undefined,
       removeEventListener: () => undefined,
     };
+    // 设备掉线监听：模拟「走出范围 / 关机」，用于验证 BLE 待重连期间切源
+    const deviceListeners = [];
+    device.addEventListener = (t, cb) => { if (t === "gattserverdisconnected") deviceListeners.push(cb); };
+    device.removeEventListener = (t, cb) => {
+      if (t !== "gattserverdisconnected") return;
+      const i = deviceListeners.indexOf(cb);
+      if (i >= 0) deviceListeners.splice(i, 1);
+    };
     Object.defineProperty(navigator, "bluetooth", {
       configurable: true,
       value: { requestDevice: async () => device },
     });
-    window.__ble = { device, listeners, releaseSubscribe: () => releaseSubscribe?.(), count: () => listeners.length };
+    window.__ble = {
+      device, listeners, releaseSubscribe: () => releaseSubscribe?.(),
+      count: () => listeners.length,
+      deviceListeners: () => deviceListeners.length,
+      drop: () => { for (const cb of [...deviceListeners]) cb(); },
+    };
   }`;
 
   // A-1：串口 → BLE 切换必须一次成功（复核 P1-B：BLE 先捕获世代，随后内部 serialDisconnect
@@ -2319,6 +2350,122 @@ try {
       `（重连 ${strictLock.res.reconnects} 次、open ${strictLock.res.opens} 次）、打开的端口=${strictLock.res.openPorts}、` +
       `close 失败计数=${strictLock.res.closeFailures}、随后 0.5 s 新增 ${strictLock.res.framesGrow} 帧｜` +
       `错误=${strictLock.errs.slice(0, 2).join(" / ") || "无"}`,
+  );
+
+  // A-2d：掉线重连**已排程**期间切换来源 → 旧定时器不得把旧链路接回来。
+  //      复核反例：串口掉线 → 连 BLE，1 s 后串口自行接回，出现 serial=true/ble=true 双活；
+  //      回放同理（replay=true + serial=true），端口被隐藏占用。
+  //      两个场景共用一个页面：软件渲染下每个标签页都是一个 WebGL 上下文，
+  //      少开一个页面就少一次「浏览器进程被回收」的机会（见 newPage 的自愈说明）。
+  const pendingReconnectSwitch = await (async () => {
+    const { pg, errs, stop } = await makeFakeSerialPage();
+    const res = await pg.evaluate(async (wire) => {
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      (0, eval)(wire)(false);
+      // ① 串口待重连 → 切 BLE
+      navigator.serial.__fireDisconnect();
+      await sleep(120);
+      const p = window.attitudeDemo.plumbing();
+      const serialThenBle = { pending: { pending: p.reconnectPending, serial: p.serial } };
+      document.getElementById("btn-ble").click();
+      await sleep(2200); // 越过原定 1 s 重连时刻
+      const a = window.attitudeDemo.plumbing();
+      serialThenBle.after = { serial: a.serial, ble: a.ble, reconnectPending: a.reconnectPending, kind: a.sourceKind, openPorts: a.openPorts };
+      // ② 回到串口，再制造一次「待重连 → 导入回放」
+      document.getElementById("btn-ble").click(); // 主动断开 BLE
+      await sleep(300);
+      document.getElementById("btn-serial").click();
+      for (let i = 0; i < 60 && !window.attitudeDemo.plumbing().serial; i++) await sleep(50);
+      const reconnectedSerial = window.attitudeDemo.plumbing().serial;
+      navigator.serial.__fireDisconnect();
+      await sleep(120);
+      const pending = window.attitudeDemo.plumbing().reconnectPending;
+      const csv =
+        "# imu=raw\nt_s,gx,gy,gz,ax,ay,az,mx,my,mz\n" +
+        Array.from({ length: 30 }, (_, i) => `${(i * 0.01).toFixed(2)},0,0,0,0,0,9.8,30,0,40`).join("\n");
+      const imported = window.attitudeDemo.replay.import(csv, "switch.csv");
+      await sleep(1800);
+      const b = window.attitudeDemo.plumbing();
+      return {
+        serialThenBle,
+        serialThenReplay: {
+          reconnectedSerial,
+          pending,
+          imported,
+          after: { replay: b.replay, serial: b.serial, reconnectPending: b.reconnectPending, openPorts: b.openPorts, kind: b.sourceKind },
+        },
+      };
+    }, installFakeBle);
+    await stop();
+    await pg.close();
+    return { res, errs };
+  })();
+  const switchRes = pendingReconnectSwitch.res;
+  check(
+    "连接所有权：掉线重连已排程时切换来源，旧定时器不得复活（串口/BLE/回放互斥）",
+    switchRes.serialThenBle.pending.pending === true &&
+      switchRes.serialThenBle.pending.serial === false &&
+      switchRes.serialThenBle.after.serial === false &&
+      switchRes.serialThenBle.after.ble === true &&
+      switchRes.serialThenBle.after.reconnectPending === false &&
+      switchRes.serialThenBle.after.kind === "ble" &&
+      switchRes.serialThenBle.after.openPorts === 0 &&
+      switchRes.serialThenReplay.reconnectedSerial === true &&
+      switchRes.serialThenReplay.pending === true &&
+      /^ok:/.test(switchRes.serialThenReplay.imported) &&
+      switchRes.serialThenReplay.after.replay === true &&
+      switchRes.serialThenReplay.after.serial === false &&
+      switchRes.serialThenReplay.after.reconnectPending === false &&
+      switchRes.serialThenReplay.after.kind === "replay" &&
+      switchRes.serialThenReplay.after.openPorts === 0 &&
+      errsEmpty(pendingReconnectSwitch.errs),
+    `串口待重连（${JSON.stringify(switchRes.serialThenBle.pending)}）→ 切 BLE 2.2 s 后：` +
+      `${JSON.stringify(switchRes.serialThenBle.after)}；` +
+      `再连回串口=${switchRes.serialThenReplay.reconnectedSerial} → 待重连（${switchRes.serialThenReplay.pending}）→ 导入回放 1.8 s 后：` +
+      `导入=${switchRes.serialThenReplay.imported}、${JSON.stringify(switchRes.serialThenReplay.after)}｜` +
+      `错误=${pendingReconnectSwitch.errs.slice(0, 2).join(" / ") || "无"}`,
+  );
+
+  // A-2e：反方向同样要成立——BLE 掉线待重连期间连串口，BLE 定时器不得把 GATT 接回来。
+  //      （与 A-2d 共用 `cancelPendingReconnects` + 来源归属校验，但走 BLE 的排程分支。）
+  const blePendingThenSerial = await (async () => {
+    const { pg, errs, stop } = await makeFakeSerialPage({ connect: false });
+    const res = await pg.evaluate(async (wire) => {
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      (0, eval)(wire)(false);
+      document.getElementById("btn-ble").click();
+      for (let i = 0; i < 60 && !window.attitudeDemo.plumbing().ble; i++) await sleep(50);
+      const connected = window.attitudeDemo.plumbing().ble;
+      window.__ble.drop(); // 设备离开范围 → 1 s 后退避重连
+      await sleep(150);
+      const pending = window.attitudeDemo.plumbing().reconnectPending;
+      document.getElementById("btn-serial").click(); // 切到串口
+      for (let i = 0; i < 60 && !window.attitudeDemo.plumbing().serial; i++) await sleep(50);
+      await sleep(2200); // 越过原定 BLE 重连时刻
+      const a = window.attitudeDemo.plumbing();
+      return {
+        connected, pending,
+        after: { serial: a.serial, ble: a.ble, reconnectPending: a.reconnectPending, kind: a.sourceKind, bleReconnects: a.bleReconnects },
+        deviceListeners: window.__ble.deviceListeners(),
+      };
+    }, installFakeBle);
+    await stop();
+    await pg.close();
+    return { res, errs };
+  })();
+  check(
+    "连接所有权：BLE 待重连时切到串口，GATT 不得自行接回（反向同样互斥）",
+    blePendingThenSerial.res.connected === true &&
+      blePendingThenSerial.res.pending === true &&
+      blePendingThenSerial.res.after.serial === true &&
+      blePendingThenSerial.res.after.ble === false &&
+      blePendingThenSerial.res.after.kind === "serial" &&
+      blePendingThenSerial.res.after.bleReconnects === 0 &&
+      blePendingThenSerial.res.deviceListeners === 0 &&
+      errsEmpty(blePendingThenSerial.errs),
+    `BLE 已连=${blePendingThenSerial.res.connected} → 掉线待重连=${blePendingThenSerial.res.pending} → 连串口 2.2 s 后：` +
+      `${JSON.stringify(blePendingThenSerial.res.after)}、残留掉线监听=${blePendingThenSerial.res.deviceListeners}｜` +
+      `错误=${blePendingThenSerial.errs.slice(0, 2).join(" / ") || "无"}`,
   );
 
   // A-2c：BLE 初连失败（服务下没有 notify 特征）必须真正释放：GATT 断开 + 摘掉设备掉线监听
@@ -2700,9 +2847,9 @@ try {
 
   // ④ 打印媒体：应用外壳必须消失、只剩文档正文（这是「存 PDF 发讲义」的前提）
   const printCase = await (async () => {
-    const pg = await browser.newPage();
+    const pg = await newPage();
     await pg.setViewport({ width: 900, height: 1200 });
-    await pg.goto(URL, { waitUntil: "domcontentloaded" });
+    await pg.goto(APP_URL, { waitUntil: "domcontentloaded" });
     await pg.click("#btn-docs");
     await new Promise((r) => setTimeout(r, 500));
     await pg.evaluate(() => document.querySelector('.docs-toc .module-link[data-doc="trouble"]').click());
@@ -2744,7 +2891,7 @@ try {
   //    本机浏览器是 Chromium，两个 API 天然存在，所以这里在文档创建阶段
   //    把 navigator 上的它们删掉，模拟非 Chromium 环境，再断言提示与置灰。
   const capCase = await (async () => {
-    const pg = await browser.newPage();
+    const pg = await newPage();
     await pg.setViewport({ width: 1280, height: 900 });
     await pg.evaluateOnNewDocument(() => {
       // 属性定义在 Navigator.prototype 上，delete navigator.serial 没用
@@ -2757,7 +2904,7 @@ try {
         if (k in navigator) Object.defineProperty(navigator, k, { value: undefined, configurable: true });
       }
     });
-    await pg.goto(URL, { waitUntil: "domcontentloaded" });
+    await pg.goto(APP_URL, { waitUntil: "domcontentloaded" });
     await new Promise((r) => setTimeout(r, 600));
     const res = await pg.evaluate(() => {
       document.getElementById("sec-imu")?.classList.remove("collapsed"); // 面板默认折叠，展开后才能量到 display
@@ -2793,6 +2940,11 @@ try {
     const sec = document.getElementById("sec-tour");
     if (sec.classList.contains("collapsed")) sec.querySelector(".panel-toggle").click();
     document.getElementById("tour-start").click();
+    // 课程模块是按需 chunk（首屏不背 19 KB 文案）：等它加载完成、卡片出现再逐步点击。
+    // 旧实现同步挂载，这里若不等待会把「点击后无反应」误判成课程坏了。
+    for (let k = 0; k < 100 && document.getElementById("tour-card").classList.contains("hidden"); k++) {
+      await new Promise((r) => setTimeout(r, 30));
+    }
     const steps = [];
     const snap = () => ({
       counter: document.getElementById("tour-counter").textContent,
@@ -2907,7 +3059,7 @@ try {
   // ② 串口连接防重入：连点两次不能让「状态标志」与「真实端口」脱钩。
   //    假端口让 open() 延迟 250 ms —— 正是第二次点击能落进去的窗口。
   const reentryCase = await (async () => {
-    const pg = await browser.newPage();
+    const pg = await newPage();
     await pg.setViewport({ width: 1100, height: 800 });
     const errs = [];
     pg.on("pageerror", (e) => errs.push(String(e)));
@@ -2939,7 +3091,7 @@ try {
         value: { requestPort: async () => { window.__requestPortCalls++; return port; } },
       });
     });
-    await pg.goto(URL, { waitUntil: "domcontentloaded" });
+    await pg.goto(APP_URL, { waitUntil: "domcontentloaded" });
     await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 15000 });
     await pg.evaluate(() => {
       const sec = document.getElementById("sec-imu");
@@ -2973,7 +3125,7 @@ try {
   //    removeEventListener 的实现上，这里会看到帧数 +N 而断言失败——那正是实测过的
   //    「切换特征来回一次、帧率翻倍」。
   const makeFakeBlePage = async (extraWire) => {
-    const pg = await browser.newPage();
+    const pg = await newPage();
     await pg.setViewport({ width: 1100, height: 800 });
     const errs = [];
     pg.on("pageerror", (e) => errs.push(String(e)));
@@ -3013,7 +3165,7 @@ try {
       },
       extraWire ?? "",
     );
-    await pg.goto(URL, { waitUntil: "domcontentloaded" });
+    await pg.goto(APP_URL, { waitUntil: "domcontentloaded" });
     await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 15000 });
     await pg.evaluate(() => {
       const sec = document.getElementById("sec-imu");
@@ -3053,7 +3205,7 @@ try {
 
   // ②b BLE 断线自动重连：GATT 掉线 → 退避重连并订回**同一个**服务/特征；主动断开不重连
   const bleReconnect = await (async () => {
-    const pg = await browser.newPage();
+    const pg = await newPage();
     await pg.setViewport({ width: 1280, height: 800 });
     const errs = [];
     pg.on("console", (m) => m.type() === "error" && errs.push(m.text()));
@@ -3102,7 +3254,7 @@ try {
       // 模拟「设备离开范围 / 关机」：GATT 掉线事件
       window.__bleDrop = () => { for (const cb of [...window.__ble.deviceListeners]) cb(); };
     });
-    await pg.goto(URL, { waitUntil: "domcontentloaded" });
+    await pg.goto(APP_URL, { waitUntil: "domcontentloaded" });
     await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 15000 });
     await pg.evaluate(() => {
       const sec = document.getElementById("sec-imu");
@@ -3281,12 +3433,12 @@ try {
   );
 
   const deepRoundTrip = await (async () => {
-    const pg = await browser.newPage();
+    const pg = await newPage();
     await pg.setViewport({ width: 1280, height: 900 });
     const srcWarn = [];
     pg.on("console", (m) => m.type() === "warning" && srcWarn.push(m.text().slice(0, 80)));
     pg.on("pageerror", (e) => srcWarn.push("pageerror: " + String(e).slice(0, 80)));
-    await pg.goto(URL, { waitUntil: "domcontentloaded" });
+    await pg.goto(APP_URL, { waitUntil: "domcontentloaded" });
     await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 15000 });
     // 在每个控件上设一个「与默认明显不同」的值（滑杆取量程端、开关取反、下拉取非首项）
     const source = await pg.evaluate(() => {
@@ -3351,12 +3503,12 @@ try {
     if (!/^#s=.+/.test(hash)) return { hash, bad: ["未生成 hash"] };
 
     // 新页面按 hash 打开，逐一比对
-    const pg2 = await browser.newPage();
+    const pg2 = await newPage();
     await pg2.setViewport({ width: 1280, height: 900 });
     const dstWarn = [];
     pg2.on("console", (m) => m.type() === "warning" && dstWarn.push(m.text().slice(0, 80)));
     pg2.on("pageerror", (e) => dstWarn.push("pageerror: " + String(e).slice(0, 80)));
-    await pg2.goto(URL + hash, { waitUntil: "domcontentloaded" });
+    await pg2.goto(APP_URL + hash, { waitUntil: "domcontentloaded" });
     await pg2.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 15000 });
     await new Promise((r) => setTimeout(r, 500));
     const dstValues = await pg2.evaluate((lists) => {
@@ -3397,13 +3549,13 @@ try {
   // 这两种协议是本轮新增的「硬件接入入口」，必须在真浏览器里跑一遍：
   // 假端口按各自格式发流，断言解析后的读数与值班（unit/mounting）都正确。
   const runProtocolCase = async (protocol, makeWire) => {
-    const pg = await browser.newPage();
+    const pg = await newPage();
     await pg.setViewport({ width: 1280, height: 800, deviceScaleFactor: 1 });
     const errs = [];
     pg.on("console", (m) => m.type() === "error" && errs.push(m.text()));
     pg.on("pageerror", (e) => errs.push(String(e)));
     await pg.evaluateOnNewDocument(makeWire, protocol);
-    await pg.goto(URL, { waitUntil: "domcontentloaded" });
+    await pg.goto(APP_URL, { waitUntil: "domcontentloaded" });
     await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 15000 });
     await pg.evaluate(() => {
       const sec = document.getElementById("sec-imu");
@@ -3493,7 +3645,7 @@ try {
 
   // 断线自动重连：假端口在 N 帧后抛错（模拟拔线）→ 应进入自动重连并恢复数据
   const reconnectCase = await (async () => {
-    const pg = await browser.newPage();
+    const pg = await newPage();
     await pg.setViewport({ width: 1280, height: 800, deviceScaleFactor: 1 });
     const errs = [];
     pg.on("console", (m) => m.type() === "error" && errs.push(m.text()));
@@ -3548,7 +3700,7 @@ try {
       let stream = makeStream(30);
       Object.defineProperty(navigator, "serial", { configurable: true, value: { requestPort: async () => port } });
     });
-    await pg.goto(URL, { waitUntil: "domcontentloaded" });
+    await pg.goto(APP_URL, { waitUntil: "domcontentloaded" });
     await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 15000 });
     await pg.evaluate(() => {
       const sec = document.getElementById("sec-imu");
@@ -3703,7 +3855,7 @@ try {
     bias: document.getElementById("imu-gyro-bias").value,
     view: document.body.dataset.view,
   }));
-  await page.goto(URL.split("#")[0] + deep.hash, { waitUntil: "domcontentloaded" });
+  await page.goto(APP_URL.split("#")[0] + deep.hash, { waitUntil: "domcontentloaded" });
   await page.waitForFunction(
     () => parseFloat((document.getElementById("clock")?.textContent ?? "").replace("t = ", "")) > 0.5,
     { timeout: 30000 },
@@ -3791,13 +3943,13 @@ try {
   );
 
   // 窄屏布局：无横向溢出，面板/画布贴合视口
-  const mobilePage = await browser.newPage();
+  const mobilePage = await newPage();
   // 窄屏页面同样要收控制台错误（ROUND11：此前只有主页面收集，窄屏页报错无人发现）
   const mobileErrors = [];
   mobilePage.on("console", (m) => m.type() === "error" && mobileErrors.push(m.text()));
   mobilePage.on("pageerror", (e) => mobileErrors.push(String(e)));
   await mobilePage.setViewport({ width: 390, height: 844, deviceScaleFactor: 1 });
-  await mobilePage.goto(URL, { waitUntil: "domcontentloaded" });
+  await mobilePage.goto(APP_URL, { waitUntil: "domcontentloaded" });
   await mobilePage.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 15000 });
   const mobile = await mobilePage.evaluate(() => ({
     scrollW: document.documentElement.scrollWidth,
@@ -4079,7 +4231,7 @@ try {
   await page.evaluate(() => document.getElementById("panel-collapse-all").click());
 
   // ---------- 真实串口模式：用假 Web Serial 端口端到端验证 ----------
-  const serialPage = await browser.newPage();
+  const serialPage = await newPage();
   await serialPage.setViewport({ width: 1280, height: 800, deviceScaleFactor: 1 });
   const serialErrors = [];
   serialPage.on("console", (m) => m.type() === "error" && serialErrors.push(m.text()));
@@ -4138,7 +4290,7 @@ try {
       value: { requestPort: async () => port },
     });
   });
-  await serialPage.goto(URL, { waitUntil: "domcontentloaded" });
+  await serialPage.goto(APP_URL, { waitUntil: "domcontentloaded" });
   await serialPage.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 15000 });
   await serialPage.evaluate(() => {
     const sec = document.getElementById("sec-imu");

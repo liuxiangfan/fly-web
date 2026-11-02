@@ -391,7 +391,9 @@ function invert3Sym(m: number[]): number[] | null {
 export function applyMagCalibration(m: V3, cal: MagCalibration | null): V3 {
   if (!cal) return m;
   const d: V3 = [m[0] - cal.offset[0], m[1] - cal.offset[1], m[2] - cal.offset[2]];
-  if (cal.matrix && cal.matrix.length === 9) {
+  // 按模型标签分派：diag 只能用对角缩放。若这里无条件优先 matrix，"kind=diag + matrix"
+  // 的档案就会显示对角模型、实际走完整矩阵（模型标签与解算结果脱钩）。
+  if (cal.kind !== "diag" && cal.matrix && cal.matrix.length === 9) {
     const k = cal.matrix;
     return [
       k[0] * d[0] + k[1] * d[1] + k[2] * d[2],

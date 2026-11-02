@@ -49,6 +49,15 @@ interface PendingFrame {
   cursor: number;
   /** 本帧的原始终止时刻（仅诊断用） */
   tEnd: number;
+  dt: number;
+  /** 全帧统一安全子步，分拍不能改变数值积分步长 */
+  step: number;
+}
+
+export interface FrameComplete {
+  sample: ImuSample;
+  dt: number;
+  t: number;
 }
 
 export interface AlignEvent {
@@ -78,6 +87,8 @@ export interface SolveLoopOptions {
   onSolve?: (ctx: SolveContext) => void;
   /** 粗对准触发时的回调（界面用来弹提示条） */
   onAlign?: (ev: AlignEvent) => void;
+  /** 源帧积分完成（包括0dt初值帧），每帧恰好一次 */
+  onFrame?: (ctx: FrameComplete) => void;
 }
 
 export class SolveLoop {
@@ -92,6 +103,7 @@ export class SolveLoop {
   private readonly alignCooldownSec: number;
   private onSolve?: (ctx: SolveContext) => void;
   private onAlign?: (ev: AlignEvent) => void;
+  private onFrame?: (ctx: FrameComplete) => void;
 
   /** 抽帧累积器（判断该不该解算；减去周期保留余量，使长期平均频率等于所选值） */
   private solveAcc = 0;
@@ -116,6 +128,7 @@ export class SolveLoop {
     this.alignCooldownSec = opts.alignCooldownSec ?? 5;
     this.onSolve = opts.onSolve;
     this.onAlign = opts.onAlign;
+    this.onFrame = opts.onFrame;
   }
 
   /** 复位调度状态（不 reset 估计器：初值由调用方决定，A/B 需要同步） */
@@ -151,9 +164,10 @@ export class SolveLoop {
   }
 
   /** 运行期改回调（界面在文档演示等场景会临时换掉） */
-  setHooks(hooks: { onSolve?: (ctx: SolveContext) => void; onAlign?: (ev: AlignEvent) => void }): void {
+  setHooks(hooks: { onSolve?: (ctx: SolveContext) => void; onAlign?: (ev: AlignEvent) => void; onFrame?: (ctx: FrameComplete) => void }): void {
     if (hooks.onSolve) this.onSolve = hooks.onSolve;
     if (hooks.onAlign) this.onAlign = hooks.onAlign;
+    if (hooks.onFrame) this.onFrame = hooks.onFrame;
   }
 
   /** 估计器组（只读引用） */
@@ -217,48 +231,54 @@ export class SolveLoop {
    *  4. **对齐事件独立**：静止粗对准发生在帧末，事件只发一次（onAlign + lastAlign），
    *     不把 aligned 追溯标到前面的子步上（旧实现会标到末子步，前面的子步却已用旧姿态）。
    */
+  /** 兼容入口：非正dt只排空积压，不引入新样本/新对准时间。 */
   applyFrame(sample: ImuSample, dtSec: number, t: number, maxSubstep = 0.05, maxSubsteps = 4000): void {
+    if (Number.isFinite(dtSec) && dtSec > 0 && !this.enqueueFrame(sample, dtSec, t, maxSubstep)) {
+      this.coalescedDropped++; // 实时入口可拒绝；离线入口必须先drain再重试，不能丢日志
+    }
+    this.drain(maxSubstep, maxSubsteps);
+  }
+
+  /** 有界接收：false表示背压，调用方仍拥有该帧；不丢已接收的旧帧。 */
+  enqueueFrame(sample: ImuSample, dtSec: number, t: number, maxSubstep = 0.05): boolean {
+    if (!Number.isFinite(dtSec) || dtSec < 0 || !Number.isFinite(t)) return false;
+    if (this.pendingQueue.length >= SolveLoop.PENDING_MAX) return false;
+    const sub = Number.isFinite(maxSubstep) && maxSubstep > 0 ? maxSubstep : 0.05;
+    // 一次确定整帧网格：不同分拍预算下也必须走同样的safe子步。
+    const n = Math.max(1, Math.ceil(dtSec / sub));
+    this.pendingQueue.push({ sample, dt: dtSec, remaining: dtSec, cursor: t - dtSec, tEnd: t, step: dtSec / n });
+    return true;
+  }
+
+  /** 排空已接收工作：无新源帧、无未来时间，0dt帧只发完成事件。 */
+  drain(maxSubstep = 0.05, maxSubsteps = 4000, maxSeconds = Infinity): { processedSec: number; substeps: number } {
     const sub = Number.isFinite(maxSubstep) && maxSubstep > 0 ? maxSubstep : 0.05;
     const cap = Number.isFinite(maxSubsteps) && maxSubsteps > 0 ? Math.max(1, Math.floor(maxSubsteps)) : 4000;
-    const dt = Number.isFinite(dtSec) && dtSec > 0 ? dtSec : 0;
-    if (dt > 0) {
-      // 入队：本帧从头开始积分，时间游标从 t-dt 出发
-      if (this.pendingQueue.length >= SolveLoop.PENDING_MAX) {
-        this.pendingQueue.shift(); // 丢最旧：它离当前时刻最远，且一定会被计数上报
-        this.coalescedDropped++;
-      }
-      this.pendingQueue.push({ sample, remaining: dt, cursor: t - dt, tEnd: t });
-    }
-    // **FIFO 消费**：先补上一拍没做完的（顺序优先，后到的帧绝不超车）
-    let budget = cap;
-    while (this.pendingQueue.length && budget > 0) {
+    const seconds = maxSeconds === Infinity ? Infinity : Math.max(0, Number.isFinite(maxSeconds) ? maxSeconds : 0);
+    let processedSec = 0, substeps = 0;
+    while (this.pendingQueue.length) {
       const item = this.pendingQueue[0] as PendingFrame;
-      // 本拍只积分 min(剩余, 预算×子步上限) —— 子步因此恒 ≤ sub，绝不放大安全步长
-      const integrate = Math.min(item.remaining, budget * sub);
-      const n = Math.min(budget, Math.max(1, Math.ceil(integrate / sub)));
-      const step = integrate / n;
-      const finishes = item.remaining - integrate <= 1e-12; // 本拍把这一帧做完
-      for (let i = 0; i < n; i++) {
-        const obs = this.updateEstimators(item.sample, step);
-        item.cursor += step;
-        this.onSolve?.({
-          dt: step,
-          sample: item.sample,
-          accel: obs.accel,
-          mag: obs.mag,
-          // 最后一个子步对齐到帧的**原始时刻**：避免浮点累积把终态时间推后 1 ulp
-          t: finishes && i === n - 1 ? item.tEnd : item.cursor,
-          aligned: false,
-        });
+      if (item.remaining <= 1e-12) {
+        this.pendingQueue.shift();
+        this.onFrame?.({ sample: item.sample, dt: item.dt, t: item.tEnd });
+        continue;
       }
-      item.remaining -= integrate;
-      budget -= n;
-      if (item.remaining <= 1e-12) this.pendingQueue.shift();
+      const step = Math.min(item.remaining, item.step, sub);
+      if (substeps >= cap || processedSec + step > seconds + 1e-12) break;
+      const obs = this.updateEstimators(item.sample, step);
+      const finishes = item.remaining - step <= 1e-12;
+      item.remaining = finishes ? 0 : item.remaining - step;
+      item.cursor = finishes ? item.tEnd : item.cursor + step;
+      processedSec += step;
+      substeps++;
+      // 静止检测只累计实际处理的这一个子步，不提前借后续帧的dt/观测。
+      const aligned = this.checkStillness(item.sample, step, item.cursor);
+      if (aligned) this.onAlign?.(this.lastAlign as AlignEvent);
+      this.onSolve?.({ dt: step, sample: item.sample, accel: obs.accel, mag: obs.mag, t: item.cursor, aligned });
     }
-    // 顺序与 step() 一致：先解算、后静止检测；对准事件只发一次
-    const aligned = this.checkStillness(sample, dt, t);
-    if (aligned) this.onAlign?.(this.lastAlign as AlignEvent);
+    return { processedSec, substeps };
   }
+
 
   /**
    * 未积分的后续帧队列（**真正分拍**）。

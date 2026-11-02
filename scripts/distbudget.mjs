@@ -77,6 +77,8 @@ const LIMITS = {
   swJs: 8 * 1024,
   // 文档页动画演示（按需 chunk）：只在打开文档层时才下载
   docDemosJs: 24 * 1024,
+  // 引导课程（按需 chunk）：13 步文案约占 6 KB gzip，只在点「开始」/按 G 时下载
+  tourJs: 16 * 1024,
   /**
    * **全部 JS 合计 gzip**（首屏 + 文档演示 + SW + 懒加载 Worker + three）：
    * 这是"不许有代码溜出预算"的总闸。按需拆分可以降低首屏，但总量仍被封在同一根线以内，
@@ -139,8 +141,12 @@ const workerJs = js.filter((f) => /batch\.worker-/.test(f));
  */
 const swJs = js.filter((f) => /sw\.js$/.test(f));
 const docDemosJs = js.filter((f) => /doc-demos-/.test(f));
+const tourJs = js.filter((f) => /tour-/.test(f));
+// 首屏主包 = 除「明确按需加载」之外的全部 JS：three / Worker / SW / 文档演示 / 引导课程。
+// 按需 chunk 不计入首屏，但各自有独立上限、并计入「全部 JS 合计 gzip」。
 const mainJs = js.filter(
-  (f) => !/three-/.test(f) && !/batch\.worker-/.test(f) && !/sw\.js$/.test(f) && !/doc-demos-/.test(f),
+  (f) => !/three-/.test(f) && !/batch\.worker-/.test(f) && !/sw\.js$/.test(f) &&
+    !/doc-demos-/.test(f) && !/tour-/.test(f),
 );
 const metrics = [
   { name: "产物总量", value: total, limit: LIMITS.total, detail: `${(total / 1024).toFixed(0)} KB` },
@@ -183,7 +189,15 @@ const metrics = [
     detail: docDemosJs.length
       ? `${(sizeOf(docDemosJs) / 1024).toFixed(0)} KB（gzip ${(docDemosJs.reduce((s, f) => s + gzipSync(readFileSync(f), { level: 9 }).length, 0) / 1024).toFixed(0)} KB）`
       : "无",
+  },  {
+    name: "引导课程 JS（按需 chunk）",
+    value: sizeOf(tourJs),
+    limit: LIMITS.tourJs,
+    detail: tourJs.length
+      ? `${(sizeOf(tourJs) / 1024).toFixed(0)} KB（gzip ${(tourJs.reduce((sum, f) => sum + gzipSync(readFileSync(f), { level: 9 }).length, 0) / 1024).toFixed(0)} KB）`
+      : "无",
   },
+
   {
     name: "Service Worker JS（离线缓存，加载后注册）",
     value: sizeOf(swJs),
