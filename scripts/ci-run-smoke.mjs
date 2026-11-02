@@ -29,7 +29,10 @@ const shard = String(arg.shard ?? "all").toLowerCase();
 const port = Number(arg.port ?? 4173);
 const outDir = resolve(root, arg.out ?? ".audit-smoke/ci");
 if (!Number.isSafeInteger(runs) || runs < 1) { console.error("[FAIL] --runs 必须是正整数"); process.exit(2); }
-if (!["all", "app", "devices"].includes(shard)) { console.error("[FAIL] --shard 只支持 all / app / devices"); process.exit(2); }
+if (!["all", "app", "devices", "both"].includes(shard)) {
+  console.error("[FAIL] --shard 只支持 all / app / devices / both（both = 每轮先 app 再 devices，各自独立浏览器）");
+  process.exit(2);
+}
 if (!existsSync(join(root, "dist", "index.html"))) {
   console.error("[FAIL] 找不到 dist/index.html——先 npm run build 再跑本脚本");
   process.exit(2);
@@ -71,11 +74,11 @@ async function waitForPreview(timeoutMs = 90000) {
 }
 
 /** 跑一次冒烟，输出落盘，返回是否通过。 */
-async function runSmokeOnce(index) {
-  const logPath = join(outDir, `smoke-${shard}-run${index}.log`);
+async function runShard(which, index) {
+  const logPath = join(outDir, `smoke-${which}-run${index}.log`);
   const child = spawn(process.execPath, [join(root, "scripts", "browser-smoke.mjs")], {
     cwd: root,
-    env: { ...process.env, SMOKE_URL: url, SMOKE_SHARD: shard },
+    env: { ...process.env, SMOKE_URL: url, SMOKE_SHARD: which },
     stdio: ["ignore", "pipe", "pipe"],
     shell: false,
   });
@@ -88,8 +91,25 @@ async function runSmokeOnce(index) {
   const passes = lines.filter((l) => l.startsWith("[PASS]")).length;
   const fails = lines.filter((l) => l.startsWith("[FAIL]")).length;
   const warns = lines.filter((l) => l.includes("[warn]")).length;
-  console.log(`[ci] run ${index}: exit=${code} · ${passes} PASS / ${fails} FAIL / ${warns} warn → ${logPath}`);
-  return { index, code, passes, fails, warns, logPath };
+  console.log(`[ci] run ${index} (${which}): exit=${code} · ${passes} PASS / ${fails} FAIL / ${warns} warn → ${logPath}`);
+  return { index, shard: which, code, passes, fails, warns, logPath };
+}
+
+/**
+ * 跑一轮冒烟。`--shard=both`：每轮**先 app 再 devices**，两个独立浏览器进程；两者都过才算这轮过。
+ * 为什么要它：Windows 的 2 vCPU runner 上「一个浏览器跑完 91 项」会被回收/超时（任务书 9.17），
+ * 分片正是复核要求的缓解手段——按片各起一个进程，单进程的 WebGL 页面数与时长都降下来。
+ */
+async function runSmokeOnce(index) {
+  if (shard !== "both") return runShard(shard, index);
+  const app = await runShard("app", index);
+  const devices = await runShard("devices", index);
+  const code = app.code === 0 && devices.code === 0 ? 0 : 1;
+  const passes = app.passes + devices.passes;
+  const fails = app.fails + devices.fails;
+  const warns = app.warns + devices.warns;
+  console.log(`[ci] 轮 ${index} 合计：${passes} PASS / ${fails} FAIL / ${warns} warn（app ${app.passes} + devices ${devices.passes}）`);
+  return { index, code, passes, fails, warns, logPath: `${app.logPath} + ${devices.logPath}` };
 }
 
 const preview = startPreview();

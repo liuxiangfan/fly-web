@@ -92,7 +92,7 @@ jobs:
       - name: Build
         run: npm run build
       - name: Smoke × 5 (Ubuntu)
-        run: node scripts/ci-run-smoke.mjs --shard=all --runs=5 --out=.audit-smoke/stability
+        run: node scripts/ci-run-smoke.mjs --shard=both --runs=5 --out=.audit-smoke/stability
       - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -117,7 +117,9 @@ jobs:
       - name: Build
         run: npm run build
       - name: Smoke × 5 (Windows)
-        run: node scripts/ci-run-smoke.mjs --shard=all --runs=5 --out=.audit-smoke/stability
+        # 每轮先 app 再 devices（各自独立浏览器进程）：2 vCPU runner 跑不动「一个浏览器 91 项」，
+        # 分片正是复核要求的缓解手段；两者都绿才算这一轮过。
+        run: node scripts/ci-run-smoke.mjs --shard=both --runs=5 --out=.audit-smoke/stability
       - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v4
