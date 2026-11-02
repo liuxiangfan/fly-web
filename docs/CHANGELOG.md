@@ -77,7 +77,11 @@
   用 Computer Use 驱动对话框把蓝牙无线电从关打开（WinRT 复核 state=On）、OS 对该设备地址的授权本身就是 Allow，
   但选择器两次都报「找不到兼容设备」，且 PnP 里今天没有任何新的 arrival（对照活跃键盘有 lastConnected）。
   → 没有产生任何 30 min 真机报告，任务书 9.16 记录全过程，**不伪造**。
-- **Windows CI 两轮实跑（10 次全失败，但失败点每次不同）**：`windows-latest` 是 2 vCPU + swiftshader，
+- **Ubuntu 稳定性验收升级为分片形态**：`--shard=both`（每轮 app+devices 各一个浏览器进程，两者都绿才算一轮），
+  run `41530523646` 连续 5 轮 **91 PASS / 0 FAIL / 0 warning**（每轮 72+19）。
+- **Windows CI 三轮实跑（15 次全失败，失败点每次不同）**：第三轮改用分片形态仍 5/5 失败
+  （`Navigation timeout 20000 ms`、首帧 60 s 超时、8/15 s 等待超时、批量仍回退 main），
+  说明不是「一个浏览器页面太多」而是 runner 的渲染/调度容量不足。`windows-latest` 是 2 vCPU + swiftshader，
   跑不动这套 91 项 WebGL 全量套件——`Target.createTarget timed out`、不同位置的 `waitForFunction` 超时
   （8/15/30/240 s）。同一提交在本机 Windows 连续 5 次 91/91、在 Ubuntu CI 连续 5 次 91/91。
   期间修掉一个**真缺陷**：批量 Worker 的停滞看门狗 15 s 太短——Worker 里单个种子是同步跑完的，
