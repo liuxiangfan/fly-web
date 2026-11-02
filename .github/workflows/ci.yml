@@ -9,7 +9,7 @@ on:
   # 而把 5×冒烟挂在每次 push 上又太贵（私有仓库要算配额）。所以约定一个一次性分支名：
   # 把提交推成 `ci-stability` 就会在 Ubuntu 上连跑 5 次；跑完删掉分支即可。
   push:
-    branches: [ci-stability]
+    branches: [ci-stability, ci-stability-win]
   workflow_dispatch:
     inputs:
       stability_runs:
@@ -78,7 +78,7 @@ jobs:
 
   # 稳定性验收（push 到 ci-stability 分支）：Ubuntu 连续 5 次完整冒烟。
   smoke-stability-branch:
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && github.ref_name == 'ci-stability'
     needs: gate
     runs-on: ubuntu-latest
     steps:
@@ -98,6 +98,31 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: smoke-stability-ubuntu
+          path: .audit-smoke/stability
+          if-no-files-found: ignore
+
+  # 同上，但跑在 Windows（复核要求「Windows 与 Ubuntu CI 各连续 5 次」）。
+  smoke-stability-branch-win:
+    if: github.event_name == 'push' && github.ref_name == 'ci-stability-win'
+    needs: gate
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install
+        run: npm ci
+      - name: Build
+        run: npm run build
+      - name: Smoke × 5 (Windows)
+        run: node scripts/ci-run-smoke.mjs --shard=all --runs=5 --out=.audit-smoke/stability
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-stability-windows
           path: .audit-smoke/stability
           if-no-files-found: ignore
 

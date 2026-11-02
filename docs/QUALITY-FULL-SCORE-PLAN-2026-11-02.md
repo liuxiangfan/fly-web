@@ -612,13 +612,28 @@ node scripts/soak.mjs --batch --seconds=120
 - 浏览器候选路径补齐 Linux（`/usr/bin/google-chrome` 等）——旧列表只有 Windows 路径，
   Ubuntu runner 上会直接「找不到 Edge/Chrome」退出码 2。
 - **本地实测**：`SMOKE_SHARD=app` 72 PASS / `SMOKE_SHARD=devices` 19 PASS，`SMOKE_SHARD=all` 仍为 91 项。
+- **远端实测（GitHub Actions）**：
+  · PR #1 的 CI（run `41492894479`）：`gate` + `smoke-shards (app)` + `smoke-shards (devices)` 全部成功（Ubuntu）；
+  · 稳定性作业（run `41492896547`，分支 `ci-stability`）：**Ubuntu 连续 5 次完整冒烟全部 91 PASS / 0 FAIL / 0 warning**
+    （逐次结果见 artifact `smoke-stability-ubuntu/summary-all.json`）。这一轮跑出了 3 个**只在 Linux CI 暴露**的门禁缺陷，
+    都已修掉并保留：
+    ① 假 BLE 设备原来是在**页面加载后**才注入的——Ubuntu 的 Chrome 默认不带 Web Bluetooth，应用启动时已把「连接 BLE」
+       按钮永久置灰，于是 `click()` 什么都不做（devices 分片 5 条红）。改为 `makeFakeSerialPage({ble:true|'hang'})`
+       在 `goto` 之前注入（与既有的 `runBleCase` 一致）。
+    ② 「顺序/校准演示在重绘」把**第一帧**也纳入 `painted()`：Ubuntu 第 5 轮首帧墨迹 19200 > 半屏，被判成「不像正常绘图」。
+       改为与互补演示同一套判据（丢弃首帧，比较后两次：都画过 + 指纹不同）。
+    ③ 「40 s 回放裁剪」等 3 s 墙钟：Ubuntu 第 4 轮只喂进 30 s 仿真时间（判据要 >35）。改为状态等待（等 `simTime ≥ 39`
+       或回放游标到末尾，上限 60 s）。
+- 另外把「候选浏览器启动失败 → 试下一个」从 `[warn]` 降为 `[info]`（可预期回退，不是浏览器被回收），
+  puppeteer 的 launch 超时 30 s → 60 s（CI 冷启动偶发 WS 超时）。
 
 ### 9.15 仍未达标（不得写成「各维度满分」）
 
 | 未达成项 | 现状 | 为什么不能算满分 |
 |---|---|---|
 | 真机 30 min（串口/BLE，拔插/离开范围/休眠/复位） | **未做**（无可控硬件窗口） | 第 6.3 节明确要求真机证据；mock 不能顶替 |
-| Ubuntu / Windows CI 连续 5 次 | **已实现但需远端执行**：workflow 与分片都在仓库里，需手动触发一次 `smoke-stability` 才有远端证据 | 第 6.4 节要求的是**跑出来**的结果，不是脚本存在 |
+| ~~Ubuntu CI 连续 5 次~~ | **已达成**：run `41492896547`，Ubuntu 连续 5 次 91 PASS / 0 FAIL / 0 warning | — |
+| Windows CI 连续 5 次 | **未做**：workflow 支持（`workflow_dispatch` 里选 `both`），但尚未在 `windows-latest` 上跑过 | 第 6.4 节要求两个系统各 5 次；Windows 本地已连续 5 次全绿，但 CI 证据缺 |
 | 视觉证据绑定当前 commit | **已做**：见 9.13（六张截图绑定 `e67f551` 的 dist `d7356bc1443a10c4`，附 sha256） | — |
 | 全部 JS 的 10% 体积余量 | **未达标**：全部 JS 合计 gzip 262/272 KB（余量 3.7%；three.js 一家 132 KB） | 第 6.5 节要求 ≥10%；要达标必须砍功能或改预算口径，两者都不该做 |
 | PR 审查 / 合并 master / 部署后 smoke / 回滚演练 | **未做** | 第 6.7 节要求，且需远端环境 |
