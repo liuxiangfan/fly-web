@@ -674,6 +674,29 @@ node scripts/soak.mjs --batch --seconds=120
 - 部署后要做的两件事因此变成一条命令：合并后 `npm run postdeploy:smoke -- --url=https://fly_web.070616.xyz/ --expect=<merge commit>`；
   回滚 = 反向提交 + 再跑同一条命令（`--expect` 换成回滚目标提交）。
 
+### 9.19 合并、部署与部署后 smoke（2026-11-03 完成）
+
+- **PR #1 已合并**到 `master`：合并提交 `566086bea469b496ff7fc0eed80a6b8695852434`。
+- **部署工作流** `Deploy to Cloudflare Workers`（run `41543564116`，master push）：
+  `verify`（tsc / check / docbench --recompute / build / budget / 浏览器冒烟）与 `deploy`（wrangler v4）**双绿**。
+- **部署后 smoke**（`npm run postdeploy:smoke`）在线上实测：
+  ```
+  [PASS] 部署后 smoke：https://fly_web.070616.xyz/
+    构建标识 566086bea469（期望 566086bea469）；页脚「566086bea469 · 2026-11-02 23:21:05 UTC」
+    时钟 0.5→2.0 s；评测表 5 行；canvas=true；控制台错误 0
+  ```
+  报告：`docs/generated/postdeploy-566086bea469.json`。「线上页面可显示 build commit」这一条因此**有实际证据**。
+- **回滚演练（干跑）**：从 `origin/master` 拉出临时分支，对合并提交 `git revert -m 1` —— **无冲突**，
+  回滚后的代码 `npx tsc --noEmit` 通过、`npm run build` 成功（主包 190 KB），演练后删除临时分支、仓库无残留。
+  线上回滚命令与干跑一致：
+  ```
+  git revert -m 1 566086bea469b496ff7fc0eed80a6b8695852434   # 生成回滚提交
+  git push origin master                                      # 触发 verify + deploy
+  npm run postdeploy:smoke -- --url=https://fly_web.070616.xyz/   # 老版本没有构建标识 → 不带 --expect 校验核心功能
+  ```
+  **说明**：线上真回滚没有执行（那会把生产短暂退回旧版）；这里记录的是「回滚在 git/构建层面确实可行」的干跑证据。
+  若要求「线上回滚也跑一遍」，需要你同意在某个时间窗把站点回退约 6 分钟。
+
 ### 9.17 Windows CI 两轮实跑的失败画像（2026-11-03）
 
 `windows-latest`（2 vCPU + swiftshader）上跑了两轮、共 10 次完整冒烟，**全部失败**，但失败点每次不同：
