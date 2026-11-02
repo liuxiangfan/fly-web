@@ -2251,3 +2251,17 @@ body[data-imu-mode="real"] .section-experiments .hint::before {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* 校准历史列表：一行一条快照，恢复按钮保持紧凑（面板里不能抢主按钮的位置） */
+.cal-hist { margin-top: 6px; font-size: 11.5px; line-height: 1.7; }
+.cal-hist-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.btn-mini {
+  padding: 1px 7px;
+  font-size: 11px;
+  border-radius: 5px;
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  color: var(--text);
+  cursor: pointer;
+}
+.btn-mini:hover { border-color: var(--accent); color: var(--accent); }

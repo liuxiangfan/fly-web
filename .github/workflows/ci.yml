@@ -1,0 +1,160 @@
+name: CI
+
+# 门禁与冒烟。默认只跑「便宜且必须快」的部分；「连续 N 次冒烟」这种要跑几十分钟的
+# 稳定性验收放在 workflow_dispatch 里手动触发——它在私有仓库上是要吃 Actions 配额的。
+on:
+  pull_request:
+    branches: [master]
+  # 稳定性验收专用分支：`workflow_dispatch` 只认**默认分支**上的 workflow 文件，
+  # 而把 5×冒烟挂在每次 push 上又太贵（私有仓库要算配额）。所以约定一个一次性分支名：
+  # 把提交推成 `ci-stability` 就会在 Ubuntu 上连跑 5 次；跑完删掉分支即可。
+  push:
+    branches: [ci-stability, ci-stability-win]
+  workflow_dispatch:
+    inputs:
+      stability_runs:
+        description: "稳定性验收：连续跑几次冒烟（0 = 跳过）"
+        default: "5"
+      stability_os:
+        description: "稳定性跑在哪个系统上（both = Ubuntu + Windows）"
+        default: "both"
+        type: choice
+        options: [both, ubuntu, windows]
+
+permissions:
+  contents: read
+
+jobs:
+  # 不依赖浏览器的门禁：tsc / check / build / budget / doccheck。
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install
+        run: npm ci
+      - name: Typecheck
+        run: npx tsc --noEmit
+      - name: Contracts + self checks
+        run: npm run check
+      - name: Build
+        run: npm run build
+      - name: Bundle budget
+        run: npm run budget
+      - name: Doc benchmark recompute
+        run: npx tsx scripts/doccheck.ts --recompute
+
+  # 冒烟分片：两个 shard 各自独立进程、独立浏览器（合起来覆盖全部用例）。
+  # 用矩阵并行跑，任何一片红都让 PR 红——不允许「只看一片」。
+  smoke-shards:
+    needs: gate
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [app, devices]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install
+        run: npm ci
+      - name: Build
+        run: npm run build
+      - name: Smoke shard ${{ matrix.shard }}
+        run: node scripts/ci-run-smoke.mjs --shard=${{ matrix.shard }} --runs=1 --out=.audit-smoke/ci
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-${{ matrix.shard }}-logs
+          path: .audit-smoke/ci
+          if-no-files-found: ignore
+
+  # 稳定性验收（push 到 ci-stability 分支）：Ubuntu 连续 5 次完整冒烟。
+  smoke-stability-branch:
+    if: github.event_name == 'push' && github.ref_name == 'ci-stability'
+    needs: gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install
+        run: npm ci
+      - name: Build
+        run: npm run build
+      - name: Smoke × 5 (Ubuntu)
+        run: node scripts/ci-run-smoke.mjs --shard=both --runs=5 --out=.audit-smoke/stability
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-stability-ubuntu
+          path: .audit-smoke/stability
+          if-no-files-found: ignore
+
+  # 同上，但跑在 Windows（复核要求「Windows 与 Ubuntu CI 各连续 5 次」）。
+  smoke-stability-branch-win:
+    if: github.event_name == 'push' && github.ref_name == 'ci-stability-win'
+    needs: gate
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install
+        run: npm ci
+      - name: Build
+        run: npm run build
+      - name: Smoke × 5 (Windows)
+        # 每轮先 app 再 devices（各自独立浏览器进程）：2 vCPU runner 跑不动「一个浏览器 91 项」，
+        # 分片正是复核要求的缓解手段；两者都绿才算这一轮过。
+        run: node scripts/ci-run-smoke.mjs --shard=both --runs=5 --out=.audit-smoke/stability
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-stability-windows
+          path: .audit-smoke/stability
+          if-no-files-found: ignore
+
+  # 稳定性验收（手动触发）：同 commit 同产物连续 N 次冒烟，零 warning、零重启。
+  # 私有仓库的 Actions 配额有限，所以默认只在 workflow_dispatch 上跑。
+  smoke-stability:
+    if: github.event_name == 'workflow_dispatch'
+    needs: gate
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(inputs.stability_os == 'both' && '["ubuntu-latest","windows-latest"]' || (inputs.stability_os == 'windows' && '["windows-latest"]' || '["ubuntu-latest"]')) }}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install
+        run: npm ci
+      - name: Build
+        run: npm run build
+      - name: Smoke × ${{ inputs.stability_runs }} (${{ matrix.os }})
+        if: inputs.stability_runs != '0'
+        run: node scripts/ci-run-smoke.mjs --shard=all --runs=${{ inputs.stability_runs }} --out=.audit-smoke/stability
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-stability-${{ matrix.os }}
+          path: .audit-smoke/stability
+          if-no-files-found: ignore

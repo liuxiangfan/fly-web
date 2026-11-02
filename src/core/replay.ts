@@ -15,7 +15,7 @@
  * 猜错单位不会报错但会让数据看起来不对，所以宁可把它**说出来**。
  * 时间列同理：识别为 ms 还是 s，判断依据也写进 notes。
  */
-import type { V3 } from "./quat";
+import { qNorm, type Quat, type V3 } from "./quat";
 
 export interface ReplayFrame {
   /** 采样时刻（毫秒，任意零点；回放只用相邻差值） */
@@ -26,8 +26,14 @@ export interface ReplayFrame {
   accelMs2: V3;
   /** μT（机体系）；缺失时全 0 */
   magUt: V3;
-  /** 该行是否带磁力计数据（三列都解析成功） */
+  /** 该行是否带**有效**磁力计数据（三列都存在且有限） */
   hasMag: boolean;
+  /** 该行三轴陀螺仪是否都有效（无效帧不会进入 frames） */
+  gyroValid: boolean;
+  /** 该行三轴加速度计是否都有效（无效帧不会进入 frames） */
+  accelValid: boolean;
+  /** 可选外部真值姿态（带 truth_qw… 或 q_true_w… 列时） */
+  qTrue?: Quat;
 }
 
 export interface ReplayParseResult {
@@ -36,8 +42,19 @@ export interface ReplayParseResult {
   mapping: Record<string, string>;
   /** 跳过的行数（空行、注释、坏行） */
   skipped: number;
+  /** 因关键列缺失/非有限而拒绝的样本行数（不会被当成 0 喂进估计器） */
+  invalidRows: number;
   /** 单位与时间轴的推断说明（原样显示给用户） */
   notes: string[];
+  /** 是否包含外部真值姿态列 */
+  hasTruth: boolean;
+  /**
+   * 日志元数据声明的 IMU 列语义：
+   *  - `false` = 原始读数（回放时应按需再次应用磁/加计校准，本装置导出默认值）；
+   *  - `true` = 已经校准过的读数（回放**不得**重复校准）；
+   *  - `null` = 日志没有声明（按原始处理，并在 notes 里说明假设）。
+   */
+  imuCalibrated: boolean | null;
   /** 失败原因；成功时为 undefined */
   error?: string;
 }
@@ -100,9 +117,38 @@ function medianDelta(times: number[]): number {
   return d[Math.floor(d.length / 2)];
 }
 
-/** 解析一行 CSV（容忍引号包裹与多余空格） */
+/**
+ * 解析一行 CSV：支持双引号包裹字段与 "" 转义逗号；容许多余空格。
+ * 旧实现只去掉首尾引号，遇到 "a,b" 会错列——这类日志在 Excel 导出里很常见。
+ */
 function splitRow(line: string): string[] {
-  return line.split(",").map((c) => c.trim().replace(/^"|"$/g, ""));
+  const out: string[] = [];
+  let cur = "";
+  let quoted = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (quoted) {
+      if (ch === '"') {
+        if (line[i + 1] === '"') {
+          cur += '"';
+          i++;
+        } else {
+          quoted = false;
+        }
+      } else {
+        cur += ch;
+      }
+    } else if (ch === '"') {
+      quoted = true;
+    } else if (ch === ",") {
+      out.push(cur.trim());
+      cur = "";
+    } else {
+      cur += ch;
+    }
+  }
+  out.push(cur.trim());
+  return out;
 }
 
 /**
@@ -113,6 +159,15 @@ export function parseImuCsv(text: string, maxRows = 200000): ReplayParseResult {
   const mapping: Record<string, string> = {};
   const raw = text.replace(/^\uFEFF/, "");
   const lines = raw.split(/\r?\n/);
+
+  // 注释行里的 IMU 语义声明（本装置导出的 `# imu=raw` / `# imu=calibrated`）
+  let imuCalibrated: boolean | null = null;
+  for (const l of lines) {
+    const m = /^\s*#\s*imu\s*=\s*(raw|calibrated|cal)\b/i.exec(l);
+    if (!m) continue;
+    imuCalibrated = m[1].toLowerCase() !== "raw";
+    break;
+  }
 
   // 找出表头行：第一个非空、非注释、且含非数字内容的行
   let headerIdx = -1;
@@ -127,6 +182,8 @@ export function parseImuCsv(text: string, maxRows = 200000): ReplayParseResult {
 
   // 建立列映射
   let colRoles: Array<ColSpec | null> = [];
+  /** 外部真值四元数列（truth_qw / q_true_w / ref_qx …） */
+  const truthIdx: Partial<Record<"w" | "x" | "y" | "z", number>> = {};
   let cols = 0;
   if (headerIdx >= 0) {
     const header = splitRow(lines[headerIdx]);
@@ -135,15 +192,41 @@ export function parseImuCsv(text: string, maxRows = 200000): ReplayParseResult {
     header.forEach((h, i) => {
       const spec = colRoles[i];
       if (spec) mapping[h] = spec.axis ? `${spec.role}.${spec.axis}` : spec.role;
+      const k = normKey(h);
+      const m =
+        /^(?:truth|true|ref|reference)_?q_?([wxyz])$/.exec(k) ??
+        /^q_?(?:truth|true|ref|reference)_?([wxyz])$/.exec(k);
+      if (m) {
+        truthIdx[m[1] as "w" | "x" | "y" | "z"] = i;
+        mapping[h] = `truth.${m[1]}`;
+      }
     });
+    // 重复/歧义列：同一 role.axis 出现两次时数据归属不可判定，直接报错而不是悄悄覆盖
+    const seen = new Map<string, number>();
+    colRoles.forEach((spec, i) => {
+      if (!spec || !spec.axis) return;
+      const key = `${spec.role}.${spec.axis}`;
+      seen.set(key, (seen.get(key) ?? 0) + 1);
+      if ((seen.get(key) ?? 0) > 1) {
+        return; // 统一在循环外报错，避免提前 return 丢失信息
+      }
+      void i;
+    });
+    const dup = [...seen.entries()].filter(([, n]) => n > 1).map(([k]) => k);
+    if (dup.length) {
+      return {
+        frames: [], mapping, skipped: 0, invalidRows: 0, hasTruth: false, imuCalibrated, notes,
+        error: `列名有歧义：${dup.join("、")} 各出现多次。请保留一份（例如 gyro_x_dps 与 gx 只留一个），否则无法判断该用哪一列。`,
+      };
+    }
   } else {
     // 无表头：按列数推断（7 列 = t+g+a；10 列 = +m）
     const firstData = lines.find((l) => l.trim() && !l.startsWith("#"));
-    if (!firstData) return { frames: [], mapping, skipped: 0, notes, error: "文件里没有可解析的数据行" };
+    if (!firstData) return { frames: [], mapping, skipped: 0, invalidRows: 0, hasTruth: false, imuCalibrated, notes, error: "文件里没有可解析的数据行" };
     cols = splitRow(firstData).length;
     if (cols !== 7 && cols !== 10) {
       return {
-        frames: [], mapping, skipped: 0, notes,
+        frames: [], mapping, skipped: 0, invalidRows: 0, hasTruth: false, imuCalibrated, notes,
         error: `无表头时只支持 7 列（t + 陀螺 3 + 加计 3）或 10 列（再加磁力计 3），当前是 ${cols} 列。请加上表头，或导出时勾选「原始 IMU」。`,
       };
     }
@@ -173,18 +256,20 @@ export function parseImuCsv(text: string, maxRows = 200000): ReplayParseResult {
     }
   });
   if (idx.t.x === undefined) {
-    return { frames: [], mapping, skipped: 0, notes, error: "找不到时间列（列名里需要有 t / time / timestamp / tick）" };
+    return { frames: [], mapping, skipped: 0, invalidRows: 0, hasTruth: false, imuCalibrated, notes, error: "找不到时间列（列名里需要有 t / time / timestamp / tick）" };
   }
   if (idx.gyro.x === undefined || idx.accel.x === undefined) {
     return {
-      frames: [], mapping, skipped: 0, notes,
+      frames: [], mapping, skipped: 0, invalidRows: 0, hasTruth: false, imuCalibrated, notes,
       error: "找不到陀螺仪或加速度计列。列名请包含 gyro/accel（或 gx/gy/gz、ax/ay/az），行首是时间列。",
     };
   }
 
-  // 逐行取值
+  // 逐行取值：关键列缺失/非有限 → 整行拒绝（绝不把坏样本填 0 喂进估计器）
   const frames: ReplayFrame[] = [];
   let skipped = 0;
+  let invalidRows = 0;
+  let truthRows = 0;
   const startLine = headerIdx >= 0 ? headerIdx + 1 : 0;
   for (let i = startLine; i < lines.length && frames.length < maxRows; i++) {
     const l = lines[i].trim();
@@ -194,30 +279,51 @@ export function parseImuCsv(text: string, maxRows = 200000): ReplayParseResult {
       skipped++;
       continue;
     }
-    const num = (c: number | undefined): number => (c === undefined ? NaN : Number(cells[c]));
-    const t = num(idx.t.x) * (scaleOf.t.x ?? 1);
-    const pick = (role: "gyro" | "accel" | "mag", axis: "x" | "y" | "z"): number => {
+    const tRaw = idx.t.x === undefined ? NaN : Number(cells[idx.t.x]);
+    const t = tRaw * (scaleOf.t.x ?? 1);
+    const axisVal = (role: "gyro" | "accel" | "mag", axis: "x" | "y" | "z"): number | null => {
       const c = idx[role][axis];
-      if (c === undefined) return 0;
+      if (c === undefined) return null;
       const v = Number(cells[c]);
-      return Number.isFinite(v) ? v * (scaleOf[role][axis] ?? 1) : 0;
+      return Number.isFinite(v) ? v * (scaleOf[role][axis] ?? 1) : null;
     };
     if (!Number.isFinite(t)) {
       skipped++;
       continue;
     }
-    const magUt: V3 = [pick("mag", "x"), pick("mag", "y"), pick("mag", "z")];
+    const gx = axisVal("gyro", "x"), gy = axisVal("gyro", "y"), gz = axisVal("gyro", "z");
+    const ax = axisVal("accel", "x"), ay = axisVal("accel", "y"), az = axisVal("accel", "z");
+    if (gx === null || gy === null || gz === null || ax === null || ay === null || az === null) {
+      invalidRows++;
+      continue;
+    }
+    const mx = axisVal("mag", "x"), my = axisVal("mag", "y"), mz = axisVal("mag", "z");
+    const hasMag = mx !== null && my !== null && mz !== null;
+    const qw = truthIdx.w === undefined ? NaN : Number(cells[truthIdx.w]);
+    const qx = truthIdx.x === undefined ? NaN : Number(cells[truthIdx.x]);
+    const qy = truthIdx.y === undefined ? NaN : Number(cells[truthIdx.y]);
+    const qz = truthIdx.z === undefined ? NaN : Number(cells[truthIdx.z]);
+    const truthOk = [qw, qx, qy, qz].every(Number.isFinite);
+    if (truthOk) truthRows++;
     frames.push({
       tMs: t * 1000,
-      gyroDps: [pick("gyro", "x"), pick("gyro", "y"), pick("gyro", "z")],
-      accelMs2: [pick("accel", "x"), pick("accel", "y"), pick("accel", "z")],
-      magUt,
-      hasMag: idx.mag.x !== undefined && idx.mag.y !== undefined && idx.mag.z !== undefined,
+      gyroDps: [gx, gy, gz],
+      accelMs2: [ax, ay, az],
+      magUt: hasMag ? [mx as number, my as number, mz as number] : [0, 0, 0],
+      hasMag,
+      gyroValid: true,
+      accelValid: true,
+      ...(truthOk ? { qTrue: qNorm({ w: qw, x: qx, y: qy, z: qz }) } : {}),
     });
+  }
+  const hasTruth = truthRows > 0 && truthRows === frames.length;
+  if (invalidRows > 0) notes.push(`拒绝了 ${invalidRows} 行关键列缺失/非有限样本（不会当成 0 参与解算）`);
+  if (truthRows > 0 && !hasTruth) {
+    notes.push(`外部真值列只覆盖 ${truthRows}/${frames.length} 帧：为避免误差基准中途切换，本次不启用外部真值`);
   }
 
   if (frames.length < 20) {
-    return { frames, mapping, skipped, notes, error: `只解析到 ${frames.length} 帧，太少（至少 20 帧才能看出算法行为）` };
+    return { frames, mapping, skipped, invalidRows, hasTruth, imuCalibrated, notes, error: `只解析到 ${frames.length} 帧，太少（至少 20 帧才能看出算法行为）` };
   }
 
   // 时间轴：先按列名给的单位解释；若中位采样间隔 > 0.5 s（几乎不可能是真实采样间隔，
@@ -231,7 +337,7 @@ export function parseImuCsv(text: string, maxRows = 200000): ReplayParseResult {
     // 容忍少量重复时间戳（有些日志会重复写同一 tick），全部重复才算错
     const bad = frames.filter((f, i) => i > 0 && f.tMs < frames[i - 1].tMs).length;
     if (bad > frames.length * 0.05) {
-      return { frames: [], mapping, skipped, notes, error: "时间列不是递增的（无法作为回放时钟）——检查是不是选错了时间列" };
+      return { frames: [], mapping, skipped, invalidRows, hasTruth: false, imuCalibrated, notes, error: "时间列不是递增的（无法作为回放时钟）——检查是不是选错了时间列" };
     }
     notes.push(`时间列有 ${bad} 处回退（已容忍，回放时按 frameDtSec 夹紧）`);
   }
@@ -248,9 +354,17 @@ export function parseImuCsv(text: string, maxRows = 200000): ReplayParseResult {
   if (!frames[0].hasMag && !frames.some((f) => f.hasMag)) {
     notes.push("没有磁力计列：MARG 对这组数据无效（偏航将只能靠陀螺积分）");
   }
+  if (hasTruth) notes.push(`检测到外部真值姿态（truth_q*）：${truthRows} 帧可用于物理误差评估（不再以 Mahony 为唯一基准）`);
+  notes.push(
+    imuCalibrated === true
+      ? "元数据声明 IMU 列已是**校准后**读数（# imu=calibrated）：回放不再二次应用磁/加计校准"
+      : imuCalibrated === false
+        ? "元数据声明 IMU 列为**原始**读数（# imu=raw）：回放是否应用校准由回放开关决定"
+        : "日志未声明 IMU 列语义：按**原始读数**处理（回放时是否应用校准由回放开关控制）",
+  );
   const anyNonZero = (role: "gyro" | "accel") =>
     frames.some((f) => Math.hypot(...(role === "gyro" ? f.gyroDps : f.accelMs2)) > 1e-9);
   if (!anyNonZero("accel")) notes.push("加速度计列全是 0：检查列映射或单位");
   if (!anyNonZero("gyro")) notes.push("陀螺仪列全是 0：检查列映射或单位");
-  return { frames, mapping, skipped, notes };
+  return { frames, mapping, skipped, invalidRows, hasTruth, imuCalibrated, notes };
 }

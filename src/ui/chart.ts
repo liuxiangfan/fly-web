@@ -17,6 +17,8 @@ export class RollingChart {
   private windowSec: number;
   private unit: string;
   private dpr = Math.min(window.devicePixelRatio || 1, 2);
+  /** 共享时间游标（秒）；null = 不画。由主程序在暂停/悬停时设置 */
+  private cursorT: number | null = null;
 
   constructor(
     private canvas: HTMLCanvasElement,
@@ -54,7 +56,38 @@ export class RollingChart {
   clear(): void {
     this.count = 0;
     this.head = 0;
+    this.cursorT = null;
     this.render();
+  }
+
+  /** 设置共享时间游标（秒）；Charts 之间由主程序同步同一个 t */
+  setCursor(t: number | null): void {
+    this.cursorT = t !== null && Number.isFinite(t) ? t : null;
+    this.render();
+  }
+
+  /** 当前可见时间窗 [t0, t1]（秒） */
+  timeRange(): { t0: number; t1: number } {
+    const t1 = this.count > 0 ? this.times[(this.head - 1 + this.cap) % this.cap] : 0;
+    return { t0: t1 - this.windowSec, t1 };
+  }
+
+  /** 时间 t 处各系列的最接近样本；无数据返回 null */
+  sampleAt(t: number): { t: number; values: number[] } | null {
+    if (this.count === 0) return null;
+    let best = 0;
+    let bestD = Infinity;
+    for (let k = 0; k < this.count; k++) {
+      const idx = (this.head - this.count + k + this.cap) % this.cap;
+      const d = Math.abs(this.times[idx] - t);
+      if (d < bestD) {
+        bestD = d;
+        best = idx;
+      }
+    }
+    const values: number[] = [];
+    for (let s = 0; s < this.series.length; s++) values.push(this.vals[s * this.cap + best]);
+    return { t: this.times[best], values };
   }
 
   push(t: number, values: number[]): void {
@@ -195,6 +228,29 @@ export class RollingChart {
       }
       ctx.stroke();
       ctx.setLineDash([]);
+    }
+
+    // 共享时间游标：竖线 + 各可见系列的采样点（暂停后逐帧分析用）
+    if (this.cursorT !== null && this.cursorT >= t0 && this.cursorT <= t1 + 1e-9) {
+      const cx = Math.round(xOf(this.cursorT)) + 0.5;
+      ctx.strokeStyle = "#e6edf3";
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath();
+      ctx.moveTo(cx, padT);
+      ctx.lineTo(cx, padT + plotH);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      for (let s = 0; s < this.series.length; s++) {
+        if (!this.visible[s]) continue;
+        const sample = this.sampleAt(this.cursorT);
+        const v = sample?.values[s] ?? NaN;
+        if (!Number.isFinite(v)) continue;
+        ctx.fillStyle = this.series[s].color;
+        ctx.beginPath();
+        ctx.arc(cx, yOf(v), 3, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
   }
 

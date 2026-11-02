@@ -64,7 +64,8 @@ export const TOUR_STEPS: TourStep[] = [
     id: "complementary",
     title: "互补滤波：α 就是「信谁多少」的旋钮",
     body:
-      "互补滤波把陀螺仪当高频、加速度计当低频：α 越大越信陀螺仪（响应快、漂得快），越小越信加速度计（稳、但机动时被拽偏）。" +
+      "互补滤波把陀螺仪当高频、加速度计当低频：α 越大，观测修正速率越大（更快靠近加速度计/磁力计的测量，也更容易被它们的污染带走）；" +
+      "α 越小，越依赖陀螺仪预测（更平滑，但收敛慢、漂移残留更明显）。" +
       "它不是最优解，但只用一行公式就解决 90% 的问题——也是理解后面 Mahony / 卡尔曼的入口。",
     look:
       "文档页里那个<b>实时演示</b>：真值、陀螺仪积分（慢慢漂走）、加速度计（噪声很大）、融合线（四者中最稳）。" +
@@ -192,7 +193,7 @@ export const TOUR_STEPS: TourStep[] = [
       "理论看完了，现在自己调：三道挑战各给一个现场，你要把参数调到评分阈值以内才算通过" +
       "（零偏整定 / 振动整定 / 磁干扰整定，阈值都是实测定的）。三题都要求至少积累 15 秒样本才允许结算——" +
       "「刚点开始就结算」也能过的话，这题目就没意义了。" +
-      "之后：<b>实验库</b>有 17 组一键复现的因果链，<b>文档</b>共 14 页（控制项手册里每个滑块都有一条「是什么 / 起什么作用 / 改了会怎样」），" +
+      "之后：<b>实验库</b>有 19 组一键复现的因果链（每条都有实验种子与完整基线，可复现）、<b>文档</b>共 15 页（控制项手册里每个滑块都有一条「是什么 / 起什么作用 / 改了会怎样」），" +
       "快捷键是 <span class=\"mono\">空格</span> 暂停、<span class=\"mono\">R</span> 重置、<span class=\"mono\">1/2/3</span> 切视图、" +
       "<span class=\"mono\">D</span> 文档、<span class=\"mono\">Ctrl/⌘+K</span> 全文搜索。",
     look: "面板里选一道题点「开始」，面板下方的提示会告诉你「改哪个滑块、看哪条曲线、阈值是多少」。",
@@ -227,6 +228,8 @@ export interface Tour {
   active(): boolean;
   /** 当前步序号（1 起，未开始时为 0） */
   index(): number;
+  /** 总步数（供主程序在课程加载后显示进度，避免把 13 硬编码到 main） */
+  total(): number;
 }
 
 const $t = (id: string): HTMLElement | null => document.getElementById(id);
@@ -343,6 +346,7 @@ export function mountTour(host: TourHost): Tour {
     },
     active: () => i >= 0,
     index: () => i + 1,
+    total: () => TOUR_STEPS.length,
   };
 
   nextBtn?.addEventListener("click", () => tour.next());

@@ -43,7 +43,10 @@ export function synthesizeGyroAngle(opts: {
 }
 
 /**
- * 非重叠 Allan 偏差：σ(τ) = √( ½·⟨(θ_{k+2m} − 2θ_{k+m} + θ_k)²⟩ ) / τ，τ = m·dt。
+ * Allan 偏差（当前实现为**重叠估计**：滑动遍历所有可用起点）：
+ * σ(τ) = √( ½·⟨(θ_{k+2m} − 2θ_{k+m} + θ_k)²⟩ ) / τ，τ = m·dt。
+ * 重叠估计比只取非重叠簇方差更小、更平滑，适合教学曲线；若以后改用非重叠簇，
+ * 必须同时改函数名、文档与自检口径，不能两套叫法混用。
  * @param mList 平均因子列表（τ = m·dt）；缺省按对数间隔自动取
  */
 export function allanDeviation(

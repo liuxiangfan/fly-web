@@ -35,6 +35,12 @@ jobs:
       - name: Selftest + Scenecheck + HTML contract
         run: npm run check
 
+      # 文档基准的**只读复算**：用生成器的同一份实现重算全部记录，与存档逐字段比对。
+      # 复核结论：CI 此前只有「引用存在 + 数值范围」检查，存档与实现可以悄悄脱钩；
+      # 这一步把"文档里的定量结论"钉在可复算的证据上（约 8 s）。
+      - name: Docbench recompute
+        run: npx tsx scripts/doccheck.ts --recompute
+
       - name: Build
         run: npm run build
 

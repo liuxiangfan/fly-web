@@ -1,5 +1,5 @@
 import type { Quat, V3 } from "../core/quat";
-import { qFromEuler, qId, qIntegrate, qNorm, qRot, qRotInv, qSlerp, qToEuler } from "../core/quat";
+import { qConj, qFromEuler, qId, qIntegrate, qMul, qNorm, qRot, qRotInv, qSlerp, qToEuler } from "../core/quat";
 import { MAG_WORLD_NED } from "../core/imu";
 
 /**
@@ -24,6 +24,10 @@ export interface EstimatorTelemetry {
   accelValid: boolean;
   /** 磁力计是否可信（‖m‖ 偏离期望场强不超过 40%）；magEnabled=false 时恒 false */
   magValid: boolean;
+  /** 本帧重力观测是否**实际通过门控并成功应用**（比 accelValid 更接近“用了没有”） */
+  accelAccepted?: boolean;
+  /** 本帧磁观测是否实际通过门控并成功应用 */
+  magAccepted?: boolean;
   /** 算法专属细节（互补：权重与两路倾角；Mahony：P/I 占比；Madgwick：残差），任意结构 */
   detail: Record<string, number>;
 }
@@ -65,6 +69,11 @@ export interface Estimator {
   /** 可调参数快照（A/B 对比用）：键名各算法不同（α / Kp,Ki / β / Q,R） */
   getParams(): Record<string, number>;
   setParams(p: Record<string, number>): void;
+  /**
+   * 复制**运行期状态**（姿态之外的历史）：A/B 的 online-fork 模式用。
+   * 配置（参数/门控阈值/磁形态）由调用方另行复制；这里只管 q、积分器、门控历史、协方差与零偏。
+   */
+  copyRuntimeFrom?(other: Estimator): void;
 }
 
 /**
@@ -185,6 +194,29 @@ class GateRecovery {
     this.recovering = 0;
     this.ratio = 0;
   }
+
+  /** 运行期快照（A/B online-fork 用）：包含拒绝窗口与恢复窗剩余时间 */
+  snapshot(): { rej: number[]; tot: number[]; acc: number; idx: number; recovering: number; ratio: number } {
+    return {
+      rej: [...this.rej],
+      tot: [...this.tot],
+      acc: this.acc,
+      idx: this.idx,
+      recovering: this.recovering,
+      ratio: this.ratio,
+    };
+  }
+
+  restore(s: ReturnType<GateRecovery["snapshot"]>): void {
+    for (let i = 0; i < GATE_BUCKETS; i++) {
+      this.rej[i] = s.rej[i] ?? 0;
+      this.tot[i] = s.tot[i] ?? 0;
+    }
+    this.acc = s.acc;
+    this.idx = s.idx;
+    this.recovering = s.recovering;
+    this.ratio = s.ratio;
+  }
 }
 
 /* --------------------------------------------------------------------------
@@ -300,6 +332,9 @@ export class PureGyroEstimator implements Estimator {
     this.q = initial ? { ...initial } : qId();
     this.telemetry = emptyTelemetry();
   }
+  copyRuntimeFrom(other: Estimator): void {
+    this.q = { ...other.q };
+  }
   getParams(): Record<string, number> {
     return {};
   }
@@ -412,6 +447,12 @@ export class ComplementaryEstimator implements Estimator {
     this.age = 0;
     this.gate.reset();
     this.telemetry = emptyTelemetry();
+  }
+  copyRuntimeFrom(other: Estimator): void {
+    const s = other as ComplementaryEstimator;
+    this.q = { ...s.q };
+    this.age = s.age;
+    this.gate.restore(s.gate.snapshot());
   }
   getParams(): Record<string, number> {
     return { alpha: this.alpha };
@@ -544,6 +585,13 @@ export class MahonyEstimator implements Estimator {
     this.age = 0;
     this.gate.reset();
     this.telemetry = emptyTelemetry();
+  }
+  copyRuntimeFrom(other: Estimator): void {
+    const s = other as MahonyEstimator;
+    this.q = { ...s.q };
+    this.eInt = [...s.eInt];
+    this.age = s.age;
+    this.gate.restore(s.gate.snapshot());
   }
   getParams(): Record<string, number> {
     return { kp: this.kp, ki: this.ki };
@@ -708,6 +756,12 @@ export class MadgwickEstimator implements Estimator {
     this.gate.reset();
     this.telemetry = emptyTelemetry(); // 与其它估计器一致：重置后不残留上一轮读数
   }
+  copyRuntimeFrom(other: Estimator): void {
+    const s = other as MadgwickEstimator;
+    this.q = { ...s.q };
+    this.age = s.age;
+    this.gate.restore(s.gate.snapshot());
+  }
   getParams(): Record<string, number> {
     return { beta: this.beta };
   }
@@ -750,12 +804,16 @@ function matTranspose(a: ArrayLike<number>, n: number, m: number): number[] {
   return out;
 }
 
-/** 3x3 求逆（伴随法），退化时返回单位阵保护 */
-function mat3Inverse(m: number[]): number[] {
+/** 3x3 求逆（伴随法）。奇异/病态返回 null——调用方必须显式处理，
+ *  不能用一个“看起来正常”的单位阵把求解失败伪装成一次有效更新。 */
+function mat3Inverse(m: number[]): number[] | null {
   const [a, b, c, d, e, f, g, h, i] = m;
   const A = e * i - f * h, B = c * h - b * i, C = b * f - c * e;
   const det = a * A + b * B + c * C;
-  if (!Number.isFinite(det) || Math.abs(det) < 1e-12) return [1, 0, 0, 0, 1, 0, 0, 0, 1];
+  // 相对阈值：P 的姿态块 ~1e-3、零偏块 ~1e-8，绝对阈值会把后者误判为奇异。
+  const scale = Math.max(Math.abs(a), Math.abs(b), Math.abs(c), Math.abs(d), Math.abs(e), Math.abs(f), Math.abs(g), Math.abs(h), Math.abs(i));
+  const eps = 1e-18 * Math.max(1e-30, scale * scale * scale);
+  if (!Number.isFinite(det) || Math.abs(det) < eps) return null;
   const s = 1 / det;
   return [
     A * s, B * s, C * s,
@@ -777,7 +835,8 @@ function obsMatrix(v: V3): number[] {
 /** 零偏物理限幅（rad/s）：真实 MEMS 零偏远小于 1 rad/s（≈57°/s），
  *  限幅只在异常数据/数值发散时兜底，正常教学范围内绝不触发。 */
 const BIAS_LIMIT = 1.0;
-/** 协方差对角线下限：保证 P 永远正定，防止长时间运行后矩阵病态 */
+/** 协方差对角线下限：限制长时间运行后的对角数值下溢；
+ *  它**不保证** P 永远正定——对称性与半正定性另行检查（Joseph 更新负责数值上更稳）。 */
 const P_FLOOR = 1e-12;
 
 export class KalmanEstimator implements Estimator {
@@ -789,6 +848,15 @@ export class KalmanEstimator implements Estimator {
   gyroNoiseDps = 0.2;
   /** 观测噪声：加速度计方向噪声 σ（单位 g）——观测有多不可信 */
   obsNoise = 0.05;
+  /** 野值门控形态：`angle` = 固定 40° 新息夹角（原基线）；`mahalanobis` = χ² 马氏距离门控 */
+  gateMode: "angle" | "mahalanobis" = "angle";
+  /** χ² 门控阈值：3 自由度 99% 分位 ≈ 11.345（观测维数为 3） */
+  gateChi2 = 11.345;
+  /**
+   * 误差注入后的协方差重置（P ← G·P·Gᵀ，G = I + ½[δθ̂]×）。
+   * 默认关：教学尺度的小角注入下 G≈I，开启是为了给「完整 ESKF」提供一个可对照的现场。
+   */
+  resetCovOnInject = false;
   /** 零偏随机游走强度 σ_b（rad/s/√s）：固定小值，让积分通道慢慢「学会」零偏 */
   private readonly biasWalk = 0.004;
   private bias: V3 = [0, 0, 0];
@@ -838,18 +906,32 @@ export class KalmanEstimator implements Estimator {
     const norm = Math.hypot(accel[0], accel[1], accel[2]);
     const accelValid = norm > 1e-6 && Math.abs(norm - G) < 0.35 * G;
     let innoAccelDeg = NaN;
+    let nisAccel = NaN;
+    let accelAccepted = false;
+    let accelReject: "none" | "norm" | "angle" | "mahalanobis" | "degenerate" = "norm";
     if (accelValid) {
       const aHat: V3 = [accel[0] / norm, accel[1] / norm, accel[2] / norm];
       const gPred = qRotInv(this.q, [0, 0, 1]);
       innoAccelDeg = angleBetweenDeg(aHat, gPred);
-      if (innoAccelDeg < 40) {
-        // 线性化：z = â − ĝ ≈ [ĝ]×·δθ + v ⇒ H = [skew(ĝ), 0]
-        const H = obsMatrix(gPred);
-        this.applyUpdate(H, [aHat[0] - gPred[0], aHat[1] - gPred[1], aHat[2] - gPred[2]], this.obsNoise * this.obsNoise);
+      const H = obsMatrix(gPred);
+      const zAccel: V3 = [aHat[0] - gPred[0], aHat[1] - gPred[1], aHat[2] - gPred[2]];
+      const rVar = this.obsNoise * this.obsNoise;
+      const nis = this.innovationNis(H, zAccel, rVar);
+      nisAccel = Number.isFinite(nis) ? nis : NaN;
+      const pass = this.gateMode === "mahalanobis" ? Number.isFinite(nis) && nis < this.gateChi2 : innoAccelDeg < 40;
+      if (pass) {
+        accelReject = "none";
+        accelAccepted = this.applyUpdate(H, zAccel, rVar);
+        if (!accelAccepted) accelReject = "degenerate";
+      } else {
+        accelReject = this.gateMode === "mahalanobis" ? "mahalanobis" : "angle";
       }
     }
     const magOk = this.magEnabled && magIsPlausible(mag);
     let innoMagDeg = NaN;
+    let nisMag = NaN;
+    let magAccepted = false;
+    let magReject: "none" | "disabled" | "norm" | "angle" | "mahalanobis" | "degenerate" = "disabled";
     if (magOk) {
       const mHat = qRotInv(this.q, MAG_WORLD_NED);
       const mh = Math.hypot(mHat[0], mHat[1], mHat[2]);
@@ -857,14 +939,19 @@ export class KalmanEstimator implements Estimator {
       const mHatN: V3 = [mHat[0] / mh, mHat[1] / mh, mHat[2] / mh];
       const mMeasN: V3 = [mag[0] / mm, mag[1] / mm, mag[2] / mm];
       innoMagDeg = angleBetweenDeg(mMeasN, mHatN);
-      if (innoMagDeg < 40) {
-        const H = obsMatrix(mHatN);
-        const sigmaM = Math.max(2 * this.obsNoise, 0.04); // 磁方向噪声（归一化）
-        this.applyUpdate(
-          H,
-          [mMeasN[0] - mHatN[0], mMeasN[1] - mHatN[1], mMeasN[2] - mHatN[2]],
-          sigmaM * sigmaM,
-        );
+      const H = obsMatrix(mHatN);
+      const zMag: V3 = [mMeasN[0] - mHatN[0], mMeasN[1] - mHatN[1], mMeasN[2] - mHatN[2]];
+      const sigmaM = Math.max(2 * this.obsNoise, 0.04); // 磁方向噪声（归一化）
+      const rVar = sigmaM * sigmaM;
+      const nis = this.innovationNis(H, zMag, rVar);
+      nisMag = Number.isFinite(nis) ? nis : NaN;
+      const pass = this.gateMode === "mahalanobis" ? Number.isFinite(nis) && nis < this.gateChi2 : innoMagDeg < 40;
+      if (pass) {
+        magReject = "none";
+        magAccepted = this.applyUpdate(H, zMag, rVar);
+        if (!magAccepted) magReject = "degenerate";
+      } else {
+        magReject = this.gateMode === "mahalanobis" ? "mahalanobis" : "angle";
       }
     }
 
@@ -880,6 +967,8 @@ export class KalmanEstimator implements Estimator {
       accelNorm: norm,
       accelValid,
       magValid: magOk,
+      accelAccepted,
+      magAccepted,
       detail: {
         biasXDps: this.bias[0] * (180 / Math.PI),
         biasYDps: this.bias[1] * (180 / Math.PI),
@@ -887,6 +976,13 @@ export class KalmanEstimator implements Estimator {
         biasNormDps: Math.hypot(this.bias[0], this.bias[1], this.bias[2]) * (180 / Math.PI),
         innoAccelDeg,
         innoMagDeg,
+        nisAccel,
+        nisMag,
+        kalmanGateMode: this.gateMode === "mahalanobis" ? 1 : 0,
+        accelAccepted: accelAccepted ? 1 : 0,
+        magAccepted: magAccepted ? 1 : 0,
+        accelRejectCode: { none: 0, norm: 1, angle: 2, mahalanobis: 3, degenerate: 4 }[accelReject],
+        magRejectCode: { none: 0, disabled: 1, norm: 2, angle: 3, mahalanobis: 4, degenerate: 5 }[magReject],
         covTrace: this.P[0] + this.P[7] + this.P[14],
         alignErrorDeg: angleBetweenDeg(predicted, measured),
         ...(magOk ? { magEnabled: 1 } : { magEnabled: 0 }),
@@ -894,11 +990,29 @@ export class KalmanEstimator implements Estimator {
     };
   }
 
-  /** 单次观测更新：K = P·Hᵀ·(H·P·Hᵀ+R)⁻¹，δx = K·z，回填姿态/零偏并收缩 P */
-  private applyUpdate(H: number[], z: V3, rVar: number): void {
+  /** 新息协方差 S = H·P·Hᵀ + R 的逆与新息马氏距离 NIS = zᵀ·S⁻¹·z（奇异返回 NaN） */
+  private innovationNis(H: number[], z: V3, rVar: number): number {
+    const PHt = matMul(this.P, matTranspose(H, 3, 6), 6, 6, 3);
+    const HPHt = matMul(H, PHt, 3, 6, 3);
+    const S = mat3Inverse(HPHt.map((v, i) => (i % 4 === 0 ? v + rVar : v)));
+    if (!S) return NaN;
+    const Sz: V3 = [
+      S[0] * z[0] + S[1] * z[1] + S[2] * z[2],
+      S[3] * z[0] + S[4] * z[1] + S[5] * z[2],
+      S[6] * z[0] + S[7] * z[1] + S[8] * z[2],
+    ];
+    return z[0] * Sz[0] + z[1] * Sz[1] + z[2] * Sz[2];
+  }
+
+  /**
+   * 单次观测更新：K = P·Hᵀ·(H·P·Hᵀ+R)⁻¹，δx = K·z，回填姿态/零偏并收缩 P。
+   * 返回 false 表示 S 奇异、本次更新被安全跳过（计入遥测，不伪装成成功）。
+   */
+  private applyUpdate(H: number[], z: V3, rVar: number): boolean {
     const PHt = matMul(this.P, matTranspose(H, 3, 6), 6, 6, 3); // (6x3)
     const HPHt = matMul(H, PHt, 3, 6, 3); // (3x3)
     const S = mat3Inverse(HPHt.map((v, i) => (i % 4 === 0 ? v + rVar : v)));
+    if (!S) return false;
     const K = matMul(PHt, S, 6, 3, 3); // (6x3)
     const dx = [
       K[0] * z[0] + K[1] * z[1] + K[2] * z[2],
@@ -952,12 +1066,72 @@ export class KalmanEstimator implements Estimator {
       }
     for (let i = 0; i < 6; i++) Pn[i * 6 + i] = Math.max(P_FLOOR, Pn[i * 6 + i]);
     this.P = Pn;
+    if (this.resetCovOnInject) this.applyResetJacobian([dx[0], dx[1], dx[2]]);
+    return true;
+  }
+
+  /**
+   * 误差注入后的协方差重置（可选）：δθ' ≈ G·δθ，G = I + ½[δθ̂]×（一阶）。
+   * 零偏块不变。只做一次 6×6 相似变换并沿用对称化与对角下限。
+   */
+  private applyResetJacobian(dTheta: V3): void {
+    const sk = skew(dTheta);
+    const G = new Array<number>(36).fill(0);
+    for (let i = 0; i < 6; i++) G[i * 6 + i] = 1;
+    for (let i = 0; i < 3; i++) {
+      for (let j = 0; j < 3; j++) G[i * 6 + j] += 0.5 * sk[i * 3 + j];
+    }
+    const Gt = matTranspose(G, 6, 6);
+    let Pn = matMul(matMul(G, this.P, 6, 6, 6), Gt, 6, 6, 6);
+    for (let i = 0; i < 6; i++)
+      for (let j = 0; j < i; j++) {
+        const avg = (Pn[i * 6 + j] + Pn[j * 6 + i]) / 2;
+        Pn[i * 6 + j] = avg;
+        Pn[j * 6 + i] = avg;
+      }
+    for (let i = 0; i < 6; i++) Pn[i * 6 + i] = Math.max(P_FLOOR, Pn[i * 6 + i]);
+    this.P = Pn;
+  }
+
+  /**
+   * NEES（归一化估计误差平方）：需要仿真真值。
+   *  - δθ = 2·vec(q ⊗ q_true⁻¹) 的机体系小角误差（与滤波器误差定义一致）
+   *  - 姿态 NEES = δθᵀ·Pθθ⁻¹·δθ（3 维，卡方自由度为 3）
+   *  - 零偏 NEES = δbᵀ·Pbb⁻¹·δb，δb = trueBias − bias
+   * 返回 NaN 表示协方差块奇异或输入非法。
+   */
+  neesAgainst(qTrue: Quat, trueBiasRad: V3): { theta: number; bias: number } {
+    const rel = qMul(qConj(this.q), qTrue);
+    const s = rel.w < 0 ? -1 : 1;
+    const dTheta: V3 = [2 * s * rel.x, 2 * s * rel.y, 2 * s * rel.z];
+    const Pth = [this.P[0], this.P[1], this.P[2], this.P[6], this.P[7], this.P[8], this.P[12], this.P[13], this.P[14]];
+    const Pb = [this.P[21], this.P[22], this.P[23], this.P[27], this.P[28], this.P[29], this.P[33], this.P[34], this.P[35]];
+    const invTh = mat3Inverse(Pth);
+    const invB = mat3Inverse(Pb);
+    const quad = (inv: number[] | null, v: V3): number => {
+      if (!inv) return NaN;
+      const iv: V3 = [
+        inv[0] * v[0] + inv[1] * v[1] + inv[2] * v[2],
+        inv[3] * v[0] + inv[4] * v[1] + inv[5] * v[2],
+        inv[6] * v[0] + inv[7] * v[1] + inv[8] * v[2],
+      ];
+      return v[0] * iv[0] + v[1] * iv[1] + v[2] * iv[2];
+    };
+    const dBias: V3 = [trueBiasRad[0] - this.bias[0], trueBiasRad[1] - this.bias[1], trueBiasRad[2] - this.bias[2]];
+    return { theta: quad(invTh, dTheta), bias: quad(invB, dBias) };
   }
 
   reset(initial?: Quat): void {
     this.q = initial ? { ...initial } : qId();
     this.bias = [0, 0, 0];
     this.initCovariance();
+    this.telemetry = emptyTelemetry();
+  }
+  copyRuntimeFrom(other: Estimator): void {
+    const s = other as KalmanEstimator;
+    this.q = { ...s.q };
+    this.bias = [...s.bias];
+    this.P = [...s.P];
     this.telemetry = emptyTelemetry();
   }
   getParams(): Record<string, number> {

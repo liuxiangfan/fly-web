@@ -69,6 +69,38 @@ export function frameDtSec(prevTickMs: number, tickMs: number, nominalMs = NOMIN
   return Math.min(0.05, Math.max(0.001, ms / 1000));
 }
 
+/**
+ * 相邻帧的**真实时间间隔**（秒），与「单次安全积分步长」分离：
+ *  - 合理区间（1 ms – 10 s）按真实 tick 差返回；
+ *  - 同 tick/回绕/巨跳（>10 s，明显是坏时间戳）退回名义帧间隔。
+ * 调用方必须用该间隔推进 `simTime`，再把间隔拆成 ≤50 ms 的子步做数值积分。
+ * 这样长时间空洞不会被静默压缩成 50 ms，也不会把滤波器一步推飞。
+ */
+export function frameIntervalSec(prevTickMs: number, tickMs: number, nominalMs = NOMINAL_FRAME_MS): number {
+  const deltaMs = (tickMs - prevTickMs) >>> 0;
+  if (!(deltaMs > 0) || deltaMs > 10000) return nominalMs / 1000;
+  return Math.max(0.001, deltaMs / 1000);
+}
+
+/**
+ * **离线回放 / 日志**用的相邻帧时间差（秒）。与 `frameIntervalSec` 的区别是实质性的：
+ *
+ *  - 日志时间戳是**浮点毫秒**（400 Hz 日志 = 2.5 ms/帧），所以这里**不能**用 `>>> 0`：
+ *    位运算会把 2.5 截断成 2，401 帧 / 1 s 的日志只积出 0.805 s（复核反例）。
+ *  - 首帧没有前驱 → 返回 0（调用方据此跳过首帧积分），于是 Σdt 恰好等于日志跨度。
+ *  - 重复/倒退时间戳 → 0，不产生负时间。
+ *  - **不夹紧上限**：早期版本把 >10 s 的空洞截成 10 s，于是一段 0/30000 ms 的日志
+ *    只播 10 秒就播完（复核 P1-G），界面显示的却是 30 秒。时间完整性优先：
+ *    真实空洞原样返回，CPU 安全改由调用方**拆子步**（子步数有上限）保证。
+ * 固件 tick 仍走 `frameIntervalSec`（u32 回绕是它的语义），两条时间轴不再混用一个函数。
+ */
+export function logIntervalSec(prevMs: number, ms: number): number {
+  if (!Number.isFinite(prevMs) || !Number.isFinite(ms)) return 0;
+  const deltaSec = (ms - prevMs) / 1000;
+  if (!(deltaSec > 0)) return 0;
+  return deltaSec;
+}
+
 const le16 = (d: Uint8Array, i: number): number => d[i] | (d[i + 1] << 8);
 const lei16 = (d: Uint8Array, i: number): number => {
   const v = le16(d, i);
