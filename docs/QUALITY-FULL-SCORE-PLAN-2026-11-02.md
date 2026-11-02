@@ -572,13 +572,54 @@ node scripts/soak.mjs --batch --seconds=120
                                       线性趋势 +5.3 MB（上限 24）；报告已带 commit/dist/浏览器/时间窗溯源
 ```
 
-### 9.13 仍未达标（不得写成「各维度满分」）
+### 9.13 视觉验收（绑定提交 `e67f551`）
+
+六张可判读截图，全部在**提交 `e67f551` 的构建产物**上拍摄（该次 `dist` 的 sha256 前 16 位 =
+`d7356bc1443a10c4`，构建可复现：同一源码连续两次 build 的 distHash 相同）。
+文件按 `.gitignore` 的既有约定留在本地 `screenshots/`（不进仓库），本节记录**路径 + 尺寸 + sha256**，
+任何人可以用同一份源码重建并逐张核对：
+
+| 组 | 文件 | 尺寸 | sha256（前 16） | 判读要点 |
+|---|---|---|---|---|
+| 桌面 | `screenshots/visual-e67f551/desktop-1440x900.png` | 1440×900 | `8f64b785d4f20421` | 左栏四元数/欧拉读数、真值对照、三块曲线与图例读数、右栏控制台；无重叠、无横向溢出 |
+| 窄屏 | `screenshots/visual-e67f551/narrow-390x844.png` | 390×844 | `461fc5ff85cee6e6` | 390 px 下正确堆叠（顶栏按钮换行、3D 场景在下、面板单列），无横向滚动 |
+| 文档 | `screenshots/visual-e67f551/docs-math-1440x900.png` | 1440×900 | `fb4de0b61e1df463` | 左模块栏 + 中栏正文（公式 `q̇ = ½ q ⊗ ω`）+ 右「本页目录」跟随高亮，浅色主题排版正常 |
+| 打印 | `screenshots/visual-e67f551/print-docs-794x1123.png` | 794×1123（A4 比例） | `17a7af4c18eb7ed7` | 打印媒体下应用外壳隐藏、只剩当前文档页；公式与示意图完整 |
+| 打印 | `screenshots/visual-e67f551/print-table-794x1123.png` | 794×1123 | `ecac27a97abee3e5` | 打印媒体下的两张表格（「症状→病因→实验」与「对比与选型」）列宽与文字完整，无截断 |
+| 打印机（宽） | `screenshots/visual-e67f551/print-docs-1440x900.png` | 1440×900 | `29451e27995c1d20` | 宽视口下的打印媒体（对照：内容随视口重排，外壳仍隐藏） |
+
+> 拍摄方式：`node scripts/shot.mjs`（桌面/窄屏/文档）；打印组用一次性脚本「先在屏幕媒体下打开文档、
+> 再 `emulateMediaType("print")`」——顺序反过来会被「打印时隐藏外壳」的规则把文档层一起挡掉
+> （`--print` 直接配合 `--do` 时踩到过）。两个一次性脚本用完即删，未进仓库。
+
+### 9.14 冒烟分片与 CI（复核 P2-5 的另一半）
+
+- **分片**：`scripts/browser-smoke.mjs` 支持 `SMOKE_SHARD=all|app|devices`。
+  · `app`（72 项）：主页面用例（读数/曲线/文档/档案/导出/批量/trace/可访问性/长跑）；
+  · `devices`（19 项）：独立页面用例（假串口 / 假 BLE / 协议端到端 / 加计采面 / 真实串口模式）；
+  · 两片**恰好覆盖全部 91 项**（72 + 19 = 91，且两片各自 0 FAIL）。
+  分片的动机是复核指出的「一个浏览器连续创建大量 WebGL 页面会被回收」：分片后单进程的页面数与运行时间都降下来，
+  CI 上两片并行跑。
+- **驱动器**：新增 `scripts/ci-run-smoke.mjs`——自己起 `vite preview`（`--host 127.0.0.1`）、
+  探活到 200 才开跑、连跑 N 次、逐次输出落盘、任何一次有 FAIL 或 warning 都判失败。
+  这样 Windows / Ubuntu 用的是同一段逻辑（不用在 workflow 里写两套 shell）。
+- **workflow**：新增 `.github/workflows/ci.yml`
+  · `gate`（Ubuntu）：`tsc --noEmit` → `npm run check` → `build` → `budget` → `doccheck --recompute`；
+  · `smoke-shards`（Ubuntu，矩阵 app/devices）：分片并行跑一次冒烟；
+  · `smoke-stability`（`workflow_dispatch`）：在 Ubuntu 与 Windows 上各连跑 5 次 `SMOKE_SHARD=all`，
+    零 warning、零重启才算过。**为什么只手动触发**：仓库是私有的，稳定性验收一次要吃 ~100 分钟 Actions 配额，
+    不该挂在每次 push 上。
+- 浏览器候选路径补齐 Linux（`/usr/bin/google-chrome` 等）——旧列表只有 Windows 路径，
+  Ubuntu runner 上会直接「找不到 Edge/Chrome」退出码 2。
+- **本地实测**：`SMOKE_SHARD=app` 72 PASS / `SMOKE_SHARD=devices` 19 PASS，`SMOKE_SHARD=all` 仍为 91 项。
+
+### 9.15 仍未达标（不得写成「各维度满分」）
 
 | 未达成项 | 现状 | 为什么不能算满分 |
 |---|---|---|
 | 真机 30 min（串口/BLE，拔插/离开范围/休眠/复位） | **未做**（无可控硬件窗口） | 第 6.3 节明确要求真机证据；mock 不能顶替 |
-| 门禁拆 shard + Ubuntu CI 连续 5 次 | **未做** | 第 6.4 节要求；本轮只做到「不再假绿 + 状态等待」 |
-| 视觉证据绑定当前 commit | **未做**（本轮无 UI 布局改动，只新增调试出口与一句导入提示） | 第 6.6 节要求当前 commit 的桌面/窄屏/文档/打印截图 |
+| Ubuntu / Windows CI 连续 5 次 | **已实现但需远端执行**：workflow 与分片都在仓库里，需手动触发一次 `smoke-stability` 才有远端证据 | 第 6.4 节要求的是**跑出来**的结果，不是脚本存在 |
+| 视觉证据绑定当前 commit | **已做**：见 9.13（六张截图绑定 `e67f551` 的 dist `d7356bc1443a10c4`，附 sha256） | — |
 | 全部 JS 的 10% 体积余量 | **未达标**：全部 JS 合计 gzip 262/272 KB（余量 3.7%；three.js 一家 132 KB） | 第 6.5 节要求 ≥10%；要达标必须砍功能或改预算口径，两者都不该做 |
 | PR 审查 / 合并 master / 部署后 smoke / 回滚演练 | **未做** | 第 6.7 节要求，且需远端环境 |
 

@@ -20,7 +20,14 @@
 > 本轮实测：`check` 154 项 0 FAIL、`budget` 14/14、`doccheck --recompute` 4/4、
 > `smoke` **91 PASS / 0 FAIL（零 warning、零重启）**、同 commit 同 dist **连续 5 次**全绿；
 > `soak --batch --seconds=120` 通过（堆增长 +10.5 MB / 峰值增量 10.5 MB / 线性趋势 +5.3 MB），报告带 commit·dist·浏览器·时间窗溯源。
-> **仍未做**：真机串口/BLE 各 30 min、门禁拆 shard + Ubuntu CI 多轮、当前 commit 的视觉证据、堆判定「线性趋势」、PR/部署后 smoke。
+> **冒烟分片与 CI**：`SMOKE_SHARD=app|devices`（72 + 19 = 91，两片各自 0 FAIL）；
+> `scripts/ci-run-smoke.mjs` 自起 preview → 探活 200 → 连跑 N 次（任何 FAIL/warning 判失败）；
+> `.github/workflows/ci.yml`：gate 与两片冒烟自动跑，**Ubuntu + Windows 各连续 5 次**用手动 `workflow_dispatch`
+> （私有仓库配额不挂在每次 push 上）；浏览器候选路径补齐 Linux。
+> **视觉验收**绑定提交 `e67f551`（dist `d7356bc1443a10c4`）：桌面 1440×900 / 窄屏 390×844 / 文档 1440×900 /
+> 打印 794×1123 两组共六张，路径·尺寸·sha256 见任务书 9.13。
+> **仍未做**：真机串口/BLE 各 30 min、CI 的远端执行结果（workflow 已就绪，需手动触发一次）、
+> 全部 JS 的 10% 体积余量（262/272 KB）、PR/部署后 smoke。
 > 因此本轮结论是「按现有证据达到可复核的高质量水准」，**不是**「各维度满分」。
 
 > **最新一轮：2026-11-01「按两轮独立复核的阻断项修复」**（详见 [`CHANGELOG.md`](CHANGELOG.md) 顶部）。

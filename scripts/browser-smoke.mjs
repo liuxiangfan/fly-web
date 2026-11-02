@@ -15,16 +15,47 @@ import { tmpdir } from "node:os";
 // 注意：应用地址常量不要命名为 `URL`——模块顶层的 `const URL` 会遮蔽全局 URL 构造函数，
 // 在其声明之前调用 `new URL()` 会抛 "Cannot access 'URL' before initialization"。
 const APP_URL = process.env.SMOKE_URL ?? "http://127.0.0.1:4173/";
+
+/**
+ * 冒烟分片（复核 P2-5「拆分冒烟 shard」）。
+ *
+ * 为什么分片：整条冒烟会开十几张 WebGL 页面（假串口 / 假 BLE / 协议端到端各一张）。
+ * 一个浏览器连续创建这么多渲染上下文，在 CI 上偶发被回收（实测 `Navigating frame was detached`）。
+ * 分片后每个进程只做自己那半：CI 上用矩阵并行，单进程的页面数与运行时间都降下来。
+ *
+ *   SMOKE_SHARD=all（默认，行为与历史完全一致）
+ *   SMOKE_SHARD=app     只跑主页面用例（读数/曲线/文档/档案/导出/批量/trace/可访问性/长跑）
+ *   SMOKE_SHARD=devices 只跑独立页面用例（假串口 / 假 BLE / 协议端到端 / 加计采面）
+ *
+ * 两片合起来恰好覆盖全部用例（CI 矩阵里两个 job 的 PASS 数之和必须等于 all 的 PASS 数）。
+ */
+const SHARD = (process.env.SMOKE_SHARD ?? "all").toLowerCase();
+if (!["all", "app", "devices"].includes(SHARD)) {
+  console.error(`[FAIL] SMOKE_SHARD 只支持 all / app / devices（收到 ${JSON.stringify(SHARD)}）`);
+  process.exit(2);
+}
+const runApp = SHARD !== "devices";
+const runDevices = SHARD !== "app";
+
+/** 换行符：app 段与 devices 段都要用（原来只在 app 段里声明，分片后必须提到顶层）。 */
+const NL = String.fromCharCode(10);
 // trace 比较器必须与 Node 契约测试共用同一份源码：注入页面后由浏览器侧再次执行。
 const traceContractSource = readFileSync(new URL("./trace-contract.mjs", import.meta.url), "utf8").replace(/^export /gm, "");
 const CANDIDATES = [
   process.env.CHROME_PATH,
   process.env.EDGE_PATH,
+  // Windows
   "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
   "C:/Program Files/Microsoft/Edge/Application/msedge.exe",
   "C:/Program Files/Google/Chrome/Application/chrome.exe",
   "C:/Program Files (x86)/Google/Chrome/Application/chrome.exe",
   join(process.env.LOCALAPPDATA ?? "", "Google/Chrome/Application/chrome.exe"),
+  // Linux（Ubuntu CI：GitHub 的 runner 预装 google-chrome）
+  "/usr/bin/google-chrome",
+  "/usr/bin/google-chrome-stable",
+  "/usr/bin/chromium",
+  "/usr/bin/chromium-browser",
+  "/snap/bin/chromium",
 ].filter(Boolean);
 const candidates = CANDIDATES.filter((p) => existsSync(p));
 if (candidates.length === 0) {
@@ -178,12 +209,15 @@ await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1 });
 attachSharedListeners(page);
 
 try {
+  // 共享页面的导航与「仿真真的在跑」的等待两片都要做：devices 片里有一组用例
+  // （加计采面 beginAccelCalFace/tickAccelCalibration）驱动的正是这个页面。
   await gotoSafe(page);
   // 等待真实仿真推进（rAF）——隐藏标签页会冻结，headless 新模式下正常运行
   await page.waitForFunction(
     () => parseFloat((document.getElementById("clock")?.textContent ?? "").replace("t = ", "")) > 2,
     { timeout: 30000 }, // 软件渲染（swiftshader）下 CI 的首帧可能很慢，给足余量
   );
+  if (runApp) {
   const boot = await page.evaluate(() => {
     const canvas = document.querySelector("#viewport canvas");
     const gl = canvas?.getContext("webgl2") || canvas?.getContext("webgl");
@@ -1171,12 +1205,23 @@ try {
       HTMLAnchorElement.prototype.click = origClick;
       return text;
     };
+    // 状态等待：等「本段记录的语义」真的切到目标值，而不是赌 600 ms 墙钟
+    // （慢机器上 600 ms 可能一帧都没进来，于是读到的是上一段的语义 → 偶发误判）
+    const waitSemantic = async (want) => {
+      const deadline = performance.now() + 15000;
+      for (;;) {
+        const r = window.attitudeDemo.raw();
+        if (r.rows > 0 && r.calibrated === want) return true;
+        if (performance.now() > deadline) return false;
+        await sleep(100);
+      }
+    };
     // ① 原始日志回放：读数是原始的 → 标 raw
     const box = document.getElementById("raw-record-toggle");
     box.checked = true;
     box.dispatchEvent(new Event("change", { bubbles: true }));
     window.attitudeDemo.replay.import([head, ...rows].join(NL), "rawsrc.csv");
-    await sleep(600);
+    const rawReady = await waitSemantic(false);
     const rawCase = await grabRaw();
     window.attitudeDemo.replay.stop();
     await sleep(400);
@@ -1184,13 +1229,14 @@ try {
     box.checked = true;
     box.dispatchEvent(new Event("change", { bubbles: true }));
     window.attitudeDemo.replay.import(["# imu=calibrated", head, ...rows].join(NL), "calsrc.csv");
-    await sleep(600);
+    const calReady = await waitSemantic(true);
     const calCase = await grabRaw();
     window.attitudeDemo.replay.stop();
     await sleep(200);
     box.checked = false;
     box.dispatchEvent(new Event("change", { bubbles: true }));
     return {
+      rawReady, calReady,
       rawMarker: rawCase.includes("# imu=raw"),
       calMarker: calCase.includes("# imu=calibrated"),
       rawNotCal: !rawCase.includes("# imu=calibrated"),
@@ -1199,8 +1245,10 @@ try {
   });
   check(
     "全帧源导出语义：原始来源标 raw、校准来源标 calibrated（不再无条件写 raw）",
-    rawMarker.rawMarker && rawMarker.calMarker && rawMarker.rawNotCal && rawMarker.calNotRaw,
-    `原始日志回放 → # imu=raw=${rawMarker.rawMarker}；校准日志回放 → # imu=calibrated=${rawMarker.calMarker}`,
+    rawMarker.rawMarker && rawMarker.calMarker && rawMarker.rawNotCal && rawMarker.calNotRaw &&
+      rawMarker.rawReady && rawMarker.calReady,
+    `原始日志回放 → # imu=raw=${rawMarker.rawMarker}（语义就绪=${rawMarker.rawReady}）；` +
+      `校准日志回放 → # imu=calibrated=${rawMarker.calMarker}（语义就绪=${rawMarker.calReady}）`,
   );
 
   // 回放语义：带 # imu=calibrated 的日志自动关闭校准输入；未声明则默认补校准
@@ -1857,7 +1905,6 @@ try {
   // CSV 导出：拦截 Blob，检查参数头与数据行
   // 拦截 blob 下载跑两遍：默认档（姿态角与误差）与「带四元数」档。
   // 导出前会弹选项对话框（这是用户要求的行为），所以要先点确认按钮。
-  const NL = String.fromCharCode(10);
   const runExport = async (scope) =>
     page.evaluate(async (scopeValue) => {
       let text = null;
@@ -1991,6 +2038,8 @@ try {
       `退出后 active=${roundTrip.afterStop?.active}`,
   );
 
+  } // app 段结束
+  if (runDevices) {
   // ---------- BLE IMU：假 Web Bluetooth（含 20 字节分片的 28 字节帧） ----------
   // 真机无法在 CI 配对，但「应用侧」整条链路可以像假串口那样完整验证：
   // 假设备暴露一个 GATT 服务 + 一个 notify 特征，用 20 字节分片发 28 字节二进制帧，
@@ -2984,6 +3033,8 @@ try {
       `错误=${subscribeSwitch.errs.slice(0, 2).join(" / ") || "无"}`,
   );
 
+  } // devices 段结束
+  if (runApp) {
   // ---------- 本轮新增：惯性导航 / 整定挑战 / 公式复制 / 打印样式 ----------
   // 这几个都是「画出来的东西」或「结构性行为」，光靠 tsc/自检覆盖不到，所以在真浏览器里点名验收。
   const extras = await page.evaluate(async () => {
@@ -3785,6 +3836,8 @@ try {
       "（hash " + deepRoundTrip.hash + "）",
   );
 
+  } // app 段结束
+  if (runDevices) {
   // ---------- 文本行协议 / MAVLink 协议：各自的假串口端到端 ----------
   // 这两种协议是本轮新增的「硬件接入入口」，必须在真浏览器里跑一遍：
   // 假端口按各自格式发流，断言解析后的读数与值班（unit/mounting）都正确。
@@ -4089,6 +4142,8 @@ try {
     `accel=${JSON.stringify(mavCase.info.accel)} gyro=${JSON.stringify(mavCase.info.gyro)} 取反开关可见=${mavCase.info.invertVisible}｜${mavCase.info.status}`,
   );
 
+  } // devices 段结束
+  if (runApp) {
   // 深链：当前 hash 重载后参数应保持
   const deep = await page.evaluate(() => ({
     hash: location.hash,
@@ -4423,8 +4478,15 @@ try {
   });
   await new Promise((r) => setTimeout(r, 3000)); // 先跑热（JIT / 首个记录窗口填满）
   const soak0 = await soakRead();
-  await new Promise((r) => setTimeout(r, 12000));
-  const soak1 = await soakRead();
+  // 状态等待而不是赌 12 s 墙钟：CI 的软件渲染只有 2–4 fps，仿真步长封顶 50 ms，
+  // 固定 12 s 只能推进约 1.5 s 仿真时间（实测偶发 1.3 s 而把「时钟在走」判失败）。
+  // 这里改成「等时钟真的推进 2 s」，上限 45 s 墙钟；慢机器只会让这条变慢，不会变红。
+  const advanceDeadline = Date.now() + 45000;
+  let soak1 = await soakRead();
+  while (Date.now() < advanceDeadline && soak1.clock <= soak0.clock + 2) {
+    await new Promise((r) => setTimeout(r, 500));
+    soak1 = await soakRead();
+  }
   const realFps = await measureRaf(2000);
   const heapMb = (soak1.heap - soak0.heap) / 1048576;
   const sz = soak1.sizes;
@@ -4470,6 +4532,8 @@ try {
   );
   await page.evaluate(() => document.getElementById("panel-collapse-all").click());
 
+  } // app 段结束
+  if (runDevices) {
   // ---------- 真实串口模式：用假 Web Serial 端口端到端验证 ----------
   const serialPage = await newPage();
   await serialPage.setViewport({ width: 1280, height: 800, deviceScaleFactor: 1 });
@@ -4578,6 +4642,7 @@ try {
   check("断开后恢复模拟模式与控件", restored.mode === "sim" && !restored.scenarioDisabled, restored.mode);
   check("真实模式控制台零错误", serialErrors.length === 0, serialErrors.slice(0, 3).join(" | ") || "无");
   await serialPage.close();
+  } // devices 段结束
 } catch (err) {
   failures++;
   if (isInfraError(err)) {
@@ -4611,4 +4676,5 @@ if (browserRestarts > 0) {
   console.error(`[FAIL] 浏览器进程被回收 ${browserRestarts} 次 — 基础设施失败，本轮不能判通过（请重跑）`);
 }
 console.log(failures === 0 ? `\n浏览器冒烟通过 ✅（${passes} 项）` : `\n${failures} 项失败 ❌`);
+if (SHARD !== "all") console.log(`（分片 SMOKE_SHARD=${SHARD}）`);
 process.exit(failures === 0 ? 0 : 1);

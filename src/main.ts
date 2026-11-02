@@ -7443,10 +7443,13 @@ resetSim(); // 统一时钟/统计/曲线起点（不改变已还原的深链参
     }),
   }),
   /** 全帧记录/轨迹长度（长跑与导出用例用） */
-  raw: (): { on: boolean; rows: number; cap: number } => ({
+  raw: (): { on: boolean; rows: number; cap: number; calibrated: boolean } => ({
     on: rawRecord.on,
     rows: rawRecord.rows.length,
     cap: RAW_ROW_CAP,
+    /** 本段全帧记录的**语义**：读数是否本来就是校准后的（回放校准日志时为真）。
+     *  自动化靠它做状态等待——换源后 600 ms 可能一帧都没进，固定 sleep 会读到上一段。 */
+    calibrated: rawRecord.sourceCalibrated,
   }),
   /** 加速度计六面校准调试入口：注入样本 → 走真实拟合/应用路径（自动化测试用） */
   accelcal: {

@@ -59,8 +59,14 @@
   新增 `gotoSafe()`：渲染进程被回收（`Navigating frame was detached`）时同页重试一次并记账，
   外层 catch 把这类错误显式标成「基础设施失败」——只为继续收集诊断，结论仍判失败；
   同 commit 同 dist 连续 5 次 `npm run smoke` 全绿（91/91、零 warning、零重启）。
-- **仍缺证据**：真机串口/BLE 各 30 min；门禁拆 shard + Ubuntu CI 多轮；当前 commit 的视觉证据；
-  全部 JS 的 10% 体积余量（现 262/272 KB）；PR/CI/部署后 smoke/回滚演练。这些在任务书 9.13 列为未达标，
+- **冒烟分片 + CI**：`SMOKE_SHARD=app|devices`（72 + 19 = 91，两片各自 0 FAIL）；新增
+  `scripts/ci-run-smoke.mjs`（自起 preview → 探活 200 → 连跑 N 次 → 逐次落盘，任何 FAIL/warning 判失败）
+  与 `.github/workflows/ci.yml`（gate / smoke-shards 自动；Ubuntu+Windows 连续 5 次为手动 `workflow_dispatch`——
+  私有仓库的 Actions 配额不该吃在每次 push 上）；浏览器候选路径补齐 Linux。
+- **视觉验收绑定提交 `e67f551`**：桌面 1440×900、窄屏 390×844、文档 1440×900、打印 794×1123（两组），
+  共六张可判读截图；路径 + 尺寸 + sha256 记在任务书 9.13（`screenshots/` 按既有约定不入仓库）。
+- **仍缺证据**：真机串口/BLE 各 30 min；CI 的远端执行结果（workflow 已就绪，需手动触发一次）；
+  全部 JS 的 10% 体积余量（现 262/272 KB）；PR/CI/部署后 smoke/回滚演练。这些在任务书 9.15 列为未达标，
   **不写「各维度满分」**。
 
 ## 2026-11-01 · 阻断项修复轮（第十二轮补遗：两轮独立复核的必须修项）

@@ -1,0 +1,103 @@
+name: CI
+
+# 门禁与冒烟。默认只跑「便宜且必须快」的部分；「连续 N 次冒烟」这种要跑几十分钟的
+# 稳定性验收放在 workflow_dispatch 里手动触发——它在私有仓库上是要吃 Actions 配额的。
+on:
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+    inputs:
+      stability_runs:
+        description: "稳定性验收：连续跑几次冒烟（0 = 跳过）"
+        default: "5"
+      stability_os:
+        description: "稳定性跑在哪个系统上（both = Ubuntu + Windows）"
+        default: "both"
+        type: choice
+        options: [both, ubuntu, windows]
+
+permissions:
+  contents: read
+
+jobs:
+  # 不依赖浏览器的门禁：tsc / check / build / budget / doccheck。
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install
+        run: npm ci
+      - name: Typecheck
+        run: npx tsc --noEmit
+      - name: Contracts + self checks
+        run: npm run check
+      - name: Build
+        run: npm run build
+      - name: Bundle budget
+        run: npm run budget
+      - name: Doc benchmark recompute
+        run: npx tsx scripts/doccheck.ts --recompute
+
+  # 冒烟分片：两个 shard 各自独立进程、独立浏览器（合起来覆盖全部用例）。
+  # 用矩阵并行跑，任何一片红都让 PR 红——不允许「只看一片」。
+  smoke-shards:
+    needs: gate
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [app, devices]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install
+        run: npm ci
+      - name: Build
+        run: npm run build
+      - name: Smoke shard ${{ matrix.shard }}
+        run: node scripts/ci-run-smoke.mjs --shard=${{ matrix.shard }} --runs=1 --out=.audit-smoke/ci
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-${{ matrix.shard }}-logs
+          path: .audit-smoke/ci
+          if-no-files-found: ignore
+
+  # 稳定性验收（手动触发）：同 commit 同产物连续 N 次冒烟，零 warning、零重启。
+  # 私有仓库的 Actions 配额有限，所以默认只在 workflow_dispatch 上跑。
+  smoke-stability:
+    if: github.event_name == 'workflow_dispatch'
+    needs: gate
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(inputs.stability_os == 'both' && '["ubuntu-latest","windows-latest"]' || (inputs.stability_os == 'windows' && '["windows-latest"]' || '["ubuntu-latest"]')) }}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install
+        run: npm ci
+      - name: Build
+        run: npm run build
+      - name: Smoke × ${{ inputs.stability_runs }} (${{ matrix.os }})
+        if: inputs.stability_runs != '0'
+        run: node scripts/ci-run-smoke.mjs --shard=all --runs=${{ inputs.stability_runs }} --out=.audit-smoke/stability
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-stability-${{ matrix.os }}
+          path: .audit-smoke/stability
+          if-no-files-found: ignore
