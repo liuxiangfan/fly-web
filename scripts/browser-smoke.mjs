@@ -102,6 +102,40 @@ const attachSharedListeners = (target) => {
 };
 let page = null;
 /**
+ * 浏览器进程被回收的次数。
+ *
+ * 复核 P2-5：旧实现「重启后从中段继续」，成功轮也带着 warning，结果被当成全绿——
+ * 而重启前后的用例其实跑在不同的浏览器进程/页面上。现在**只用于诊断续跑**，
+ * 最终结论必须把「发生过重启」判为基础设施失败（见文件末尾），不允许伪装成通过。
+ */
+let browserRestarts = 0;
+
+/**
+ * 基础设施类故障的特征：渲染进程被回收（`Navigating frame was detached` / `Target closed`）。
+ * 这类失败不是产品缺陷，但**必须显式记账**——重试只为让本轮继续收集诊断，最终结论仍判失败。
+ */
+const isInfraError = (err) =>
+  /detached|Target closed|Session closed|Navigating frame|Protocol error|Connection closed/i.test(String(err));
+
+/**
+ * 导航到应用；遇到基础设施故障时在**同一页面**重试一次并计入 `browserRestarts`。
+ * 为什么需要：WebGL 页面开得多时浏览器会回收渲染进程，`goto` 抛 `Navigating frame was detached`，
+ * 整条冒烟在最后几项里中断（实测第 5 轮）。重试后本轮继续，但结论不会被当成全绿。
+ */
+const gotoSafe = async (pg, url = APP_URL) => {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await pg.goto(url, { waitUntil: "domcontentloaded", timeout: 20000 });
+      return;
+    } catch (err) {
+      if (attempt >= 1 || !isInfraError(err)) throw err;
+      browserRestarts++;
+      console.warn("[warn] 导航时页面被回收（" + String(err).split(String.fromCharCode(10))[0] + "）——同一页面重试一次");
+      await new Promise((r) => setTimeout(r, 500));
+    }
+  }
+};
+/**
  * 开新页面；浏览器进程被回收时**重启一次再继续**。
  *
  * 为什么需要：整条冒烟会开十几次标签页（每页一个 WebGL 上下文，软件渲染下更吃内存），
@@ -117,6 +151,7 @@ const newPage = async () => {
     return await browser.newPage();
   } catch (err) {
     console.warn(`[warn] 新建标签页失败（${err instanceof Error ? err.message.split("\n")[0] : String(err)}）——重启浏览器后重试`);
+    browserRestarts++;
     try { await browser.close(); } catch { /* 已经死了 */ }
     browser = null;
     await launchBrowser();
@@ -143,7 +178,7 @@ await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1 });
 attachSharedListeners(page);
 
 try {
-  await page.goto(APP_URL, { waitUntil: "domcontentloaded", timeout: 20000 });
+  await gotoSafe(page);
   // 等待真实仿真推进（rAF）——隐藏标签页会冻结，headless 新模式下正常运行
   await page.waitForFunction(
     () => parseFloat((document.getElementById("clock")?.textContent ?? "").replace("t = ", "")) > 2,
@@ -516,8 +551,11 @@ try {
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     if (document.getElementById("btn-pause").textContent === "继续") document.getElementById("btn-pause").click();
     document.getElementById("sec-imu").classList.remove("collapsed");
-    document.getElementById("raw-record-toggle").click();
-    await sleep(1600);
+    // 幂等开启：上一轮用例若已开着，直接再点会把它关掉（复核：首轮 50 帧/0 数据行的根因之一）
+    if (!document.getElementById("raw-record-toggle").checked) document.getElementById("raw-record-toggle").click();
+    // 状态等待而非固定 sleep：软件渲染下 rAF 可能明显偏慢，固定 1.6 s 只会偶发不足
+    const deadline = performance.now() + 20000;
+    while (performance.now() < deadline && window.attitudeDemo.raw().rows < 160) await sleep(100);
     const before = window.attitudeDemo.raw();
     let text = null;
     const orig = URL.createObjectURL;
@@ -531,7 +569,8 @@ try {
     await sleep(120);
     document.querySelector('input[name="export-scope"][value="raw"]').checked = true;
     document.getElementById("export-confirm").click();
-    await sleep(250);
+    // blob.text() 是异步的：慢机器上固定 250 ms 会读不完 → 轮询等文本落地
+    for (let i = 0; i < 80 && !text; i++) await sleep(50);
     URL.createObjectURL = orig;
     HTMLAnchorElement.prototype.click = origClick;
     document.getElementById("raw-record-toggle").click();
@@ -781,28 +820,42 @@ try {
       `拟合=${JSON.stringify(accelCurrentDevice.fit)} 验证模型=${JSON.stringify(accelCurrentDevice.debug)}`,
   );
 
-  // 配置档案：完整磁椭球 + 六面加计校准 → 导出 → 清空 → 导入 → 校准状态与模型必须还原
+  // 配置档案：完整磁椭球 + 六面加计校准 → 导出 → 清空 → 导入 → 校准状态与模型必须还原；
+  // 并验证**失败导入是原子的**（现场逐项不变）与 ratio=null 的合法档案可导入可渲染。
   const archiveRoundTrip = await page.evaluate(async () => {
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const pauseBtn = document.getElementById("btn-pause");
+    const isPaused = () => pauseBtn.textContent === "继续";
+    // ① 先制造「值得丢掉的现场」：跑一段让曲线/记录有数据、拟合一次让校准历史非空、打开 A/B
+    if (isPaused()) pauseBtn.click();
+    for (let i = 0; i < 40 && window.attitudeDemo.sizes().logRows < 4; i++) await sleep(50);
+    document.getElementById("magcal-synthetic").click();
+    await sleep(80);
+    const ab = document.getElementById("ab-toggle");
+    if (!ab.checked) { ab.checked = true; ab.dispatchEvent(new Event("change")); }
+    // ② 冻结时钟：失败导入前后才能逐项比较（仿真自己推进会让 simTime/曲线一起变）
+    if (!isPaused()) pauseBtn.click();
+    for (let i = 0; i < 20 && !isPaused(); i++) await sleep(25);
+    await sleep(150);
+    const site = () => window.attitudeDemo.experiment.site();
     const before = window.attitudeDemo.calibration();
+    const siteBefore = site();
     const cfgBefore = window.attitudeDemo.experiment.config(6);
     const archive = window.attitudeDemo.experiment.archive();
-    const strip = (c) => {
-      const { durationSec, steadyFromSec, autoCoarseAlign, ...rest } = c;
-      return rest;
-    };
-    // 负面对照：解析能过、但界面无法表达/会夹值的档案必须拒绝，而且不得改动当前配置
+    // 负面对照：解析能过、但界面无法表达/会夹值的档案必须拒绝，而且不得改动当前**现场**
     const badSpeed = JSON.parse(JSON.stringify(archive));
     badSpeed.config.solveRateHz = 333;
     const badSpeedRes = window.attitudeDemo.experiment.importArchive(badSpeed);
+    const afterBadSpeed = site();
     const badSlider = JSON.parse(JSON.stringify(archive));
     badSlider.config.imu.gyroBiasDps = 999999; // 滑块上限 5 → 会被静默夹值
     const badSliderRes = window.attitudeDemo.experiment.importArchive(badSlider);
+    const afterBadSlider = site();
     const fixedAxis = JSON.parse(JSON.stringify(archive));
     fixedAxis.config.initialAttitude = { kind: "fixed-axis", axis: [0, 0, 1], angleDeg: 30 };
     const fixedAxisRes = window.attitudeDemo.experiment.importArchive(fixedAxis);
-    const cfgAfterNegatives = window.attitudeDemo.experiment.config(6);
-    // 先人为破坏状态：切回对角模型并清空两个校准
+    const afterFixedAxis = site();
+    // ③ 合法档案：先人为破坏状态（切回对角模型并清空两个校准）
     const sel = document.getElementById("magcal-model");
     sel.value = "diag";
     sel.dispatchEvent(new Event("change"));
@@ -813,42 +866,100 @@ try {
     const res = window.attitudeDemo.experiment.importArchive(archive);
     await sleep(60);
     const after = window.attitudeDemo.calibration();
+    const afterImportSite = site();
     const cfgAfter = window.attitudeDemo.experiment.config(6);
+    // ④ 合法但 ratio=null 的档案（训练残差为 0 → NaN → JSON null）必须可导入且可渲染
+    const nullRatio = JSON.parse(JSON.stringify(archive));
+    const ncal = nullRatio.config.magCalibration;
+    let nullRatioRes = { ok: false, error: "档案里没有带验证块的磁校准" };
+    let nullRatioText = "";
+    if (ncal && ncal.validation) {
+      ncal.validation.ratio = null;
+      if (ncal.validation.late) ncal.validation.late.ratio = null;
+      nullRatioRes = window.attitudeDemo.experiment.importArchive(nullRatio);
+      await sleep(80);
+      nullRatioText = document.getElementById("magcal-result")?.textContent ?? "";
+    }
+    // ⑤ 界面**没有独立控件**的两个字段必须真的写进活状态（复核 P2-1：
+    //    稳态窗口改 RMSE 口径、粗对准会重置姿态，不能当展示字段丢掉）
+    const hidden = JSON.parse(JSON.stringify(archive));
+    hidden.config.steadyFromSec = 4;
+    hidden.config.autoCoarseAlign = false;
+    const hiddenRes = window.attitudeDemo.experiment.importArchive(hidden);
+    await sleep(60);
+    const hiddenSite = site();
+    // ⑥ 省略**可选字段**的档案也必须能导入：schema 允许缺 steadyFromSec / autoCoarseAlign /
+    //    manualTargetDeg / ab / magTargetUts，缺失时按文档默认值恢复，不能因为「少写一个键」被拒。
+    const optional = JSON.parse(JSON.stringify(archive));
+    for (const k of ["steadyFromSec", "autoCoarseAlign", "manualTargetDeg", "ab", "magTargetUts"]) delete optional.config[k];
+    const optionalRes = window.attitudeDemo.experiment.importArchive(optional);
+    await sleep(60);
+    const optionalCfg = window.attitudeDemo.experiment.config(6);
+    // ⑦ 恢复原始档案，后面的用例按原假设运行
+    const restoreRes = window.attitudeDemo.experiment.importArchive(archive);
+    await sleep(80);
+    if (isPaused()) pauseBtn.click(); // 恢复运行（后续用例依赖时钟继续推进）
     return {
-      before, cleared, after, res,
+      before, cleared, after, res, restoreRes,
       badSpeedRes, badSliderRes, fixedAxisRes,
-      negConfigUnchanged: JSON.stringify(strip(cfgAfterNegatives)) === JSON.stringify(strip(cfgBefore)),
+      siteBefore, afterBadSpeed, afterBadSlider, afterFixedAxis, hiddenSite, hiddenRes,
+      optionalRes, optionalCfg, afterImportSite,
+      negSiteUnchanged:
+        JSON.stringify(afterBadSpeed) === JSON.stringify(siteBefore) &&
+        JSON.stringify(afterBadSlider) === JSON.stringify(siteBefore) &&
+        JSON.stringify(afterFixedAxis) === JSON.stringify(siteBefore),
       modelOg: document.getElementById("magcal-model").value,
       magChecked: document.getElementById("magcal-apply").checked,
       accelChecked: document.getElementById("accelcal-apply").checked,
+      nullRatioRes, nullRatioText,
       cfgBefore, cfgAfter,
     };
   });
   const sameOffset =
     JSON.stringify(archiveRoundTrip.cfgBefore.magCalibration?.offset) ===
     JSON.stringify(archiveRoundTrip.cfgAfter.magCalibration?.offset);
-  // 完整配置往返：除界面不可调整的三个字段外，导入后必须逐字段一致
+  // 完整配置往返：除「本次已跑时长」外，导入后必须逐字段一致（含 steadyFromSec/autoCoarseAlign）
   const stripCfg = (c) => {
-    const { durationSec, steadyFromSec, autoCoarseAlign, ...rest } = c;
+    const { durationSec, ...rest } = c;
     return JSON.stringify(rest);
   };
   const sameConfig = stripCfg(archiveRoundTrip.cfgBefore) === stripCfg(archiveRoundTrip.cfgAfter);
+  const site = archiveRoundTrip.siteBefore;
   check(
-    "配置档案：完整配置往返一致（含初始姿态/门控/逐算法参数），不可表达的值拒绝且不改状态",
+    "配置档案：失败导入现场逐项不变；完整配置往返一致；ratio=null 可导入可渲染；无控件/可选字段真恢复",
     archiveRoundTrip.before.magApplied && archiveRoundTrip.before.accelApplied &&
       !archiveRoundTrip.cleared.hasMag && !archiveRoundTrip.cleared.hasAccel &&
       archiveRoundTrip.res.ok && archiveRoundTrip.after.magApplied && archiveRoundTrip.after.accelApplied &&
       archiveRoundTrip.modelOg === "full" && archiveRoundTrip.magChecked && archiveRoundTrip.accelChecked &&
-      sameOffset && sameConfig && archiveRoundTrip.negConfigUnchanged &&
+      sameOffset && sameConfig && archiveRoundTrip.negSiteUnchanged &&
+      site.logRows > 0 && site.rawRows > 0 && site.magHistory > 0 && site.abOn &&
       archiveRoundTrip.badSpeedRes.ok === false && /solveRateHz/.test(archiveRoundTrip.badSpeedRes.error ?? "") &&
       archiveRoundTrip.badSliderRes.ok === false && /gyroBiasDps/.test(archiveRoundTrip.badSliderRes.error ?? "") &&
-      archiveRoundTrip.fixedAxisRes.ok === false && /initialAttitude/.test(archiveRoundTrip.fixedAxisRes.error ?? ""),
+      archiveRoundTrip.fixedAxisRes.ok === false && /initialAttitude/.test(archiveRoundTrip.fixedAxisRes.error ?? "") &&
+      archiveRoundTrip.nullRatioRes.ok === true &&
+      archiveRoundTrip.nullRatioText.includes("不适用") && !/NaN/.test(archiveRoundTrip.nullRatioText) &&
+      archiveRoundTrip.hiddenRes.ok === true &&
+      archiveRoundTrip.hiddenSite.steadyFromSec === 4 &&
+      archiveRoundTrip.hiddenSite.autoCoarseAlign === false &&
+      archiveRoundTrip.optionalRes.ok === true &&
+      archiveRoundTrip.optionalCfg.steadyFromSec === null &&
+      archiveRoundTrip.optionalCfg.autoCoarseAlign === true &&
+      archiveRoundTrip.optionalCfg.ab?.mode === "same-start" &&
+      // 成功导入替换了 A 组参数：旧 B 组不可比，必须关闭并说明（与实验基线同一约定）
+      archiveRoundTrip.afterImportSite.abOn === false &&
+      (archiveRoundTrip.res.warnings ?? []).some((w) => w.includes("A/B")),
     `校准前=${JSON.stringify(archiveRoundTrip.before)}；清空后 hasMag=${archiveRoundTrip.cleared.hasMag}；` +
       `导入后=${JSON.stringify(archiveRoundTrip.after)}、model=${archiveRoundTrip.modelOg}、` +
       `checkbox=${archiveRoundTrip.magChecked}/${archiveRoundTrip.accelChecked}、offset 一致=${sameOffset}、` +
-      `整份配置一致=${sameConfig}；负例：333Hz=${JSON.stringify(archiveRoundTrip.badSpeedRes)}、` +
-      `越界滑块=${JSON.stringify(archiveRoundTrip.badSliderRes)}、固定轴=${JSON.stringify(archiveRoundTrip.fixedAxisRes)}、` +
-      `负例后配置未变=${archiveRoundTrip.negConfigUnchanged}`,
+      `整份配置一致=${sameConfig}；现场=${JSON.stringify(site)}、失败导入后现场不变=${archiveRoundTrip.negSiteUnchanged}；` +
+      `负例：333Hz=${JSON.stringify(archiveRoundTrip.badSpeedRes)}、越界滑块=${JSON.stringify(archiveRoundTrip.badSliderRes)}、` +
+      `固定轴=${JSON.stringify(archiveRoundTrip.fixedAxisRes)}；ratio=null 导入=${JSON.stringify(archiveRoundTrip.nullRatioRes)}、` +
+      `读数「${archiveRoundTrip.nullRatioText.replace(/\s+/g, " ").slice(0, 90)}」；` +
+      `无控件字段导入=${JSON.stringify(archiveRoundTrip.hiddenRes)} → 现场 steadyFromSec=${archiveRoundTrip.hiddenSite.steadyFromSec}、` +
+      `autoCoarseAlign=${archiveRoundTrip.hiddenSite.autoCoarseAlign}；` +
+      `省略可选字段导入=${JSON.stringify(archiveRoundTrip.optionalRes)} → steadyFromSec=${archiveRoundTrip.optionalCfg.steadyFromSec}、` +
+      `autoCoarseAlign=${archiveRoundTrip.optionalCfg.autoCoarseAlign}、ab=${archiveRoundTrip.optionalCfg.ab?.mode}；` +
+      `成功后 A/B 关闭=${archiveRoundTrip.afterImportSite.abOn === false}（提示 ${JSON.stringify(archiveRoundTrip.res.warnings ?? [])}）`,
   );
 
   // 导出 IMU 列语义：默认 raw 标注，勾选「校准后」写 calibrated（回放自动关闭校准）
@@ -1129,45 +1240,83 @@ try {
     const sel = document.getElementById("scenario-select");
     sel.value = "coordinatedTurn";
     sel.dispatchEvent(new Event("change"));
-    await sleep(1800);
-    const p = window.attitudeDemo.world.posNed;
+    // 状态等待：等真值位置真的超过阈值，而不是赌 1.8 s 的墙钟（软件渲染下会偶发 0.38 m）
+    const t0 = performance.now();
+    const deadline = t0 + 15000;
+    let dist = 0;
+    while (performance.now() < deadline) {
+      const p = window.attitudeDemo.world.posNed;
+      dist = Math.hypot(p[0], p[1]);
+      if (dist > 1.2) break;
+      await sleep(100);
+    }
+    const elapsed = (performance.now() - t0) / 1000;
     const loopDisabled = document.getElementById("loop-toggle").disabled;
     sel.value = "hover";
     sel.dispatchEvent(new Event("change"));
     await sleep(80);
     const loopEnabledAfter = !document.getElementById("loop-toggle").disabled;
-    return { dist: Math.hypot(p[0], p[1]), scenario: "coordinatedTurn", loopDisabled, loopEnabledAfter };
+    return { dist, elapsed, scenario: "coordinatedTurn", loopDisabled, loopEnabledAfter };
   });
   check(
     "运动学一致剧本：协调转弯产生真实平动轨迹；闭环开关被禁用并恢复",
     kinematic.dist > 1 && kinematic.loopDisabled && kinematic.loopEnabledAfter,
-    `2 s 内真值位置 ${kinematic.dist.toFixed(2)} m；kinematic 下闭环禁用=${kinematic.loopDisabled}、切回悬停后恢复=${kinematic.loopEnabledAfter}`,
+    `真值位置 ${kinematic.dist.toFixed(2)} m（等 ${kinematic.elapsed.toFixed(1)} s）；kinematic 下闭环禁用=${kinematic.loopDisabled}、切回悬停后恢复=${kinematic.loopEnabledAfter}`,
   );
 
-  // 外部真值回放：truth_q* 日志应启用「真实姿态」来源，误差基准切到外部真值
+  // 外部真值回放：truth_q* 日志应启用「真实姿态」来源，误差基准切到外部真值；
+  // 同时验证**长间隔真值按子步插值**：10 s 空洞若提前用帧末真值，完美日志会算出几十度假误差。
   const truthReplay = await page.evaluate(async () => {
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    // 关磁：只靠陀螺 + 加计，完美日志的误差应接近 0
+    const mag = document.getElementById("mag-enable");
+    if (mag.checked) { mag.checked = false; mag.dispatchEvent(new Event("change")); }
+    const yawQ = (deg) => {
+      const h = (deg * Math.PI) / 360;
+      return [Math.cos(h), 0, 0, Math.sin(h)];
+    };
     const lines = ["t_s,gx,gy,gz,ax,ay,az,truth_qw,truth_qx,truth_qy,truth_qz"];
-    for (let i = 0; i < 60; i++) lines.push(`${i * 0.01},0,0,0,0,0,9.80665,1,0,0,0`);
-    window.attitudeDemo.replay.import(lines.join(String.fromCharCode(10)), "truth.csv");
-    await sleep(500);
+    for (let i = 0; i < 19; i++) {
+      const t = i * 0.01;
+      lines.push(`${t.toFixed(2)},0,0,9,0,0,9.80665,${yawQ(9 * t).join(",")}`);
+    }
+    // 间隔 9.82 s 的末帧：真值 yaw=90°，与 9°/s 的陀螺完全一致
+    lines.push(`10,0,0,9,0,0,9.80665,${yawQ(90).join(",")}`);
+    const imported = window.attitudeDemo.replay.import(lines.join(String.fromCharCode(10)), "truth-gap.csv");
+    const speed = document.getElementById("replay-speed");
+    speed.value = "0";
+    speed.dispatchEvent(new Event("change"));
+    // 最快档：等回放真的消费完全部源帧（状态等待；固定 4 s 在慢渲染下会偶发未跑完）
+    const replayDeadline = performance.now() + 25000;
+    while (performance.now() < replayDeadline) {
+      const ri = window.attitudeDemo.replay.info;
+      if (ri.idx >= ri.frames) break;
+      await sleep(50);
+    }
     const truthOpt = document.querySelector('#source-select option[value="truth"]');
     const disabled = truthOpt.disabled;
     const src = document.getElementById("source-select");
     src.value = "truth";
     src.dispatchEvent(new Event("change"));
-    await sleep(200);
+    await sleep(250);
     const chip = document.getElementById("readout-true")?.textContent ?? "";
     const legend0 = document.querySelector("#att-legend .legend-chip")?.textContent ?? "";
     const info = window.attitudeDemo.replay.info;
+    const row = [...document.querySelectorAll("#metrics-body tr")].find((tr) => tr.textContent.includes("Mahony"));
+    const cells = row ? [...row.querySelectorAll("td")].map((td) => td.textContent.trim()) : [];
+    const mean = parseFloat(cells[2]);
     window.attitudeDemo.replay.stop();
     await sleep(120);
-    return { disabled, chip, legend0, info };
+    return { disabled, chip, legend0, info, imported, mean, cells };
   });
   check(
-    "外部真值回放：真实姿态来源可用、基准标签显示外部真值",
-    !truthReplay.disabled && /外部真值/.test(truthReplay.chip + truthReplay.legend0),
-    `truth 选项 disabled=${truthReplay.disabled}；读数「${truthReplay.chip.slice(0, 60)}」；图例「${truthReplay.legend0.slice(0, 40)}」`,
+    "外部真值回放：基准切到外部真值，且长间隔按子步插值（完美日志平均误差接近 0）",
+    !truthReplay.disabled && /外部真值/.test(truthReplay.chip + truthReplay.legend0) &&
+      /^ok:/.test(truthReplay.imported) &&
+      Number.isFinite(truthReplay.mean) && truthReplay.mean < 5,
+    `truth 选项 disabled=${truthReplay.disabled}；读数「${truthReplay.chip.slice(0, 60)}」；` +
+      `图例「${truthReplay.legend0.slice(0, 40)}」；导入=${truthReplay.imported}；` +
+      `Mahony 当前/均值/峰值=${JSON.stringify(truthReplay.cells.slice(1, 5))}（均值应 < 5°）`,
   );
   await page.evaluate(() => {
     const sel = document.getElementById("scenario-select");
@@ -1277,7 +1426,7 @@ try {
       let stream = makeStream(30);
       Object.defineProperty(navigator, "serial", { configurable: true, value: { requestPort: async () => port } });
     });
-    await pg.goto(APP_URL, { waitUntil: "domcontentloaded" });
+    await gotoSafe(pg);
     await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 15000 });
     await pg.evaluate(() => {
       const sec = document.getElementById("sec-imu");
@@ -1381,7 +1530,7 @@ try {
       // 没有 Worker 的浏览器环境：批量评测必须回退到主线程分片，且取消按钮仍然管用
       window.Worker = undefined;
     });
-    await pg.goto(APP_URL, { waitUntil: "domcontentloaded" });
+    await gotoSafe(pg);
     await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 15000 });
     await pg.evaluate(() => {
       document.getElementById("sec-experiments").classList.remove("collapsed");
@@ -1729,15 +1878,19 @@ try {
       }
       if (!dlg.open) throw new Error("导出弹窗没有打开（本轮记录始终为空）");
       const meta = document.getElementById("export-meta")?.textContent ?? "";
+      // 导出可能被**产品规则**主动拒绝（例如同一批记录混了 raw/calibrated 两种源语义）。
+      // 把提示条文本一起带回来：失败时能一眼看出是「没生成」还是「被规则拒绝」。
+      const toastText = [...document.querySelectorAll("#toast-layer .ov-chip")].map((c) => c.textContent).join(" | ");
       // 打开时的默认档必须是「姿态角与误差」（单选组恰好一项选中；历史上会把全帧导出一起勾上）
       const checkedAtOpen = [...document.querySelectorAll('input[name="export-scope"]')]
         .filter((r) => r.checked).map((r) => r.value);
       document.querySelector(`input[name="export-scope"][value="${scopeValue}"]`).checked = true;
       document.getElementById("export-confirm").click();
-      await new Promise((r) => setTimeout(r, 250));
+      // 慢机器上 blob.text() 可能几百毫秒才落地：等它，而不是赌 250 ms
+      for (let i = 0; i < 80 && !text; i++) await new Promise((r) => setTimeout(r, 50));
       URL.createObjectURL = orig;
       HTMLAnchorElement.prototype.click = origClick;
-      return { text, meta, closed: !dlg.open, checkedAtOpen };
+      return { text, meta, closed: !dlg.open, checkedAtOpen, toastText };
     }, scope);
 
   const base = await runExport("angles");
@@ -1753,7 +1906,9 @@ try {
       cols.length === 24 &&
       base.closed &&
       base.checkedAtOpen.length === 1 && base.checkedAtOpen[0] === "angles",
-    csv ? `${csvLines.length} 行 / ${cols.length} 列；打开时选中档=${base.checkedAtOpen.join("/")}；弹窗提示「${base.meta.split("·")[0].trim()}」` : "未生成",
+    csv
+      ? `${csvLines.length} 行 / ${cols.length} 列；打开时选中档=${base.checkedAtOpen.join("/")}；弹窗提示「${base.meta.split("·")[0].trim()}」`
+      : `未生成${base.toastText ? `（提示条：${base.toastText}）` : ""}`,
   );
 
   const withQ = await runExport("quat");
@@ -1798,10 +1953,15 @@ try {
     await new Promise((r) => setTimeout(r, 150));
     document.getElementById("export-imu").checked = true;
     document.getElementById("export-confirm").click();
-    await new Promise((r) => setTimeout(r, 400));
+    // 同 runExport：等 blob 文本真的读出来（慢机器上 400 ms 也会读不完）
+    for (let i = 0; i < 80 && !csv; i++) await new Promise((r) => setTimeout(r, 50));
     URL.createObjectURL = orig;
     HTMLAnchorElement.prototype.click = origClick;
-    if (!csv) return { err: "导出未产生 CSV" };
+    if (!csv) {
+      // 导出可能被产品规则拒绝（混源语义）——把提示条带回去，别只报"未产生"
+      const toast = [...document.querySelectorAll("#toast-layer .ov-chip")].map((c) => c.textContent).join(" | ");
+      return { err: `导出未产生 CSV${toast ? `（提示条：${toast}）` : ""}` };
+    }
     const header = csv.split(NL).find((l) => l.startsWith("t_s")) ?? "";
     const imp = window.attitudeDemo.replay.import(csv, "roundtrip.csv");
     await new Promise((r) => setTimeout(r, 1200));
@@ -1932,7 +2092,7 @@ try {
         }
       };
     }, protocol);
-    await pg.goto(APP_URL, { waitUntil: "domcontentloaded" });
+    await gotoSafe(pg);
     await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 15000 });
     await pg.evaluate((proto) => {
       const sec = document.getElementById("sec-imu");
@@ -2019,6 +2179,8 @@ try {
       const st = {
         opens: 0,
         closes: 0,
+        /** 让接下来 N 次 close() 失败（模拟驱动/蓝牙栈暂时拒绝关闭），之后自行恢复 */
+        failCloses: 0,
         opened: false,
         hangNextOpen: false,
         failNextOpen: false,
@@ -2095,6 +2257,11 @@ try {
         },
         close() {
           st.closes++;
+          // 关闭失败：**端口保持打开**（真实驱动被占用/读锁未释放时就是这样）
+          if (st.failCloses > 0) {
+            st.failCloses--;
+            return Promise.reject(new Error("Failed to close serial port"));
+          }
           st.opened = false;
           port.readable = null;
           return Promise.resolve();
@@ -2114,7 +2281,7 @@ try {
       };
       Object.defineProperty(navigator, "serial", { configurable: true, value: serial });
     });
-    await pg.goto(APP_URL, { waitUntil: "domcontentloaded" });
+    await gotoSafe(pg);
     await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 15000 });
     await pg.evaluate(() => {
       const sec = document.getElementById("sec-imu");
@@ -2319,13 +2486,24 @@ try {
       };
       window.__lockAll(true);
       navigator.serial.__fireDisconnect();
-      await sleep(3000);
+      // 状态等待：等到「锁着 close」真的被夹具拒绝过，而不是固定等 3 s（退避档位一过就对不上）
+      const lockDeadline = performance.now() + 6000;
+      while (performance.now() < lockDeadline && fs.closeErrors === 0) await sleep(100);
       const mid = window.attitudeDemo.plumbing();
       window.__lockAll(false); // 释放锁后重连应当成功
-      await sleep(1500);
+      // 状态等待：重连可能已退到 4 s 档，固定 1.5 s 会偶发「还没连上」
+      const reopenDeadline = performance.now() + 20000;
+      while (performance.now() < reopenDeadline && !window.attitudeDemo.plumbing().serial) await sleep(100);
       const after = window.attitudeDemo.plumbing();
       const f0 = after.frames;
-      await sleep(500);
+      // 等帧计数真的增长（数据链路通不通要看数据，不看时钟）
+      const frameDeadline = performance.now() + 8000;
+      let f1 = f0;
+      while (performance.now() < frameDeadline) {
+        await sleep(100);
+        f1 = window.attitudeDemo.plumbing().frames;
+        if (f1 > f0) break;
+      }
       const after2 = window.attitudeDemo.plumbing();
       return {
         closeErrors: fs.closeErrors,
@@ -2335,7 +2513,7 @@ try {
         reconnects: after2.reconnects,
         openPorts: after2.openPorts,
         closeFailures: after2.portCloseFailures,
-        framesGrow: after2.frames - f0,
+        framesGrow: f1 - f0,
       };
     });
     await stop();
@@ -2354,6 +2532,64 @@ try {
       `（重连 ${strictLock.res.reconnects} 次、open ${strictLock.res.opens} 次）、打开的端口=${strictLock.res.openPorts}、` +
       `close 失败计数=${strictLock.res.closeFailures}、随后 0.5 s 新增 ${strictLock.res.framesGrow} 帧｜` +
       `错误=${strictLock.errs.slice(0, 2).join(" / ") || "无"}`,
+  );
+
+  // A-2e（复核 P1-5）：close 失败后**生产代码**必须保留引用并后台自动重试，直到真正关闭。
+  //      旧实现清掉 session/port/lastPort 后忽略 dispose 的 false → 物理端口仍开着、
+  //      代码再也找不到它（open=1、close=0、永远占着）。
+  //      本用例**不**手工再调用 dispose：恢复只能由生产重试路径完成。
+  const closeRetry = await (async () => {
+    const { pg, errs, stop } = await makeFakeSerialPage();
+    const res = await pg.evaluate(async () => {
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const fs = window.__fs;
+      // dispose 一次会尝试 close 两次；让前三次关闭都失败，之后驱动「恢复」
+      fs.failCloses = 3;
+      const before = window.attitudeDemo.plumbing();
+      document.getElementById("btn-serial").click(); // 用户主动断开
+      const failDeadline = performance.now() + 8000;
+      let sawPending = false;
+      while (performance.now() < failDeadline) {
+        if (window.attitudeDemo.plumbing().pendingPortCleanup > 0) { sawPending = true; break; }
+        await sleep(50);
+      }
+      const mid = window.attitudeDemo.plumbing();
+      // 只等生产代码的后台退避重试：不再触碰旧引用
+      const cleanDeadline = performance.now() + 25000;
+      while (performance.now() < cleanDeadline) {
+        const p = window.attitudeDemo.plumbing();
+        if (p.pendingPortCleanup === 0 && p.openPorts === 0) break;
+        await sleep(100);
+      }
+      const after = window.attitudeDemo.plumbing();
+      return {
+        beforeRunning: before.serial,
+        sawPending,
+        midPending: mid.pendingPortCleanup,
+        midOpenPorts: mid.openPorts,
+        afterPending: after.pendingPortCleanup,
+        afterOpenPorts: after.openPorts,
+        afterRunning: after.serial,
+        closes: fs.closes,
+        portOpened: fs.opened,
+        failLeft: fs.failCloses,
+      };
+    });
+    await stop();
+    await pg.close();
+    return { res, errs };
+  })();
+  check(
+    "连接释放：close 失败不丢引用，生产代码后台自动重试直到真正关闭（无需人工再 dispose）",
+    closeRetry.res.beforeRunning === true && closeRetry.res.sawPending &&
+      closeRetry.res.afterPending === 0 && closeRetry.res.afterOpenPorts === 0 &&
+      closeRetry.res.portOpened === false && closeRetry.res.afterRunning === false &&
+      errsEmpty(closeRetry.errs),
+    `断开前 serial=${closeRetry.res.beforeRunning}；观测到待清理=${closeRetry.res.sawPending}` +
+      `（待清理 ${closeRetry.res.midPending}、打开的端口 ${closeRetry.res.midOpenPorts}）；` +
+      `自动重试后 待清理=${closeRetry.res.afterPending}、打开的端口=${closeRetry.res.afterOpenPorts}、` +
+      `夹具端口 opened=${closeRetry.res.portOpened}、close 共调用 ${closeRetry.res.closes} 次（剩 ${closeRetry.res.failLeft} 次强制失败未用）｜` +
+      `错误=${closeRetry.errs.slice(0, 2).join(" / ") || "无"}`,
   );
 
   // A-2d：掉线重连**已排程**期间切换来源 → 旧定时器不得把旧链路接回来。
@@ -2853,7 +3089,7 @@ try {
   const printCase = await (async () => {
     const pg = await newPage();
     await pg.setViewport({ width: 900, height: 1200 });
-    await pg.goto(APP_URL, { waitUntil: "domcontentloaded" });
+    await gotoSafe(pg);
     await pg.click("#btn-docs");
     await new Promise((r) => setTimeout(r, 500));
     await pg.evaluate(() => document.querySelector('.docs-toc .module-link[data-doc="trouble"]').click());
@@ -2908,7 +3144,7 @@ try {
         if (k in navigator) Object.defineProperty(navigator, k, { value: undefined, configurable: true });
       }
     });
-    await pg.goto(APP_URL, { waitUntil: "domcontentloaded" });
+    await gotoSafe(pg);
     await new Promise((r) => setTimeout(r, 600));
     const res = await pg.evaluate(() => {
       document.getElementById("sec-imu")?.classList.remove("collapsed"); // 面板默认折叠，展开后才能量到 display
@@ -3095,7 +3331,7 @@ try {
         value: { requestPort: async () => { window.__requestPortCalls++; return port; } },
       });
     });
-    await pg.goto(APP_URL, { waitUntil: "domcontentloaded" });
+    await gotoSafe(pg);
     await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 15000 });
     await pg.evaluate(() => {
       const sec = document.getElementById("sec-imu");
@@ -3169,7 +3405,7 @@ try {
       },
       extraWire ?? "",
     );
-    await pg.goto(APP_URL, { waitUntil: "domcontentloaded" });
+    await gotoSafe(pg);
     await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 15000 });
     await pg.evaluate(() => {
       const sec = document.getElementById("sec-imu");
@@ -3258,7 +3494,7 @@ try {
       // 模拟「设备离开范围 / 关机」：GATT 掉线事件
       window.__bleDrop = () => { for (const cb of [...window.__ble.deviceListeners]) cb(); };
     });
-    await pg.goto(APP_URL, { waitUntil: "domcontentloaded" });
+    await gotoSafe(pg);
     await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 15000 });
     await pg.evaluate(() => {
       const sec = document.getElementById("sec-imu");
@@ -3442,7 +3678,7 @@ try {
     const srcWarn = [];
     pg.on("console", (m) => m.type() === "warning" && srcWarn.push(m.text().slice(0, 80)));
     pg.on("pageerror", (e) => srcWarn.push("pageerror: " + String(e).slice(0, 80)));
-    await pg.goto(APP_URL, { waitUntil: "domcontentloaded" });
+    await gotoSafe(pg);
     await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 15000 });
     // 在每个控件上设一个「与默认明显不同」的值（滑杆取量程端、开关取反、下拉取非首项）
     const source = await pg.evaluate(() => {
@@ -3512,7 +3748,7 @@ try {
     const dstWarn = [];
     pg2.on("console", (m) => m.type() === "warning" && dstWarn.push(m.text().slice(0, 80)));
     pg2.on("pageerror", (e) => dstWarn.push("pageerror: " + String(e).slice(0, 80)));
-    await pg2.goto(APP_URL + hash, { waitUntil: "domcontentloaded" });
+    await gotoSafe(pg2, APP_URL + hash);
     await pg2.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 15000 });
     await new Promise((r) => setTimeout(r, 500));
     const dstValues = await pg2.evaluate((lists) => {
@@ -3559,7 +3795,7 @@ try {
     pg.on("console", (m) => m.type() === "error" && errs.push(m.text()));
     pg.on("pageerror", (e) => errs.push(String(e)));
     await pg.evaluateOnNewDocument(makeWire, protocol);
-    await pg.goto(APP_URL, { waitUntil: "domcontentloaded" });
+    await gotoSafe(pg);
     await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 15000 });
     await pg.evaluate(() => {
       const sec = document.getElementById("sec-imu");
@@ -3704,7 +3940,7 @@ try {
       let stream = makeStream(30);
       Object.defineProperty(navigator, "serial", { configurable: true, value: { requestPort: async () => port } });
     });
-    await pg.goto(APP_URL, { waitUntil: "domcontentloaded" });
+    await gotoSafe(pg);
     await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 15000 });
     await pg.evaluate(() => {
       const sec = document.getElementById("sec-imu");
@@ -3859,7 +4095,7 @@ try {
     bias: document.getElementById("imu-gyro-bias").value,
     view: document.body.dataset.view,
   }));
-  await page.goto(APP_URL.split("#")[0] + deep.hash, { waitUntil: "domcontentloaded" });
+  await gotoSafe(page, APP_URL.split("#")[0] + deep.hash);
   await page.waitForFunction(
     () => parseFloat((document.getElementById("clock")?.textContent ?? "").replace("t = ", "")) > 0.5,
     { timeout: 30000 },
@@ -3953,7 +4189,7 @@ try {
   mobilePage.on("console", (m) => m.type() === "error" && mobileErrors.push(m.text()));
   mobilePage.on("pageerror", (e) => mobileErrors.push(String(e)));
   await mobilePage.setViewport({ width: 390, height: 844, deviceScaleFactor: 1 });
-  await mobilePage.goto(APP_URL, { waitUntil: "domcontentloaded" });
+  await gotoSafe(mobilePage);
   await mobilePage.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 15000 });
   const mobile = await mobilePage.evaluate(() => ({
     scrollW: document.documentElement.scrollWidth,
@@ -4294,7 +4530,7 @@ try {
       value: { requestPort: async () => port },
     });
   });
-  await serialPage.goto(APP_URL, { waitUntil: "domcontentloaded" });
+  await gotoSafe(serialPage);
   await serialPage.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 15000 });
   await serialPage.evaluate(() => {
     const sec = document.getElementById("sec-imu");
@@ -4344,7 +4580,13 @@ try {
   await serialPage.close();
 } catch (err) {
   failures++;
-  console.error("[FAIL] 冒烟测试异常 —", err instanceof Error ? err.message : String(err));
+  if (isInfraError(err)) {
+    // 别把「浏览器把页面回收了」说成产品缺陷，也别让它看起来像普通失败项
+    browserRestarts++;
+    console.error(`[FAIL] 基础设施失败（页面/浏览器被回收）— ${err instanceof Error ? err.message : String(err)}；本轮不判通过，请重跑`);
+  } else {
+    console.error("[FAIL] 冒烟测试异常 —", err instanceof Error ? err.message : String(err));
+  }
   try {
     await page.screenshot({ path: join(shots, "99-failure.png") });
   } catch {
@@ -4363,5 +4605,10 @@ try {
   }
 }
 
+// 基础设施失败不能被「续跑后全绿」掩盖：浏览器进程被回收过，就说明本轮结果不可信。
+if (browserRestarts > 0) {
+  failures++;
+  console.error(`[FAIL] 浏览器进程被回收 ${browserRestarts} 次 — 基础设施失败，本轮不能判通过（请重跑）`);
+}
 console.log(failures === 0 ? `\n浏览器冒烟通过 ✅（${passes} 项）` : `\n${failures} 项失败 ❌`);
 process.exit(failures === 0 ? 0 : 1);

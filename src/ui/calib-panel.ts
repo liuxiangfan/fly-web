@@ -39,6 +39,15 @@ export function magStatusText(s: MagPanelState): string {
 }
 
 /** 磁校准结果块 HTML（含验证残差、失效提示与独立验证行） */
+/**
+ * 验证比值的安全渲染：训练残差为 0 时生产拟合会给出 NaN，JSON 往返后是 null。
+ * null 表示「不适用」，不是缺失，也不能当成 0——直接 toFixed 会让合法档案在
+ * 渲染阶段抛 TypeError（复核反例）。
+ */
+function ratioText(v: number | null | undefined): string {
+  return typeof v === "number" && Number.isFinite(v) ? v.toFixed(2) : "—（不适用）";
+}
+
 export function magResultHtml(cal: MagCalibration | null, verifyLine: string, stale?: string | null): string {
   if (!cal) return "";
   const model = cal.kind === "full" ? "完整 3×3 椭球" : "对角软铁";
@@ -49,10 +58,10 @@ export function magResultHtml(cal: MagCalibration | null, verifyLine: string, st
       : `<div>软铁 scale [${cal.scale.map((v) => v.toFixed(3)).join(", ")}]</div>`) +
     `<div>场强 ${cal.field.toFixed(1)} μT · 样本 ${cal.count} · 残差 ${(cal.residual * 100).toFixed(2)}%` +
     (cal.validation
-      ? ` · 验证残差 ${(cal.validation.residual * 100).toFixed(2)}%（${cal.validation.count} 点，比值 ${cal.validation.ratio.toFixed(2)}）`
+      ? ` · 验证残差 ${(cal.validation.residual * 100).toFixed(2)}%（${cal.validation.count} 点，比值 ${ratioText(cal.validation.ratio)}）`
       : "") +
     (cal.validation?.late
-      ? ` · 后段留出 ${(cal.validation.late.residual * 100).toFixed(2)}%（${cal.validation.late.count} 点，比值 ${cal.validation.late.ratio.toFixed(2)}）`
+      ? ` · 后段留出 ${(cal.validation.late.residual * 100).toFixed(2)}%（${cal.validation.late.count} 点，比值 ${ratioText(cal.validation.late.ratio)}）`
       : "") +
     `</div>` +
     (cal.kind === "full"

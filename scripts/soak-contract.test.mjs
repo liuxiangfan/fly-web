@@ -10,13 +10,40 @@ test('CLI uses strict booleans, finite positive numbers and rejects combined mod
   for (const args of [['--batch', '--reconnect'], ['--batch=no'], ['--seconds=NaN'], ['--interval=0'], ['--seconds=-1'], ['--seeds=1.5'], ['--drop-every=Infinity'], ['--heap-limit-mb=-1'], ['--unknown']]) assert.throws(() => parseSoakArgs(args));
 });
 test('heap exemption is NOT_MEASURED, may continue gate, never erases measurements', () => {
-  assert.deepEqual(heapVerdict([null, null], 24, false), { heapMeasured:false, heapOk:false, heapStatus:'NOT_MEASURED', heapWaived:false, heapGateOk:false, heapGrowMb:null });
+  const empty = heapVerdict([null, null], 24, false);
+  assert.equal(empty.heapMeasured, false); assert.equal(empty.heapOk, false);
+  assert.equal(empty.heapStatus, 'NOT_MEASURED'); assert.equal(empty.heapWaived, false); assert.equal(empty.heapGateOk, false);
+  assert.equal(empty.heapGrowMb, null); assert.equal(empty.heapPeakGrowthMb, null); assert.equal(empty.heapTrendMb, null);
+  assert.equal(empty.heapPeakLimitMb, 48, '峰值上限默认是增长上限的两倍');
   const waived = heapVerdict([null, null], 24, true);
   assert.equal(waived.heapStatus, 'NOT_MEASURED'); assert.equal(waived.heapOk, false); assert.equal(waived.heapGateOk, true); assert.equal(waived.heapWaived, true);
   assert.equal(heapVerdict([10, 10, 40], 24, true).heapGateOk, false);
   assert.equal(heapVerdict([10, 11, 12], 24, true).heapMeasured, true);
   assert.equal(heapVerdict([NaN, Infinity], 24, true).heapGateOk, false);
   assert.equal(heapVerdict(['10', '11'], 24, true).heapGateOk, false);
+});
+test('heap verdict checks start→end growth, transient peak and linear trend together', () => {
+  // ① 中途尖峰后回落：起终点差为 0，靠「峰值增量」兜住（只看终点差会漏）
+  const spike = heapVerdict([10, 20, 60, 20, 20, 20], 24, false);
+  assert.equal(spike.heapGrowMb, 0);
+  assert.equal(spike.heapPeakGrowthMb, 40);
+  assert.equal(spike.heapGateOk, true, '40 MB 峰值增量在 2×上限（48）内属可接受波动');
+  // ② 单调爬升：起终点差、峰值增量与趋势三项全部超限
+  const runaway = heapVerdict([10, 20, 60, 90, 120], 24, false);
+  assert.equal(runaway.heapGrowMb, 100);
+  assert.equal(runaway.heapGateOk, false);
+  assert.ok(runaway.heapTrendMb > 24, `趋势必须超限：${runaway.heapTrendMb}`);
+  // ③ 慢泄漏被末点 GC 掩盖：起终点差只有 10 MB、峰值增量 48 未超 2×上限，
+  //    但趋势（拟合窗口内总增长）反映持续爬升 → 必须判失败
+  const masked = heapVerdict([10, 20, 30, 40, 60, 68, 68, 30], 24, false);
+  assert.equal(masked.heapGrowMb, 10);
+  assert.equal(masked.heapPeakOk, true);
+  assert.ok(masked.heapTrendMb > 24, `趋势必须抓出慢泄漏：${masked.heapTrendMb}`);
+  assert.equal(masked.heapGateOk, false);
+  // ④ 只有两点时无法拟合趋势：不假装有结论，但起点→终点仍然生效
+  const twoPoint = heapVerdict([10, 11], 24, false);
+  assert.equal(twoPoint.heapTrendMb, null);
+  assert.equal(twoPoint.heapTrendOk, true);
 });
 test('heap growth never compares the last sample with itself (two-point samples)', () => {
   // 两点样本：必须从第一个实测点算，[10,200] 是真增长 190 MB，不能算成 0 MB

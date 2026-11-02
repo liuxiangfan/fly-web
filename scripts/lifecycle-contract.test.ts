@@ -157,4 +157,67 @@ await test("句柄复用：旧会话未释放时新会话拒绝 open；旧会话
   await ra;
 });
 
+await test("close 永不落定：dispose 有界返回，端口恢复后重试能真正关闭", async () => {
+  let closeCalls = 0;
+  let hang = true;
+  let closed = 0;
+  const port = {
+    readable: new ReadableStream<Uint8Array>({ start() {}, cancel() {} }),
+    async open() {},
+    close() {
+      closeCalls++;
+      if (hang) return new Promise<void>(() => {}); // 驱动异常：永不落定
+      closed++;
+      return Promise.resolve();
+    },
+  };
+  const s = new SerialTransportSession(port, 1, () => {}, () => {});
+  assert.equal(await s.open(115200), true);
+  const t0 = Date.now();
+  assert.equal(await s.dispose(), false, "close 挂住时不能谎称已关闭");
+  assert.ok(Date.now() - t0 < 5000, `dispose 必须有界返回（实测 ${Date.now() - t0} ms）`);
+  hang = false;
+  assert.equal(await s.dispose(), true, "端口恢复后重试必须成功");
+  assert.equal(closed, 1);
+  assert.ok(closeCalls >= 2);
+});
+
+await test("同一 tick 内 dispose：setup 直接作废，端口不会被真正打开", async () => {
+  let opened = 0;
+  const port = {
+    readable: new ReadableStream<Uint8Array>({ start() {}, cancel() {} }),
+    async open() { opened++; },
+    async close() {},
+  };
+  const s = new SerialTransportSession(port, 1, () => {}, () => {});
+  const opening = s.open(115200);
+  assert.equal(await s.dispose(), true, "连 open 都还没开始，没有句柄需要释放");
+  assert.equal(await opening, false, "setup 应被作废而不是假装打开成功");
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(opened, 0, "作废后不得再调用 port.open");
+});
+
+await test("open 永不落定：dispose 有界返回；迟到的 open 必须自行关闭，不泄漏句柄", async () => {
+  let releaseOpen!: () => void;
+  let opened = 0;
+  let closes = 0;
+  const port = {
+    readable: new ReadableStream<Uint8Array>({ start() {}, cancel() {} }),
+    open() { return new Promise<void>((resolve) => { releaseOpen = () => { opened++; resolve(); }; }); },
+    async close() { closes++; },
+  };
+  const s = new SerialTransportSession(port, 1, () => {}, () => {});
+  const opening = s.open(115200);
+  // 让 open 真正进入 await port.open（同一 tick 里 dispose 会把 setup 直接判为作废，端口根本不会打开）
+  await new Promise((r) => setTimeout(r, 0));
+  const t0 = Date.now();
+  assert.equal(await s.dispose(), false, "open 挂起时不能声称已打开+已关闭");
+  assert.ok(Date.now() - t0 < 5000, `dispose 必须有界返回（实测 ${Date.now() - t0} ms）`);
+  releaseOpen();
+  await assert.rejects(opening, /会话已作废|未能释放/, "迟到的 open 必须失败");
+  assert.equal(opened, 1);
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(closes, 1, "迟到的 open 必须自行 close，不得泄漏已打开端口");
+});
+
 console.log(`lifecycle-contract: ${pass} PASS / 0 FAIL`);

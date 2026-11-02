@@ -4111,6 +4111,27 @@ const dirty: ImuParams = { gyroBiasDps: 1, gyroNoiseDps: 0.2, gyroWalkDps: 0, gy
       branchesOk,
     `磁：${magHtml.replace(/<[^>]+>/g, "").slice(0, 60)}…；加计：${accelHtml.replace(/<[^>]+>/g, "").slice(0, 40)}…`,
   );
+
+  // 复核 P1-4：训练残差为 0 时生产拟合给出 ratio=NaN，JSON 往返后是 null；
+  // parser 接受这种对象，旧实现的 `ratio.toFixed(2)` 会在渲染阶段抛 TypeError。
+  const nullRatioCal = JSON.parse(JSON.stringify({
+    ...cfg.magCalibration,
+    validation: { residual: 0, count: 96, ratio: null, late: { residual: 0, count: 48, ratio: null } },
+  })) as typeof cfg.magCalibration;
+  let nullRatioHtml = "";
+  let nullRatioError = "";
+  try {
+    nullRatioHtml = magResultHtml(nullRatioCal, "");
+  } catch (e) {
+    nullRatioError = e instanceof Error ? e.message : String(e);
+  }
+  const lateHtml = nullRatioHtml.includes("后段留出");
+  check(
+    "校准面板：ratio=null（训练残差为 0，JSON 往返）渲染为「不适用」，不得抛错或显示 NaN",
+    nullRatioError === "" && nullRatioHtml.includes("—（不适用）") && lateHtml &&
+      !/NaN|undefined/.test(nullRatioHtml),
+    nullRatioError ? `渲染抛错：${nullRatioError}` : `渲染：${nullRatioHtml.replace(/<[^>]+>/g, "").slice(0, 96)}`,
+  );
 }
 
 console.log(failures === 0 ? "\n全部通过 ✅" : `\n${failures} 项失败 ❌`);

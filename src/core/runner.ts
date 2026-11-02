@@ -541,8 +541,11 @@ export interface TraceResult {
 /** 跑一次并返回逐帧 trace（步数上限保护，避免长跑把内存吃满） */
 export function runTrace(
   configIn: ExperimentConfig,
-  maxSteps = 20000,
+  maxStepsIn = 20000,
 ): TraceResult {
+  // 上限参数必须是非负安全整数：NaN 会让 `steps.length >= maxSteps` 永远为假（等于没有上限），
+  // 1.5 会多记一步。非法值回落到默认上限，而不是悄悄取消保护。
+  const maxSteps = Number.isFinite(maxStepsIn) && maxStepsIn >= 1 ? Math.floor(maxStepsIn) : 20000;
   const config = cloneExperimentConfig(configIn);
   const world = new World(scenarios[config.scenario] ?? scenarios.hover, config.seed);
   if (config.manualTargetDeg) world.setManualTarget(config.manualTargetDeg);

@@ -15,6 +15,8 @@ function serializeHandle<T>(handle: object, work: () => Promise<T>): Promise<T> 
 
 /** Setup and cleanup share one lease and one awaited, idempotent disposal. */
 export class TransportSession<H extends object> {
+  /** 外部 open/GATT 发现的上限：超过后仍继续清理，不让释放永久挂起。 */
+  private static readonly SETUP_WAIT_MS = 1000;
   disposed = false;
   disposePromise: Promise<boolean> | null = null;
   private setupPromise: Promise<boolean> | null = null;
@@ -44,14 +46,23 @@ export class TransportSession<H extends object> {
     this.disposed = true; // Invalidate callbacks before the first await.
     if (this.disposePromise) return this.disposePromise;
     const run = (async () => {
-      try { await this.setupPromise; } catch { /* Cleanup partial setup too. */ }
+      // setup（open / GATT 发现）也可能永不落定：无界等待会让释放事务永久挂住。
+      // 有界等待后照常尝试清理；若 setup 之后才完成，setup 内部会看到 disposed 并自行关闭。
+      let setupSettled = true;
+      if (this.setupPromise) {
+        setupSettled = await Promise.race([
+          this.setupPromise.then(() => true, () => true),
+          new Promise<boolean>((resolve) => setTimeout(() => resolve(false), TransportSession.SETUP_WAIT_MS)),
+        ]);
+      }
       const mine = handleOwners.get(this.handle) === this;
       let closed = false;
       try { closed = await this.cleanup(mine); } catch { /* Keep failed lease. */ }
       if (mine && closed && handleOwners.get(this.handle) === this) {
         handleOwners.delete(this.handle);
       }
-      return closed;
+      // setup 未落定 → 句柄可能稍后才被打开，不能声称"已释放"；调用方应保留引用并重试。
+      return closed && setupSettled;
     })();
     this.disposePromise = run;
     // 失败（典型：读锁未释放导致 close 被拒）**不能永久缓存**：否则同一会话之后再怎么
@@ -78,7 +89,7 @@ export interface SerialTransportPort {
  * （实测：拔线 2.8 s 后仍 serial=false、重连次数 0）。这里只等有界时间，之后**照常尝试**
  * 释放并 close；close 失败会如实记账并返回 false，绝不在没关掉端口时谎称已释放。
  */
-function settleWithin(p: Promise<unknown> | undefined, ms: number): Promise<void> {
+function settleWithin(p: Promise<unknown> | null | undefined, ms: number): Promise<void> {
   if (!p) return Promise.resolve();
   return Promise.race([
     Promise.resolve(p).then(() => undefined, () => undefined),
@@ -94,6 +105,8 @@ export class SerialTransportSession {
   private opened = false;
   /** 读锁释放窗口：只防「永不结束的 read」卡死重连，不缩短正常路径的等待。 */
   private static readonly RELEASE_WAIT_MS = 600;
+  /** port.close() 的等待上限：驱动异常时 close 可能永不落定。 */
+  static readonly CLOSE_WAIT_MS = 800;
 
   constructor(
     readonly port: SerialTransportPort,
@@ -113,13 +126,28 @@ export class SerialTransportSession {
         return true;
       }
       for (let attempt = 0; attempt < 2; attempt++) {
-        try {
-          await port.close();
+        // close 本身也可能永不落定（驱动/蓝牙栈异常）。有界等待后如实返回 false；
+        // 若它在后台稍后成功，补记"已关闭"，避免端口计数永久泄漏。
+        const closing = Promise.resolve(port.close()).then(() => true, () => false);
+        const outcome = await Promise.race([
+          closing,
+          new Promise<boolean>((resolve) => setTimeout(() => resolve(false), SerialTransportSession.CLOSE_WAIT_MS)),
+        ]);
+        if (outcome) {
           this.opened = false;
           this.reader = null;
           this.onClose(true);
           return true;
-        } catch { /* Retry only after read completion and lock release. */ }
+        }
+        // 超时后 close 仍可能在后台成功：补记"已关闭"，否则 openPorts 会永久多 1。
+        // 若它本来就已拒绝，这个回调是空操作。
+        void closing.then((ok) => {
+          if (ok && this.opened) {
+            this.opened = false;
+            this.reader = null;
+            this.onClose(true);
+          }
+        });
       }
       // 端口仍开着：保留 reader/opened，下一次 dispose 会按当时的锁状态重试 close。
       this.onClose(false);
@@ -133,6 +161,11 @@ export class SerialTransportSession {
   open(baudRate: number): Promise<boolean> {
     return this.lease.setup(async () => {
       await this.port.open({ baudRate });
+      // 迟到的 open：会话在等待期间已被释放——不能再把端口据为己有并泄漏一个已打开句柄。
+      if (this.disposed) {
+        try { await settleWithin(Promise.resolve(this.port.close()), SerialTransportSession.CLOSE_WAIT_MS); } catch { /* 尽力 */ }
+        throw new Error("会话已作废：open 迟于 dispose");
+      }
       this.opened = true;
       this.onOpen();
     });

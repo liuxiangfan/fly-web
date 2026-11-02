@@ -34,11 +34,29 @@ export function heapVerdict(values,limit,allowNoHeap=false) {
   const heapMeasured=measured.length>=2;
   // 跳过首个 warm-up 点需要**至少 3 个**实测点；只有两个点时从第一个实测值算。
   // 旧实现一律用 measured[1] 当基线：两点样本 [10,200] 会算成 0 MB 增长并 PASS。
-  const baseline=heapMeasured?(measured.length>=3?measured[1]:measured[0]):null;
+  const baselineIdx=heapMeasured?(measured.length>=3?1:0):0;
+  const baseline=heapMeasured?measured[baselineIdx]:null;
+  const windowed=heapMeasured?measured.slice(baselineIdx):[];
   const heapGrowMb=heapMeasured?measured[measured.length-1]-baseline:null;
-  const heapOk=!malformed&&heapMeasured&&finite(limit)&&limit>0&&heapGrowMb<=limit;
+  // 峰值增量：窗口内最高点相对基线。只看「起点→终点」会漏掉「中途冲到 60 MB 又跌回来」
+  // 这类真实泄漏形态（复核 6.5：堆判定必须同时看起点→终点、线性趋势和峰值）。
+  const heapPeakGrowthMb=heapMeasured?Math.max(...windowed)-baseline:null;
+  // 线性趋势：窗口内最小二乘斜率 × (n-1) = 拟合出的「窗口内总增长」。
+  // 慢泄漏在起终点上可能只差几 MB，但趋势会稳定为正；只看终点差会被一次 GC 抵消掉。
+  let heapTrendMb=null;
+  if(heapMeasured&&windowed.length>=3) {
+    const n=windowed.length, xm=(n-1)/2, ym=windowed.reduce((a,b)=>a+b,0)/n;
+    let num=0, den=0;
+    for(let i=0;i<n;i++) { num+=(i-xm)*(windowed[i]-ym); den+=(i-xm)**2; }
+    heapTrendMb=(den>0?num/den:0)*(n-1);
+  }
+  const peakLimit=finite(limit)&&limit>0?limit*2:null;
+  const heapGrowOk=heapMeasured&&finite(limit)&&limit>0&&heapGrowMb<=limit;
+  const heapPeakOk=heapMeasured&&peakLimit!==null&&heapPeakGrowthMb<=peakLimit;
+  const heapTrendOk=heapTrendMb===null?heapMeasured:heapTrendMb<=limit;
+  const heapOk=!malformed&&heapGrowOk&&heapPeakOk&&heapTrendOk;
   const heapWaived=!malformed&&!heapMeasured&&allowNoHeap===true;
-  return {heapMeasured,heapOk,heapStatus:malformed?'INVALID':heapMeasured?(heapOk?'PASS':'FAIL'):'NOT_MEASURED',heapWaived,heapGateOk:heapOk||heapWaived,heapGrowMb};
+  return {heapMeasured,heapOk,heapStatus:malformed?'INVALID':heapMeasured?(heapOk?'PASS':'FAIL'):'NOT_MEASURED',heapWaived,heapGateOk:heapOk||heapWaived,heapGrowMb,heapPeakGrowthMb,heapTrendMb,heapPeakOk,heapTrendOk,heapPeakLimitMb:peakLimit};
 }
 export function validateSamples(samples) {
   const problems=[];

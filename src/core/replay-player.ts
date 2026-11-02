@@ -10,7 +10,6 @@
  * 播放器只负责「这一拍该消费哪几帧、每帧 dt 多少」，不碰 DOM、估计器和时钟。
  */
 import type { ReplayFrame } from "./replay";
-import { logIntervalSec } from "./serial";
 
 export interface ReplayStep {
   frame: ReplayFrame;
@@ -57,16 +56,27 @@ export class ReplayPlayer {
   private timelineSec: number[] = [];
 
   constructor(opts: ReplayPlayerOptions = {}) {
-    this.maxPerTick = Math.max(1, opts.maxFramesPerTick ?? 4000);
+    // 上限参数本身也要合法：NaN 会让 while 条件永远为假（一帧都不消费），
+    // Infinity 等于没有上限。非有限/非正数一律回落到默认值，并向下取整。
+    const raw = opts.maxFramesPerTick ?? 4000;
+    this.maxPerTick = Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : 4000;
   }
 
   private rebuildTimeline(): void {
     const n = this.frames.length;
     const out = new Array<number>(n);
     let total = 0;
+    // 有效时间轴 = 运行最大值（单调不降）：
+    // 时间列允许少量回退（replay.ts 的容忍策略），但**回退段不能再积分一次**。
+    // 旧实现把负间隔夹成 0、却仍从回退后的时间继续累计，于是 200→150→210 会把
+    // 已被 150..200 覆盖的 50 ms 再积一遍（0.40 s 的日志积出 0.44 s）。
+    // 现在回退帧 dt=0，后续帧从前驱的**历史最大时刻**起算，Σdt 恒等于单调覆盖跨度。
+    let prevT = n > 0 ? this.frames[0]!.tMs : 0;
     for (let i = 0; i < n; i++) {
-      if (i > 0) total += logIntervalSec(this.frames[i - 1]!.tMs, this.frames[i]!.tMs);
+      const t = Math.max(prevT, this.frames[i]!.tMs);
+      if (i > 0) total += (t - prevT) / 1000;
       out[i] = total;
+      prevT = t;
     }
     this.timelineSec = out;
   }

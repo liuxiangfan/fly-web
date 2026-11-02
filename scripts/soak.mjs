@@ -1,6 +1,8 @@
 /** Long soak acceptance. Run batch/reconnect separately; --output preserves distinct reports. */
 import puppeteer from 'puppeteer-core';
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync, readdirSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseSoakArgs, heapVerdict, validateReconnectEvents, validateBatch, validateSamples, ALGORITHMS, SOAK_BATCH_RUNS } from './soak-contract.mjs';
@@ -21,8 +23,25 @@ const profile=mkdtempSync(join(tempRoot,'profile-'));
 const samples=[], batchLog=[], consoleErrors=[];
 let reconnectEvents=[],browser;
 let failure=null;
+/**
+ * 报告溯源（复核 6.5）：长稳报告必须能绑定「哪份代码、哪份产物、哪个浏览器、什么时间窗」。
+ * 旧报告只有参数与样本，无法回答「这份 600 s 结论对应哪个 commit / 哪次构建」。
+ */
+const startedAt=new Date().toISOString();
+const gitCommit=(()=>{try{return execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).trim();}catch{return null;}})();
+const distHash=(()=>{
+  try {
+    const walk=d=>readdirSync(d,{withFileTypes:true}).sort((a,b)=>a.name<b.name?-1:1)
+      .flatMap(e=>e.isDirectory()?walk(join(d,e.name)):[join(d,e.name)]);
+    const h=createHash('sha256');
+    for(const f of walk(join(root,'dist'))) h.update(f.slice(root.length)).update(readFileSync(f));
+    return h.digest('hex').slice(0,16);
+  } catch { return null; }
+})();
+let browserVersion=null;
 try {
   browser=await puppeteer.launch({executablePath,userDataDir:profile,headless:'new',args:['--no-sandbox','--disable-dev-shm-usage','--use-angle=swiftshader','--enable-unsafe-swiftshader']});
+  browserVersion=await browser.version();
   const page=await browser.newPage();
   await page.setViewport({width:1280,height:900});
   page.on('console',m=>{if(m.type()==='error') consoleErrors.push(m.text().slice(0,300));});
@@ -137,8 +156,12 @@ const first=samples[0],last=samples.at(-1);
 const clockAdvanced=!!first&&!!last&&capacity.ok&&(args.reconnect?last.t>first.t:last.t-first.t>args.seconds*.3);
 const errorsOk=consoleErrors.length===0;
 const verdict={errorsOk,capped:capacity.ok,...heap,clockAdvanced,clockGrowthSec:first&&last?last.t-first.t:null,reconnectOk:recovery.ok,reconnectRecoveryOk:recovery.ok,actualDrops:recovery.drops,recoveredSegments:recovery.recovered,batchOk:batch.ok,problems:[...capacity.problems,...recovery.problems,...batch.problems],consoleErrors,pass:errorsOk&&capacity.ok&&heap.heapGateOk&&clockAdvanced&&recovery.ok&&batch.ok};
-const report={generatedAt:new Date().toISOString(),url,seconds:args.seconds,intervalMs:args.interval,withBatch:args.batch,withReconnect:args.reconnect,expectedSeeds:args.seeds,batchesExpected:args.batch?SOAK_BATCH_RUNS:0,dropEverySec:args.dropEvery,heapLimitMb:args.heapLimitMb,allowNoHeap:args.allowNoHeap,output,profile,samples,batchLog,reconnectEvents,failure,verdict};
+const report={generatedAt:new Date().toISOString(),commit:gitCommit,distHash,browserVersion,startedAt,finishedAt:new Date().toISOString(),url,seconds:args.seconds,intervalMs:args.interval,withBatch:args.batch,withReconnect:args.reconnect,expectedSeeds:args.seeds,batchesExpected:args.batch?SOAK_BATCH_RUNS:0,dropEverySec:args.dropEvery,heapLimitMb:args.heapLimitMb,allowNoHeap:args.allowNoHeap,output,profile,samples,batchLog,reconnectEvents,failure,verdict};
 mkdirSync(dirname(output),{recursive:true});writeFileSync(output,`${JSON.stringify(report,null,2)}\n`,'utf8');
-console.log(`[${heap.heapStatus}] 堆：${heap.heapGrowMb===null?'无足够测量':heap.heapGrowMb.toFixed(1)+' MB'}${heap.heapWaived?'（显式豁免，仅 gate 继续；不是 PASS）':''}`);
+console.log(`溯源：commit ${gitCommit??'未知'}、dist ${distHash??'未知'}、浏览器 ${browserVersion??'未知'}、窗口 ${startedAt} → ${report.finishedAt}`);
+console.log(`[${heap.heapStatus}] 堆：起点→终点 ${heap.heapGrowMb===null?'无足够测量':heap.heapGrowMb.toFixed(1)+' MB'}`+
+  `；峰值增量 ${heap.heapPeakGrowthMb===null?'n/a':heap.heapPeakGrowthMb.toFixed(1)+' MB（上限 '+heap.heapPeakLimitMb+'）'}`+
+  `；线性趋势 ${heap.heapTrendMb===null?'样本不足，未拟合':heap.heapTrendMb.toFixed(1)+' MB（上限 '+args.heapLimitMb+'）'}`+
+  `${heap.heapWaived?'（显式豁免，仅 gate 继续；不是 PASS）':''}`);
 console.log(`[${verdict.pass?'PASS':'FAIL'}] 长稳门禁${verdict.problems.length?'：'+verdict.problems.join('；'):''}`);
 console.log(`报告：${output}`);process.exit(verdict.pass?0:1);

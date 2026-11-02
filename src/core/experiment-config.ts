@@ -142,6 +142,8 @@ export const DEFAULT_ESTIMATOR_TUNING: Record<EstimatorId, EstimatorTuning> = {
     enabled: true, magEnabled: true,
     accelGate: false, gateDeg: 40, gateMagPct: 0.35, gateRecovery: false, rampEnabled: false, magMode: "yaw",
     kalmanGate: "angle", kalmanChi2: 11.345,
+    // 与界面读回同形：不写这个字段时 `tuningOf()` 会补出 false，默认档案就往返失败
+    kalmanResetCov: false,
     params: { gyroNoiseDps: 0.2, obsNoise: 0.05 },
   },
 };
@@ -233,8 +235,21 @@ export interface ConfigProblem {
   message: string;
 }
 
-/** 界面「解算频率」下拉的全部档位（UI 可表达的取值就是白名单）。 */
+/** 界面「解算频率」下拉的全部档位（**UI 可表达的离散选项**）。 */
 export const SOLVE_RATE_CHOICES = [500, 250, 125, 100, 50] as const;
+
+/**
+ * 内核支持的解算频率**物理范围**（Hz）。
+ *
+ * 为什么与 `SOLVE_RATE_CHOICES` 分开：数值内核（runner / Worker / 离线复算）能正确跑任意
+ * 合理频率——"200 Hz 在 500 Hz 仿真下每 2.5 步解算一次"是内核的正常能力，实测也正确
+ * （`SolveLoop` 的余量保留）。此前把 UI 下拉的五档当成通用 schema，于是
+ * 「内核跑得对、通用校验器却拒绝 200 Hz」——UI 的枚举不该成为数值内核的契约。
+ *
+ * 分层：本范围用于 `experimentConfigProblems`（schema 层）；
+ * `archiveExpressibilityProblems`（界面层）再要求取值落在下拉档位内。
+ */
+export const KERNEL_SOLVE_RATE_HZ = { min: 10, max: 1000 } as const;
 
 /**
  * 档案里存在、但**界面上没有对应控件**的顶层字段。
@@ -243,7 +258,15 @@ export const SOLVE_RATE_CHOICES = [500, 250, 125, 100, 50] as const;
  * 导入提示必须把它们列为「本次未恢复」。新增字段时要么在界面上接一个控件，
  * 要么加进这个清单——不能让导入"成功"却悄悄换了一份配置。
  */
-export const ARCHIVE_IGNORED_KEYS = ["durationSec", "steadyFromSec", "autoCoarseAlign"] as const;
+/**
+ * 只保留真正无法恢复的字段。
+ *
+ * `steadyFromSec` / `autoCoarseAlign` 之前也被列在这里，但它们**直接改变解算结果**
+ * （粗对准会重置姿态、稳态窗口会改变 RMSE）——把它们当"展示字段"会让
+ * 「按同一配置重跑」在不同导入前后得到两套结论。现在两者都进了活状态并参与往返比较。
+ * `durationSec` 仍然只能是"本次已跑时长"：导入后从 seed 起点重新计时。
+ */
+export const ARCHIVE_IGNORED_KEYS = ["durationSec"] as const;
 
 /**
  * 界面无法表达的取值：导入必须**拒绝**，而不是解析成功后静默改写。
@@ -253,6 +276,14 @@ export function archiveExpressibilityProblems(cfg: ExperimentConfig): ConfigProb
   const out: ConfigProblem[] = [];
   if (cfg.initialAttitude?.kind === "fixed-axis") {
     out.push({ path: "initialAttitude.kind", message: "界面只支持 level / random；固定轴初始姿态只能由脚本/runner 使用" });
+  }
+  // 解算频率：内核允许 [10,1000] Hz 的任意整数，但**界面**只有下拉里的五档。
+  // 这一条必须留在界面层：放进 schema 层会把"UI 枚举"变成"数值内核契约"（复核 P2-3）。
+  if (Number.isFinite(cfg.solveRateHz) && !(SOLVE_RATE_CHOICES as readonly number[]).includes(cfg.solveRateHz)) {
+    out.push({
+      path: "solveRateHz",
+      message: `界面下拉只有 ${SOLVE_RATE_CHOICES.join(" / ")} Hz；${cfg.solveRateHz} Hz 只能由脚本/runner 使用`,
+    });
   }
   for (const id of Object.keys(cfg.estimators ?? {}) as EstimatorId[]) {
     if (cfg.estimators[id]?.enabled === false) {
@@ -330,8 +361,10 @@ export function experimentConfigProblems(raw: unknown, required = true): ConfigP
   check(raw, "seed", "seed", v => Number.isSafeInteger(v) && (v as number) >= 0 && (v as number) <= 0xffffffff, required);
   check(raw, "scenario", "scenario", v => typeof v === "string" && Object.prototype.hasOwnProperty.call(scenarios, v), required);
   check(raw, "durationSec", "durationSec", num(0.1, 86400), required);
-  // 解算频率只有下拉里的五档；333 Hz 这类值界面无法表达，导入会回落成 500 Hz。
-  check(raw, "solveRateHz", "solveRateHz", v => (SOLVE_RATE_CHOICES as readonly number[]).includes(v as number), required);
+  // schema 层只要求内核物理范围（见 KERNEL_SOLVE_RATE_HZ）：200 Hz 是内核能力，不该被拒。
+  // 「界面下拉能不能表达」由 archiveExpressibilityProblems 负责。
+  check(raw, "solveRateHz", "solveRateHz",
+    v => Number.isInteger(v) && (v as number) >= KERNEL_SOLVE_RATE_HZ.min && (v as number) <= KERNEL_SOLVE_RATE_HZ.max, required);
   check(raw, "magModel", "magModel", v => v === "diag" || v === "full", required);
   check(raw, "magTargetUts", "magTargetUts", positive);
   for (const k of ["magCalibrationApplied", "accelCalibrationApplied", "autoCoarseAlign"]) check(raw, k, k, bool);

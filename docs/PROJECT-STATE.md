@@ -2,6 +2,27 @@
 
 <!-- current:begin -->
 
+> **满分质量整改入口（2026-11-02）**：[`QUALITY-FULL-SCORE-PLAN-2026-11-02.md`](QUALITY-FULL-SCORE-PLAN-2026-11-02.md)
+> 记录了对提交 `d6c4a22` 的 **84/100** 独立复核、P1/P2 反例、判断标准、实施顺序和 100 分验收矩阵。
+> **先读任务书再继续修复**；当前工作树中的未提交修改不算已完成证据，只有红→绿反例、完整门禁和提交记录才算。
+
+> **最新一轮：2026-11-02「满分质量整改轮」**（详见 [`QUALITY-FULL-SCORE-PLAN-2026-11-02.md`](QUALITY-FULL-SCORE-PLAN-2026-11-02.md) 第 9 节与 [`CHANGELOG.md`](CHANGELOG.md) 顶部）。
+> 把复核任务书的 P1-1…P1-6 与 P2-1…P2-4 全部修掉，每条都有永久反例：
+> **时间**回退不再重复积分（有效时间轴取运行最大值，0.10 s 日志不再积出 0.14 s）；
+> **外部真值**按子步 `qSlerp` 插值（新增 `core/truth-track.ts`；10 s 空洞里完美日志 Mahony 平均误差实测 0.39°）；
+> **档案**导入拆成「探测写入 / 破坏性提交」，失败时现场逐项不变（新出口 `experiment.site()` 用于断言）；
+> **`ratio: null`** 渲染为「—（不适用）」（不再 `TypeError`）；
+> **close 失败**不丢会话、生产代码 2 s 退避自动重试（新出口 `plumbing().pendingPortCleanup`）；
+> **setup/open/close** 全部有界（迟到 open 自行 close）；
+> **稳态窗口/粗对准**进活状态并参与往返；**canonical form** 逐字节可逆；**内核频率范围与 UI 档位分层**（200 Hz 内核可用）；
+> **上限参数**统一有限非负整数。浏览器门禁**不再假绿**（浏览器进程被回收即判基础设施失败），
+> 八处固定 sleep 改状态等待（含 CSV 导出的 `blob.text()` 读取竞态），并加 `gotoSafe()` 在渲染进程被回收时同页重试一次（结论仍判失败）。
+> 本轮实测：`check` 154 项 0 FAIL、`budget` 14/14、`doccheck --recompute` 4/4、
+> `smoke` **91 PASS / 0 FAIL（零 warning、零重启）**、同 commit 同 dist **连续 5 次**全绿；
+> `soak --batch --seconds=120` 通过（堆增长 +10.5 MB / 峰值增量 10.5 MB / 线性趋势 +5.3 MB），报告带 commit·dist·浏览器·时间窗溯源。
+> **仍未做**：真机串口/BLE 各 30 min、门禁拆 shard + Ubuntu CI 多轮、当前 commit 的视觉证据、堆判定「线性趋势」、PR/部署后 smoke。
+> 因此本轮结论是「按现有证据达到可复核的高质量水准」，**不是**「各维度满分」。
+
 > **最新一轮：2026-11-01「按两轮独立复核的阻断项修复」**（详见 [`CHANGELOG.md`](CHANGELOG.md) 顶部）。
 > 门禁自述（严格顺序）：`npx tsc --noEmit` → `npm run check` → `npm run build` → `npm run budget` →
 > `npx tsx scripts/doccheck.ts --recompute` → `npm run smoke`；各项计数见上方 verify 清单
@@ -47,14 +68,14 @@
 **已部署**：GitHub Actions → Cloudflare Workers，域名 `fly_web.070616.xyz`
 （备用 quaternion-attitude-demo.liu06167492.workers.dev），push 即自动上线。
 
-<!-- counts: experiments=19 demos=8 selftest=124 smoke=90 docpages=15 -->
-<!-- verify: check=153 contracts=yes status=yes smoke=90 budget=14 -->
-数值自检 124 + 场景几何 10 + HTML 契约 15 + 文档基准 4
+<!-- counts: experiments=19 demos=8 selftest=125 smoke=91 docpages=15 -->
+<!-- verify: check=154 contracts=yes status=yes smoke=91 budget=14 -->
+数值自检 125 + 场景几何 10 + HTML 契约 15 + 文档基准 4
 ## 技术栈与命令
 
 - Vite + TypeScript（无框架）+ Three.js（three ^0.170）
 - `npm run dev` / `npm run build`（= `tsc --noEmit && vite build` → `dist/`）/ `npm run preview`
-- `npm run check` = `selftest`（**124 项数值**）+ `scenecheck`（10 项三维场景几何）+ `htmlcheck`（**15 项** HTML↔TS 契约/可访问性/静态资源/文档结构）+ `doccheck`（引用 + 严格 schema + 关系约束 + 正文数字块 + 小基准复算 4 项），共 **153 项**；随后再跑 `contracts`（时间分拍 / 档案 schema / 连接生命周期 / Worker 协作取消 / trace 逐帧 / soak 与状态契约，输出项数另计）与 `statuscheck`（**计数与门禁清单一致性**）
+- `npm run check` = `selftest`（**125 项数值**）+ `scenecheck`（10 项三维场景几何）+ `htmlcheck`（**15 项** HTML↔TS 契约/可访问性/静态资源/文档结构）+ `doccheck`（引用 + 严格 schema + 关系约束 + 正文数字块 + 小基准复算 4 项），共 **154 项**；随后再跑 `contracts`（时间分拍 / 档案 schema / 连接生命周期 / Worker 协作取消 / trace 逐帧 / soak 与状态契约，输出项数另计）与 `statuscheck`（**计数与门禁清单一致性**）
 - `npm run budget` = 产物体积预算（总量/字体/字体文件数/index.html/index.html gzip/主包 JS/文档演示 chunk/引导课程 chunk/SW/Worker/全部 JS 合计 gzip/主包 gzip，**14 项上限**；
   防「一次误 import 多背一兆字体」回归。index.html 上限 600 KB（外壳 100 KB / 内联文档 700 KB 分开算）、主包 JS 285 KB / gzip 108 KB（原线，实测 gzip 100 KB）、文档演示 chunk 24 KB、引导课程 chunk 16 KB（点「开始」才加载）、懒加载 Worker 64 KB、Service Worker 8 KB、全部 JS 合计 gzip 272 KB 各自单列，按实测内容走）
 - `scripts/shot.mjs` = 开发用截图工具（`--width/--height/--el/--dofile/--json`，页面内脚本求值后截图）
@@ -271,6 +292,7 @@
 
 | 轮次 | 一句话 | 细节 |
 | --- | --- | --- |
+| 2026-11-02 满分质量整改轮 | P1-1…P1-6 与 P2-1…P2-4 全部修复并各带永久反例：时间回退不重复积分、外部真值逐子步插值、档案导入原子化、`ratio:null` 可渲染、close 失败后台重试、setup/open/close 有界、稳态窗口与粗对准进活状态、canonical form、内核频率分层、上限参数校验 | [任务书第 9 节](QUALITY-FULL-SCORE-PLAN-2026-11-02.md#9-整改执行记录与复核证据2026-11-02-实施轮) |
 | 2026-10-31 质量复核修正轮 | SO(3) 世界系、独立验证不重叠、当前器件验证、BLE 重连特征、计数口径同步 | [ROUND5](QUALITY-REVIEW-2026-10-31-ROUND5.md) |
 | 2026-10-31 闭环一致性轮 | 档案校准往返、导出/回放 IMU 语义、日志真值波形、唯一 runCore + 静止粗对准、SO(3) 指标、采样噪声换算、Worker 批量、断线重连、计数校验 | [CHANGELOG](CHANGELOG.md#2026-10-31--闭环一致性轮第五轮) |
 | 2026-10-30 可复现与结论可信轮 | P0 教材事实校正；确定性配置/种子/独立随机流；runner 与批量评测；实验档案与 benchmark/doccheck；单步与共享游标；NIS/NEES 与 χ² 门控 | [CHANGELOG](CHANGELOG.md#历史里程碑2026-10-25--2026-10-30) |
@@ -284,9 +306,9 @@
 
 ## 验证体系
 
-- `npx tsc --noEmit` → `npm run check`（124 数值 + 10 几何 + 15 HTML 契约 + 4 文档基准 + 契约脚本 + 计数与门禁清单核对，全部通过）
+- `npx tsc --noEmit` → `npm run check`（125 数值 + 10 几何 + 15 HTML 契约 + 4 文档基准 + 契约脚本 + 计数与门禁清单核对，全部通过）
   → `npm run build` → `npm run budget`（14 项上限，含文档演示 / 引导课程 chunk / SW / Worker / 全部 JS gzip 合计）
-  → `npm run smoke`（90 项浏览器端到端，需 preview）→ `npm run soak`（长稳，单独跑）
+  → `npm run smoke`（91 项浏览器端到端，需 preview）→ `npm run soak`（长稳，单独跑）
   → `npm run benchmark`（手动复算文档基准）/ `npm run doccheck --recompute`（全量只读复算）
 - 冒烟里有三条「守机制而不是守功能」的用例，值钱的地方在于它们抓的是**会悄悄坏掉**的东西：
   · **文档页八个演示必须真的在动**：三次采样画布、比对降采样指纹。重绘点只有 `docDemos.step(dt)`，

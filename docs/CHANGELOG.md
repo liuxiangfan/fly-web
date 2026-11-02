@@ -6,6 +6,63 @@
 >
 > 新增一轮里程碑时：在本文件顶部加一节（倒序），并在 PROJECT-STATE 的里程碑索引表里加一行。
 
+## 2026-11-02 · 满分质量整改轮（按 `QUALITY-FULL-SCORE-PLAN-2026-11-02.md` 的 P1/P2）
+
+任务书：对 `d6c4a22` 的 84/100 独立复核，逐项列出 P1-1…P1-6、P2-1…P2-5。本轮把 P1 全部与 P2-1…P2-4 修掉，
+每条都留下**永久反例**；P2-5 只做到「门禁不再假绿 + 状态等待」。整改记录与证据见任务书第 9 节。
+
+- **P1-1 时间回退不再重复积分**（`core/replay-player.ts`）：有效时间轴改为**运行最大值**（单调不降）。
+  旧实现把负间隔夹成 0、却仍从回退后的时间继续累计，于是 `0→50→90→50→100` 的 0.10 s 日志积出 0.14 s、
+  41 帧回退反例积出 0.44 s / 39.6°（物理期望 36°）。反例：`time-contract` 单次回退 = 0.10 s、多次回退 = 0.12 s。
+- **P1-2 长间隔外部真值逐子步插值**：新增 `core/truth-track.ts`（相邻源帧前/后真值 `qSlerp`，绝不外推），
+  `stepReplayPlayback` 只登记**帧末**真值、`onSolveDefault` 在**每个子步**取 `replayTruth.at(ctx.t)` 写
+  `state.externalTruth`、`onFrame` 才 `commit()`；真值波形（重力/磁场投影）与差分角速度因此共用同一条子步时间轴。
+  旧实现在帧入队时就把真值设成帧末值，10 s 空洞里 t=0.05 s 报出 **89.55° 假误差**。反例：`time-contract` 插值用例 +
+  浏览器「完美日志 10 s 空洞，Mahony 平均误差 0.39°」（断言 < 5°）。
+- **P1-3 档案导入事务真正原子**：`main.ts` 拆成 `writeArchiveState()`（非破坏性探测写入，`archiveProbeDepth` 抑制
+  `resetSim`）与 `commitArchiveRestore()`（验证通过后才清采集状态并 `resetSim`）；失败路径只把旧配置写回控件。
+  新增调试出口 `experiment.site()`（simTime / 三图点数 / logRows / rawRows / 校准历史 / A-B / 回放游标 / seed /
+  steadyFromSec / autoCoarseAlign），浏览器用例对三类坏档案逐次断言**现场 JSON 完全不变**。
+- **P1-4 `ratio: null` 可渲染**（`ui/calib-panel.ts`）：训练残差为 0 时生产拟合给出 NaN、JSON 往返为 null，
+  旧实现 `ratio.toFixed(2)` 在渲染阶段抛 `TypeError`。新增 `ratioText()` → `—（不适用）`；
+  `selftest` 与浏览器各加一条反例（含 `late.ratio`）。
+- **P1-5 close 失败不丢会话、生产代码后台重试**：新增 `quarantineSerialSession()` / `flushSerialCleanup()`
+  （2 s 退避直到 `dispose()` 返回 true），接住 `serialConnect` / `serialAutoReconnect` / `serialDisconnect` /
+  `dropSerialSession` / `cancelPendingReconnects` 五条路径的 `false`；新增出口 `plumbing().pendingPortCleanup`。
+  浏览器反例：假端口前 3 次 `close()` 拒绝，**不手工再 dispose**，只等生产重试 → 待清理 1→0、openPorts 1→0。
+- **P1-6 setup/open/close 全部有界**（`core/transport-session.ts`）：`dispose()` 对 setup 做 1 s 有界等待；
+  `close()` 对 `port.close()` 做 800 ms 有界等待并在后台成功时补记「已关闭」（不让 `openPorts` 永久多 1）；
+  迟到的 `open()` 发现 `disposed` 后自行 close 并抛错。`lifecycle-contract` 新增三条（close 永不落定 /
+  同一 tick dispose / open 永不落定 + 迟到 open 自清）。
+- **P2-1 `steadyFromSec` / `autoCoarseAlign` 进活状态**：`ARCHIVE_IGNORED_KEYS` 只留 `durationSec`；
+  两者参与写入、读回与往返比较（它们分别改变稳态 RMSE 与全程姿态，不能当展示字段）。
+- **P2-2 canonical form**：`kalmanResetCov: false`、`magTargetUts: 50`、`pure.magEnabled: false` 与界面读回同形；
+  无标定时 `currentExperimentConfig` 也写 `magTargetUts`。反例：默认配置 `buildArchive→JSON→parse→再导出` **逐字节等价**，
+  diag/full 两种 kind/matrix 同构。
+- **P2-3 内核范围与 UI 档位分层**：新增 `KERNEL_SOLVE_RATE_HZ = 10…1000`；schema 层只守物理范围，
+  界面层（`archiveExpressibilityProblems`）才要求落在下拉档位内。此前「runner 跑得对 200 Hz、通用校验器却拒绝」。
+- **P2-4 上限参数统一**：`ReplayPlayer.maxFramesPerTick`（NaN→4000、向下取整）、`runTrace.maxSteps`
+  （NaN→20000、1.5→1）；反例：NaN 上限不得等于取消保护、小数上限必须向下取整。
+- **P2-5 门禁稳定化（部分）**：`browserRestarts` 计数 + 文件末尾显式 `[FAIL] 基础设施失败`（续跑全绿不再算通过）；
+  五处固定 sleep 改状态等待（全帧记录按 `raw().rows`、协调转弯按 `posNed` 距离、外部真值回放按 `replay.info.idx`、
+  严格读锁按 close 拒绝计数与 serial 真连上、帧计数真增长）。**未做**：拆 shard、Ubuntu CI 多轮。
+- **档案事务补两个漏口**：① `ab-mode` 的 change 处理器在探测阶段直接返回——旧路径会 `snapshotAB()` 重建 B 组与
+  `metricsB`，失败回滚写回控件也恢复不了（「失败导入不得改变 A/B 运行期状态」的漏洞）；
+  ② 可选字段（`steadyFromSec`/`autoCoarseAlign`/`manualTargetDeg`/`ab`/`magTargetUts`）缺失时按文档默认值落盘，
+  比较的是**语义**而不是「键有没有写」，于是少写一个可选键的合法档案不再被拒。成功导入会**关闭 A/B 并在提示里说明**
+  （导入替换的是 A 组参数，旧 B 组不可比），并把「稳态窗口起点 / 粗对准已关闭」这类**无控件字段**写进导入提示。
+- **长稳门禁加三项判定**：`heapVerdict` 同时看起点→终点增长、**峰值增量**（抓「冲高又回落」）与
+  **线性趋势**（最小二乘，抓「末点被 GC 拉低掩盖的慢泄漏」）；报告新增 `commit` / `distHash` / `browserVersion` /
+  `startedAt`·`finishedAt` 溯源字段，600 s 结论因此能绑定具体代码与产物。
+- **浏览器门禁不再假绿**：`browserRestarts > 0` 即使续跑全绿也判基础设施失败；八处固定 sleep 改状态等待
+  （含 CSV 导出的 `blob.text()` 读取——慢机器上原来固定 250/400 ms 会读不完，实测误报过「未生成 / 0 列」）；
+  新增 `gotoSafe()`：渲染进程被回收（`Navigating frame was detached`）时同页重试一次并记账，
+  外层 catch 把这类错误显式标成「基础设施失败」——只为继续收集诊断，结论仍判失败；
+  同 commit 同 dist 连续 5 次 `npm run smoke` 全绿（91/91、零 warning、零重启）。
+- **仍缺证据**：真机串口/BLE 各 30 min；门禁拆 shard + Ubuntu CI 多轮；当前 commit 的视觉证据；
+  全部 JS 的 10% 体积余量（现 262/272 KB）；PR/CI/部署后 smoke/回滚演练。这些在任务书 9.13 列为未达标，
+  **不写「各维度满分」**。
+
 ## 2026-11-01 · 阻断项修复轮（第十二轮补遗：两轮独立复核的必须修项）
 
 - **浏览器门禁本身修好了**：`scripts/browser-smoke.mjs` 顶层的 `const URL` 遮蔽全局 URL 构造函数，

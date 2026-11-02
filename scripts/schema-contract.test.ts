@@ -28,6 +28,45 @@ const M = [1.02, 0.02, -0.01, -0.015, 0.98, 0.03, 0.02, -0.012, 1.01];
 const accel: AccelCalibration = { M, bias: [0.05, -0.03, 0.08], rmse: [0.01, 0.02, 0.01], count: 6, faces: ["+x", "-x", "+y", "-y", "+z", "-z"] };
 
 test("v3 完整合法档案往返", () => { assert.equal(parseArchive(archive()).ok, true); });
+
+test("canonical form：默认配置 buildArchive→JSON→parse→再导出 达到逐字节等价", () => {
+  // 唯一的规范形态：默认配置自己必须满足「导出→导入→再导出」不变。
+  // 复核反例：默认档案曾出现 pure.magEnabled false→true、kalmanResetCov 缺失→false、
+  // magTargetUts 50→缺失——导入一次就悄悄换了一份配置。
+  const cfg = defaultExperimentConfig();
+  const arch = buildArchive(cfg, run);
+  const wire = JSON.parse(JSON.stringify(arch)) as Record<string, any>;
+  const p = parseArchive(wire);
+  assert.equal(p.ok, true, p.ok ? "" : `默认档案被自家解析器拒绝：${p.error}`);
+  if (!p.ok) return;
+  // ① 解析结果与默认配置深等价（含可选字段的「有/无」形态）
+  assert.deepEqual(p.config, cfg, "解析后的配置必须与默认配置深等价");
+  // ② 再导出逐字节一致（键顺序也一致：JSON.stringify 保留插入顺序）
+  const again = JSON.parse(JSON.stringify(buildArchive(p.config, run)));
+  assert.equal(JSON.stringify(again), JSON.stringify(wire), "导出→导入→再导出必须逐字节等价");
+  // ③ 可选字段的显式形态：缺一个导入后就会变成默认值，往返就不再等价
+  assert.equal(cfg.estimators.pure.magEnabled, false, "纯积分没有磁观测，默认必须是 false");
+  assert.equal(cfg.estimators.kalman.kalmanResetCov, false, "kalmanResetCov 必须显式存在");
+  assert.equal(cfg.magTargetUts, 50, "magTargetUts 必须显式存在");
+  assert.equal(cfg.autoCoarseAlign, true);
+  assert.equal(cfg.steadyFromSec, null);
+  // ④ 校准 kind / matrix / 目标场强同构：diag 不得带 matrix，full 必须带 matrix
+  const diagCfg = defaultExperimentConfig();
+  diagCfg.magCalibration = { offset: [0, 0, 0], scale: [1, 1, 1], field: 50, residual: 0, count: 20, kind: "diag" };
+  diagCfg.magModel = "diag";
+  const fullCfg = defaultExperimentConfig();
+  fullCfg.magCalibration = { offset: [0, 0, 0], scale: [1, 1, 1], field: 50, residual: 0, count: 20, kind: "full", matrix: [1, 0, 0, 0, 1, 0, 0, 0, 1] };
+  fullCfg.magModel = "full";
+  for (const c of [diagCfg, fullCfg]) {
+    const w = JSON.parse(JSON.stringify(buildArchive(c, run)));
+    const r = parseArchive(w);
+    assert.equal(r.ok, true, r.ok ? "" : `${c.magModel} 档案被拒：${r.error}`);
+    if (r.ok) {
+      assert.deepEqual(r.config, c);
+      assert.equal(JSON.stringify(JSON.parse(JSON.stringify(buildArchive(r.config, run)))), JSON.stringify(w));
+    }
+  }
+});
 for (const k of ["seed", "scenario", "durationSec", "solveRateHz", "imu", "estimators", "initialAttitude", "magModel", "magCalibration"]) {
   test(`v3 必需顶层 ${k}`, () => reject(a => { delete a.config[k]; }, k));
 }
@@ -86,10 +125,35 @@ test("strict 拒绝界面无法表达的值（seed/解算频率/手动目标角/
   reject(a => { a.config.seed = 1.5; }, "seed");
   reject(a => { a.config.seed = -1; }, "seed");
   reject(a => { a.config.seed = 2 ** 40; }, "seed");
-  reject(a => { a.config.solveRateHz = 333; }, "solveRateHz");
+  // schema 层只守内核物理范围 [10,1000] Hz；「UI 下拉能否表达」在界面层判定（见下一条）
+  reject(a => { a.config.solveRateHz = 5000; }, "solveRateHz");
   reject(a => { a.config.solveRateHz = 0; }, "solveRateHz");
+  reject(a => { a.config.solveRateHz = 200.5; }, "solveRateHz");
   reject(a => { a.config.manualTargetDeg = [999, 0, 0]; }, "manualTargetDeg");
   reject(a => { a.restore = "full"; }, "restore");
+});
+
+test("内核频率与 UI 档位分层：200 Hz 内核可跑，界面层才拒绝非下拉档位", () => {
+  // 内核能力：runner 的 200 Hz 在 500 Hz 仿真下正确（3/2 交替），schema 不该把它当非法值
+  const a = archive(); a.config.solveRateHz = 200;
+  const p = parseArchive(a);
+  assert.equal(p.ok, true, p.ok ? "" : `200 Hz 属内核范围，不该被 schema 拒绝：${p.error}`);
+  if (p.ok) {
+    assert.equal(p.config.solveRateHz, 200);
+    // 界面层：200 Hz 不在下拉档位里 → 必须由可表达性检查指出，导入不可静默夹成 500
+    const probs = archiveExpressibilityProblems(p.config);
+    assert.ok(probs.some((q) => q.path === "solveRateHz"), `界面层必须指出 200 Hz：${JSON.stringify(probs)}`);
+  }
+  // 走 UI 导入事务的坏档案（333 Hz）由同一把尺子拦下，而不是靠 schema 层
+  const bad = archive(); bad.config.solveRateHz = 333;
+  const pb = parseArchive(bad);
+  assert.equal(pb.ok, true, "schema 层不应以 UI 档位为准");
+  if (pb.ok) assert.ok(archiveExpressibilityProblems(pb.config).some((q) => q.path === "solveRateHz"));
+  // 下拉档位自身永远合法
+  for (const hz of [50, 100, 125, 250, 500]) {
+    const c = defaultExperimentConfig(); c.solveRateHz = hz;
+    assert.deepEqual(archiveExpressibilityProblems(c).filter((q) => q.path === "solveRateHz"), []);
+  }
 });
 
 test("界面无法表达的配置在导入前被指出（固定轴初始姿态、关闭单个算法）", () => {
@@ -102,7 +166,7 @@ test("界面无法表达的配置在导入前被指出（固定轴初始姿态�
   assert.ok(archiveExpressibilityProblems(cfg).some((p) => p.path === "estimators.madg.enabled"));
 });
 
-test("往返比较指出会被界面改写/丢失的字段，并跳过界面不可调整的字段", () => {
+test("往返比较指出会被界面改写/丢失的字段（durationSec 除外）", () => {
   const want = defaultExperimentConfig(), got = defaultExperimentConfig();
   assert.deepEqual(archiveRoundTripProblems(want, got), []);
   want.solveRateHz = 333; got.solveRateHz = 500;
@@ -114,9 +178,16 @@ test("往返比较指出会被界面改写/丢失的字段，并跳过界面不�
   want.initialAttitude = { kind: "random" }; got.initialAttitude = { kind: "level" };
   assert.ok(archiveRoundTripProblems(want, got).some((p) => p.path === "initialAttitude.kind"));
   want.initialAttitude = { kind: "level" };
+  // 只有 durationSec 是「本次已跑时长」，不参与往返比较
   want.durationSec = 12.5; got.durationSec = 30;
+  assert.deepEqual(archiveRoundTripProblems(want, got), []);
+  // steadyFromSec / autoCoarseAlign 会改变 RMSE 与姿态，必须是真字段：丢失/被改写要报出来
   want.steadyFromSec = 4; got.steadyFromSec = undefined;
   want.autoCoarseAlign = false; got.autoCoarseAlign = true;
+  const probs = archiveRoundTripProblems(want, got);
+  assert.ok(probs.some((p) => p.path === "steadyFromSec"), `steadyFromSec 必须参与往返：${JSON.stringify(probs)}`);
+  assert.ok(probs.some((p) => p.path === "autoCoarseAlign"), `autoCoarseAlign 必须参与往返：${JSON.stringify(probs)}`);
+  got.steadyFromSec = 4; got.autoCoarseAlign = false;
   assert.deepEqual(archiveRoundTripProblems(want, got), []);
 });
 test("run 缺字段必须给路径", () => reject(a => { delete a.run.metrics; }, "run.metrics"));

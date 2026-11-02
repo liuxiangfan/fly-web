@@ -4,6 +4,7 @@ import { SolveLoop } from "../src/core/solve-loop";
 import { ReplayPlayer, type ReplayStep } from "../src/core/replay-player";
 import { parseImuCsv, type ReplayFrame } from "../src/core/replay";
 import { runTrace } from "../src/core/runner";
+import { TruthTrack } from "../src/core/truth-track";
 import { defaultExperimentConfig } from "../src/core/experiment-config";
 import { ComplementaryEstimator, KalmanEstimator, MadgwickEstimator, MahonyEstimator, PureGyroEstimator, emptyTelemetry, type Estimator } from "../src/estimators";
 import { qAngleBetween, qId, type V3 } from "../src/core/quat";
@@ -176,16 +177,60 @@ test("分拍与同样safe子步的生产五算法逐步/终态对拍", () => {
   });
 });
 
-test("时间列有回退时，时长/进度/每帧 dt 共用同一条有效时间轴（不得重叠积分）", () => {
+test("时间列回退不得重复积分：时长/进度/每帧 dt 共用单调有效时间轴", () => {
   const p = workPlayer(new ReplayPlayer());
-  // 一帧回退：0 → 50 → 90 → 50 → 100 ms。末帧−首帧 = 0.10 s，但积分只走 0.14 s（回退段夹成 0）。
+  // 一帧回退：0 → 50 → 90 → 50 → 100 ms。单调覆盖跨度 = 0.10 s；
+  // 旧实现把 50→90 的 40 ms 再积一遍，积出 0.14 s（复核反例）。
   p.load([frame(0), frame(50), frame(90), frame(50), frame(100)], 0);
-  assert.ok(Math.abs(p.durationSec - 0.14) < 1e-9, `duration=${p.durationSec}`);
+  assert.ok(Math.abs(p.durationSec - 0.10) < 1e-9, `duration=${p.durationSec}`);
   let integrated = 0;
   while (!p.done) p.advanceWork(0, (w) => { integrated += w.remainingSec; return w.remainingSec; }, 5);
-  assert.ok(Math.abs(integrated - 0.14) < 1e-9, `integrated=${integrated}`);
+  assert.ok(Math.abs(integrated - 0.10) < 1e-9, `integrated=${integrated}（不得把回退段重复积分）`);
   assert.ok(Math.abs(p.playedSec - p.durationSec) < 1e-9, `played=${p.playedSec} duration=${p.durationSec}`);
   assert.ok(p.playedSec <= p.durationSec + 1e-12, "进度不得超过总时长");
+
+  // 多次回退：0 → 100 → 60 → 80 → 120 的单调覆盖跨度仍是 0.12 s
+  const q = workPlayer(new ReplayPlayer());
+  q.load([frame(0), frame(100), frame(60), frame(80), frame(120)], 0);
+  assert.ok(Math.abs(q.durationSec - 0.12) < 1e-9, `duration=${q.durationSec}`);
+  let sum = 0;
+  while (!q.done) q.advanceWork(0, (w) => { sum += w.remainingSec; return w.remainingSec; }, 5);
+  assert.ok(Math.abs(sum - 0.12) < 1e-9, `integrated=${sum}`);
+});
+
+test("外部真值按子步时刻插值：长间隔不得提前使用帧末真值", () => {
+  const track = new TruthTrack();
+  const yaw = (deg: number) => ({ w: Math.cos((deg * Math.PI) / 360), x: 0, y: 0, z: Math.sin((deg * Math.PI) / 360) });
+  track.push(0, yaw(0));
+  track.commit();
+  track.push(10, yaw(90));
+  // 0→10 s 的 90° 匀速旋转：t=0.05 s 应约 0.45°，而不是 90°（旧实现会把帧末真值提前）
+  const early = track.at(0.05);
+  assert.ok(early);
+  assert.ok(qAngleBetween(early!, yaw(0)) * 180 / Math.PI < 1, "t=0.05 s 不得使用 10 s 后的真值");
+  assert.ok(Math.abs(qAngleBetween(early!, yaw(0.45)) * 180 / Math.PI) < 1e-6);
+  const mid = track.at(5);
+  assert.ok(mid && Math.abs(qAngleBetween(mid, yaw(45)) * 180 / Math.PI) < 1e-6);
+  const end = track.at(10);
+  assert.ok(end && Math.abs(qAngleBetween(end, yaw(90)) * 180 / Math.PI) < 1e-6);
+  // 越界不外推：小于起点取起点，大于终点取终点
+  assert.ok(Math.abs(qAngleBetween(track.at(-1)!, yaw(0)) * 180 / Math.PI) < 1e-6);
+  assert.ok(Math.abs(qAngleBetween(track.at(99)!, yaw(90)) * 180 / Math.PI) < 1e-6);
+  // 帧完成后终点成为下一帧起点
+  track.commit();
+  track.push(20, yaw(180));
+  assert.ok(Math.abs(qAngleBetween(track.at(15)!, yaw(135)) * 180 / Math.PI) < 1e-6);
+});
+
+test("保护参数必须是有限正数：NaN/Infinity/小数不得取消上限", () => {
+  const a = workPlayer(new ReplayPlayer({ maxFramesPerTick: NaN }));
+  a.load([frame(0), frame(10), frame(20)], 0);
+  a.advanceWork(0, (w) => w.remainingSec, 5);
+  assert.ok(a.cursor > 0, "NaN 上限必须回落到默认值，而不是一帧都不消费");
+  const b = workPlayer(new ReplayPlayer({ maxFramesPerTick: Infinity }));
+  b.load([frame(0), frame(10), frame(20)], 0);
+  b.advanceWork(0, (w) => w.remainingSec, 5);
+  assert.ok(b.cursor > 0);
 });
 
 test("最快档不把无限预算写回：切回 1× 后 dt=0 不得继续推进", () => {
@@ -208,6 +253,8 @@ test("trace 被步数上限截断时：endSec/事件计数与已记录步数同�
   assert.equal(full.truncated, false);
   assert.ok(Math.abs(full.endSec - 10) < 1e-9);
   assert.equal(full.fullDurationSec, 10);
+  assert.equal(runTrace(cfg, NaN).steps.length, 5000, "NaN 上限不得等于取消保护");
+  assert.equal(runTrace(cfg, 1.5).steps.length, 1, "小数上限必须向下取整");
   const cut = runTrace(cfg, 300); // 只记录 300 步 = 0.6 s
   assert.equal(cut.truncated, true);
   assert.equal(cut.steps.length, 300);
