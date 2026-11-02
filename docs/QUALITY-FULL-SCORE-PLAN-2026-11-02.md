@@ -626,6 +626,11 @@ node scripts/soak.mjs --batch --seconds=120
        或回放游标到末尾，上限 60 s）。
 - 另外把「候选浏览器启动失败 → 试下一个」从 `[warn]` 降为 `[info]`（可预期回退，不是浏览器被回收），
   puppeteer 的 launch 超时 30 s → 60 s（CI 冷启动偶发 WS 超时）。
+- **Windows CI（`windows-latest`）实测未通过**（run `41497738131`，5 次最好 34 项后就中断）：两类环境性失败——
+  ① `Target.createTarget timed out`（浏览器进程被回收，门禁**正确判为基础设施失败**，没有伪装成绿）；
+  ② 启动 30 s 内 `#fps` 未就绪 / 页面交互超时（该 runner 只有 2 vCPU，WebGL + swiftshader 初始化明显更慢）。
+  另有一次批量评测因 Worker 未能在看门狗窗口内启动而回退到主线程（界面行为是正确的降级，但该用例断言「执行路径=worker」）。
+  这一项**留作未达标**：不在本机复现，也没有在 CI 上把它调绿；不通过放宽断言来「修好」。
 
 ### 9.15 仍未达标（不得写成「各维度满分」）
 
@@ -633,7 +638,7 @@ node scripts/soak.mjs --batch --seconds=120
 |---|---|---|
 | 真机 30 min（串口/BLE，拔插/离开范围/休眠/复位） | **未做**（无可控硬件窗口） | 第 6.3 节明确要求真机证据；mock 不能顶替 |
 | ~~Ubuntu CI 连续 5 次~~ | **已达成**：run `41492896547`，Ubuntu 连续 5 次 91 PASS / 0 FAIL / 0 warning | — |
-| Windows CI 连续 5 次 | **未做**：workflow 支持（`workflow_dispatch` 里选 `both`），但尚未在 `windows-latest` 上跑过 | 第 6.4 节要求两个系统各 5 次；Windows 本地已连续 5 次全绿，但 CI 证据缺 |
+| Windows CI 连续 5 次 | **未达成**：已在 `windows-latest` 实跑（run `41497738131`），5 次全部失败，原因见下 | 第 6.4 节要求两个系统各 5 次；Windows **本地**已连续 5 次全绿，CI 环境不绿 |
 | 视觉证据绑定当前 commit | **已做**：见 9.13（六张截图绑定 `e67f551` 的 dist `d7356bc1443a10c4`，附 sha256） | — |
 | 全部 JS 的 10% 体积余量 | **未达标**：全部 JS 合计 gzip 262/272 KB（余量 3.7%；three.js 一家 132 KB） | 第 6.5 节要求 ≥10%；要达标必须砍功能或改预算口径，两者都不该做 |
 | PR 审查 / 合并 master / 部署后 smoke / 回滚演练 | **未做** | 第 6.7 节要求，且需远端环境 |
