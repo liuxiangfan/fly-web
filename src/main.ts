@@ -5552,6 +5552,9 @@ function updateSerialStatus(): void {
   const proto = serialProtocol();
   const protoText = proto === "binary" ? "" : proto === "text" ? "文本行 · " : "MAVLink · ";
   const backlog = serialState.backlogDropped > 0 ? ` · 积压丢弃 ${serialState.backlogDropped}` : "";
+  // 解算入口拒绝（SolveLoop 队列满）也必须可见：它和「串口积压丢弃」是两回事，
+  // 前者意味着帧已收到却没进解算，只出现在状态行里用户才能判断是不是该降采样率。
+  const solveDrops = solveLoop.droppedFrames > 0 ? ` · 解算入口拒绝 ${solveLoop.droppedFrames} 帧` : "";
   // 文本协议报坏行与原因、MAVLink 报跳过的消息——这两类「不是丢帧」的情况要说清，
   // 否则用户看到帧率不对只会去怀疑线缆
   const extra =
@@ -5563,7 +5566,7 @@ function updateSerialStatus(): void {
   setSerialStatus(
     `${viaBle ? "BLE IMU" : "真实 IMU"} · ${protoText}${viaBle ? "" : `${serialState.baud} · `}` +
       `${serialState.rate.toFixed(0)} 帧/s · dt ${(serialState.lastDt * 1000).toFixed(1)} ms · ` +
-      `seq 丢帧 ${serialState.dropped}${backlog}${extra}`,
+      `seq 丢帧 ${serialState.dropped}${backlog}${solveDrops}${extra}`,
   );
 }
 
@@ -7000,6 +7003,8 @@ resetSim(); // 统一时钟/统计/曲线起点（不改变已还原的深链参
     openPorts: number;
     /** close() 失败次数（读锁未释放等）：必须为 0，否则"有开必有关"只是自我安慰 */
     portCloseFailures: number;
+    /** 解算入口拒绝的源帧数（实时队列满；离线回放必须为 0） */
+    solveDropped: number;
   } => ({
     serial: serialState.running,
     ble: bleState.connected,
@@ -7021,6 +7026,7 @@ resetSim(); // 统一时钟/统计/曲线起点（不改变已还原的深链参
     sourceKind: currentDataSource().kind,
     openPorts: serialOpenPorts,
     portCloseFailures,
+    solveDropped: solveLoop.droppedFrames,
   }),
   /**
    * 长跑稳定性自检出口：四个「会被不断 push」的容器当前长度与容量。

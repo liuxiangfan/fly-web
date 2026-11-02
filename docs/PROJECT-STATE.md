@@ -137,6 +137,11 @@
   校准过的日志再校准一次会让「导出 → 回放」数值不闭环；界面上由「回放应用校准」勾选框控制，状态条显示 IMU 语义。
 - **导出 IMU 列必须带语义**：`exportCsv` 默认写 `# imu=raw`（原始）、勾选「写成校准后」写 `# imu=calibrated`；
   全帧 `exportRawCsv` 恒为 raw（记录点在校准链之前）。加新的导出格式时必须同步这条元数据，否则回放会猜错。
+- **CSV 是「源 IMU 日志」，不是 solve trace**（已知边界）：记录的是每个记录行时刻的**源**读数；
+  解算频率低于记录频率时，同一次 solve 会被多行复用（`consumedSnapshotFor` 按 `runId` + 时间去重）。
+  回放时按行时间**重新解算**，因此「消费序列」不逐位复现——需要逐位对齐请用 trace 契约
+  （`traceFrames` / `traceFramesRunner` + `scripts/trace-contract.mjs`），不要拿 CSV 当 solve trace。
+  这也是「导出不可变」只承诺字节不随当前标定变化、而不承诺消费时刻身份的原因。
 - **配置档案只承诺「配置子集复现」**：`ExperimentArchive.restore = "config-only"` 保存 `ExperimentConfig`
   （含 `magModel`、`magCalibration{Applied}`、`accelCalibration{Applied}`、`seed`、`steadyFromSec`、`ab.mode`），
   不含当前曲线/原始记录/分叉状态。导入走 `migrateExperimentConfig`（校准对象用 `parseMagCalibration`/`parseAccelCalibration` 宽松解析，

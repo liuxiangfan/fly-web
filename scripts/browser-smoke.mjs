@@ -1809,10 +1809,12 @@ try {
     const status = document.getElementById("replay-status").textContent;
     const mode = document.body.dataset.imuMode;
     const controlsOff = document.getElementById("scenario-select").disabled;
+    // 离线回放走背压，**不允许**在解算入口丢帧（丢帧只可能是实时源的队列溢出）。
+    const solveDropped = window.attitudeDemo.plumbing().solveDropped;
     window.attitudeDemo.replay.stop();
     await new Promise((r) => setTimeout(r, 300));
     const afterStop = window.attitudeDemo.replay.info;
-    return { header, imp, info, status, mode, controlsOff, afterStop, rows };
+    return { header, imp, info, status, mode, controlsOff, afterStop, rows, solveDropped };
   });
   check(
     "导出→导入闭环：原始 IMU 能回放且退出后回到模拟",
@@ -1822,9 +1824,11 @@ try {
       roundTrip.info?.idx > 0 &&
       roundTrip.mode === "real" &&
       roundTrip.controlsOff === true &&
+      roundTrip.solveDropped === 0 &&
       roundTrip.afterStop?.active === false,
     `导出前已记录 ${roundTrip.rows} 行；${roundTrip.imp}；回放中 ${roundTrip.info?.idx}/${roundTrip.info?.frames} 帧，` +
-      `模式=${roundTrip.mode}，模拟控件停用=${roundTrip.controlsOff}，退出后 active=${roundTrip.afterStop?.active}`,
+      `模式=${roundTrip.mode}，模拟控件停用=${roundTrip.controlsOff}，解算入口拒绝=${roundTrip.solveDropped} 帧，` +
+      `退出后 active=${roundTrip.afterStop?.active}`,
   );
 
   // ---------- BLE IMU：假 Web Bluetooth（含 20 字节分片的 28 字节帧） ----------
