@@ -2330,6 +2330,12 @@ try {
       };
       Object.defineProperty(navigator, "serial", { configurable: true, value: serial });
     });
+    // 假 BLE 必须在**加载前**装好：应用的「非 Chromium 能力提示」在启动时按
+    // `typeof navigator.bluetooth` 把 BLE 按钮永久置灰。Ubuntu 的 Chrome 默认不带 Web Bluetooth，
+    // 于是运行时再装假设备也没用——按钮是 disabled 的，click() 什么都不做（CI 实测这一组 5 条全红）。
+    if (opts.ble) {
+      await pg.evaluateOnNewDocument((wire, hang) => { (0, eval)(wire)(hang); }, installFakeBle, opts.ble === "hang");
+    }
     await gotoSafe(pg);
     await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 15000 });
     await pg.evaluate(() => {
@@ -2401,10 +2407,9 @@ try {
   // A-1：串口 → BLE 切换必须一次成功（复核 P1-B：BLE 先捕获世代，随后内部 serialDisconnect
   //      又递增一次，把**本次 BLE 连接自己**作废——实测 serial=false/ble=false/通知数 0）。
   const serialToBle = await (async () => {
-    const { pg, errs, stop } = await makeFakeSerialPage();
-    const res = await pg.evaluate(async (wire) => {
+    const { pg, errs, stop } = await makeFakeSerialPage({ ble: true });
+    const res = await pg.evaluate(async () => {
       const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-      (0, eval)(wire)(false);
       document.getElementById("btn-ble").click();
       await sleep(1500);
       const p = window.attitudeDemo.plumbing();
@@ -2647,10 +2652,9 @@ try {
   //      两个场景共用一个页面：软件渲染下每个标签页都是一个 WebGL 上下文，
   //      少开一个页面就少一次「浏览器进程被回收」的机会（见 newPage 的自愈说明）。
   const pendingReconnectSwitch = await (async () => {
-    const { pg, errs, stop } = await makeFakeSerialPage();
-    const res = await pg.evaluate(async (wire) => {
+    const { pg, errs, stop } = await makeFakeSerialPage({ ble: true });
+    const res = await pg.evaluate(async () => {
       const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-      (0, eval)(wire)(false);
       // ① 串口待重连 → 切 BLE
       navigator.serial.__fireDisconnect();
       await sleep(120);
@@ -2718,10 +2722,9 @@ try {
   // A-2e：反方向同样要成立——BLE 掉线待重连期间连串口，BLE 定时器不得把 GATT 接回来。
   //      （与 A-2d 共用 `cancelPendingReconnects` + 来源归属校验，但走 BLE 的排程分支。）
   const blePendingThenSerial = await (async () => {
-    const { pg, errs, stop } = await makeFakeSerialPage({ connect: false });
-    const res = await pg.evaluate(async (wire) => {
+    const { pg, errs, stop } = await makeFakeSerialPage({ connect: false, ble: true });
+    const res = await pg.evaluate(async () => {
       const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-      (0, eval)(wire)(false);
       document.getElementById("btn-ble").click();
       for (let i = 0; i < 60 && !window.attitudeDemo.plumbing().ble; i++) await sleep(50);
       const connected = window.attitudeDemo.plumbing().ble;
@@ -2760,10 +2763,9 @@ try {
   // A-2c：BLE 初连失败（服务下没有 notify 特征）必须真正释放：GATT 断开 + 摘掉设备掉线监听
   //      （ROUND11 P1：旧实现状态 connected=false，物理上却仍连着，且留着 lost 回调干扰后续连接）
   const bleFailCleanup = await (async () => {
-    const { pg, errs, stop } = await makeFakeSerialPage();
-    const res = await pg.evaluate(async (wire) => {
+    const { pg, errs, stop } = await makeFakeSerialPage({ ble: true });
+    const res = await pg.evaluate(async () => {
       const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-      (0, eval)(wire)(false);
       // 装一个"没有 notify 特征"的假 BLE 设备
       const listeners = new Set();
       const device = {
@@ -2973,11 +2975,10 @@ try {
   //      ble=true，于是回放与 BLE 同时活、旧设备的通知继续往新实验灌帧）。
   //      这里不用「点串口按钮」：连接期间另一个连接按钮本来就是置灰的（真实 UI 约束）。
   const subscribeSwitch = await (async () => {
-    const { pg, errs, stop } = await makeFakeSerialPage();
-    const res = await pg.evaluate(async (wire) => {
+    const { pg, errs, stop } = await makeFakeSerialPage({ ble: "hang" });
+    const res = await pg.evaluate(async () => {
       const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       const NL = String.fromCharCode(10);
-      (0, eval)(wire)(true); // 让 startNotifications 挂起
       document.getElementById("btn-ble").click();
       await sleep(900);
       const during = window.attitudeDemo.plumbing();
