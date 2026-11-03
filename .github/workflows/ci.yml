@@ -119,6 +119,10 @@ jobs:
       - name: Smoke × 5 (Windows)
         # 每轮先 app 再 devices（各自独立浏览器进程）：2 vCPU runner 跑不动「一个浏览器 91 项」，
         # 分片正是复核要求的缓解手段；两者都绿才算这一轮过。
+        # 视口降到 800×600：软件 WebGL 的填充率是这台 runner 的主要瓶颈（1440×900 时首帧要 >60 s），
+        # 断言不变（窄屏/设备用例仍自设 390×844 / 1280×800）。
+        env:
+          SMOKE_VIEWPORT: 800x600
         run: node scripts/ci-run-smoke.mjs --shard=both --runs=5 --out=.audit-smoke/stability
       - name: Upload logs
         if: always()

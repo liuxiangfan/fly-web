@@ -29,6 +29,17 @@ const APP_URL = process.env.SMOKE_URL ?? "http://127.0.0.1:4173/";
  *
  * 两片合起来恰好覆盖全部用例（CI 矩阵里两个 job 的 PASS 数之和必须等于 all 的 PASS 数）。
  */
+/**
+ * 默认视口。可用 SMOKE_VIEWPORT=800x600 覆盖——只用于**容量很小的 runner**：
+ * GitHub 的 windows-latest 只有 2 vCPU，软件 WebGL 下 1440×900 的填充率会把首帧拖到
+ * 60 s 以上（实测 `Navigation timeout` / 首帧超时）。视口变小只影响「桌面布局用多大的窗口看」，
+ * 用例本身的断言不变（窄屏用例仍自己设 390×844，设备用例仍自己设 1280×800）。
+ */
+const VIEWPORT = (() => {
+  const m = /^(\d{3,4})x(\d{3,4})$/.exec(process.env.SMOKE_VIEWPORT ?? "");
+  return m ? { width: Number(m[1]), height: Number(m[2]) } : { width: 1440, height: 900 };
+})();
+
 const SHARD = (process.env.SMOKE_SHARD ?? "all").toLowerCase();
 if (!["all", "app", "devices"].includes(SHARD)) {
   console.error(`[FAIL] SMOKE_SHARD 只支持 all / app / devices（收到 ${JSON.stringify(SHARD)}）`);
@@ -196,7 +207,7 @@ const newPage = async () => {
     if (page) {
       try { await page.close(); } catch { /* 已随进程消失 */ }
       page = await browser.newPage();
-      await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1 });
+      await page.setViewport({ ...VIEWPORT, deviceScaleFactor: 1 });
       attachSharedListeners(page);
       // 重启后的共享页面必须**重新载入应用**：后面的用例直接读 DOM，
       // 空白页只会以「Cannot read properties of null」的形式误报成产品缺陷（实测踩到）。
@@ -212,7 +223,7 @@ const newPage = async () => {
   }
 };
 page = await browser.newPage();
-await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1 });
+await page.setViewport({ ...VIEWPORT, deviceScaleFactor: 1 });
 attachSharedListeners(page);
 
 try {
