@@ -640,7 +640,7 @@ node scripts/soak.mjs --batch --seconds=120
 | ~~Ubuntu CI 连续 5 次~~ | **已达成**：run `41492896547`，Ubuntu 连续 5 次 91 PASS / 0 FAIL / 0 warning | — |
 | Windows CI 连续 5 次 | **未达成**：`windows-latest` 两轮实跑（run `41497738131`、`41512936266`），10 次全失败，失败点每次不同（见 9.17） | 第 6.4 节要求两个系统各 5 次；Windows **本地**已连续 5 次全绿 |
 | 视觉证据绑定当前 commit | **已做**：见 9.13（六张截图绑定 `e67f551` 的 dist `d7356bc1443a10c4`，附 sha256） | — |
-| 全部 JS 的 10% 体积余量 | **未达标**：全部 JS 合计 gzip 262/272 KB（余量 3.7%；three.js 一家 132 KB） | 第 6.5 节要求 ≥10%；要达标必须砍功能或改预算口径，两者都不该做 |
+| 全部 JS 的 10% 体积余量 | **未达标**：全部 JS 合计 gzip 262/272 KB（余量 3.7%；three.js 一家 132 KB）。已量化尝试见 9.20 | 第 6.5 节要求 ≥10%；要达标只能砍功能，不做 |
 | PR 审查 / 合并 master / 部署后 smoke / 回滚演练 | **未做** | 第 6.7 节要求，且需远端环境 |
 
 已补齐的 6.5 项（本轮新增）：
@@ -656,6 +656,29 @@ node scripts/soak.mjs --batch --seconds=120
 结论：本轮把**影响结论可信度的 P1/P2 全部修掉并留下永久反例**，功能/数值时间/档案/生命周期/门禁四个维度
 已可用实测输出复核；但上表五项缺证据（其中体积余量是实打实的未达标），因此**只能写
 「按本轮证据已达可复核的高质量水准」，不能写「各维度满分」**。
+
+### 9.20 JS 体积余量的量化结论（2026-11-03 实测）
+
+用 `vite build --sourcemap` 后的 sourcemap 统计每个 chunk 的模块构成（源字节数）：
+
+| chunk | 产物（raw / gzip） | 主要来源 |
+|---|---|---|
+| `index-*.js`（首屏） | 271 KB / 104 KB | `main.ts` 334 KB 源、`estimators/index.ts` 50 KB、`core/runner.ts` 38 KB、`scene/quatview.ts` 28 KB、`experiment-config` 26 KB、`magcal` 23 KB、`serial` 20 KB、`gimbal` 19 KB、`accelcal` 18.5 KB、`replay` 16 KB、`solve-loop` 16 KB —— **全部是产品代码** |
+| `three-*.js` | 513 KB / 132 KB | `node_modules/three` 1323 KB 源（渲染器/材质/几何，tree-shaking 后仍是硬成本） |
+| `batch.worker-*.js` | 45 KB / 12 KB | 与首屏**同一份** `estimators + core`（Rollup 为 Worker 单独打了一份） |
+| `doc-demos` / `tour` | 22 + 12 KB / 9 + 6.5 KB | 按需加载的文档演示与引导课程 |
+
+**两个可想到的优化都做了量化验证，结论是收益不够**：
+
+1. **把 `src/core` + `src/estimators` 抽成共享 chunk**（本意是让 Worker 不再复制一份）：实测
+   首屏 104 → 67 KB、多出一个 39 KB 的 `kernel` chunk、`doc-demos` 9.3 → 7.5 KB，
+   但 `batch.worker` **完全没变**（44.7 KB，hash 都不变——Vite 的 Worker 是独立 Rollup 构建，
+   主构建的 `manualChunks` 管不到它），合计 gzip **262 → 263 KB（反而多 1 KB**）。
+   **已回滚**，不为了数字好看留一个更差的构建。
+2. 砍 three / 砍文档演示 / 砍实验库文案能到 10%，但那都是产品内容本身。
+
+→ 结论：这条**不是没做，是做了但做不到**（除非删功能）。要求写的是「至少保留 10% 余量」，
+现有产物余量 3.7%，本报告如实记为未达标。
 
 ### 9.18 「线上到底是哪个提交」：构建标识 + 部署后 smoke（6.7 的前置）
 
