@@ -35,6 +35,11 @@
 - 稳定性 **5×(app+devices)**：每轮 106 项完整集合、零失败零 warning 零重启——`generated/stability-local-windows-a958b348.json`。
 - 视觉 11 张（含 200% 页面缩放与打印）——`generated/visual-evidence.json`；性能与体积归因——`generated/perf-report.json`、`generated/size-report.json`。
 - 严格验收通过：`npm run evidence:verify`（源码摘要 + 产物摘要 + buildId 三层绑定）。
+- CI 口径（本轮实测后定）：**部署闸门 = 静态门禁 + 部署后对线上产物的 smoke**；完整的 107 项浏览器套件在
+  `ci.yml`（PR/分支）与部署后的 `smoke-suite` 作业里跑，结果如实记录。原因：windows-latest 只有 2 vCPU，
+  软件 WebGL 下"同一浏览器进程开第二个 WebGL 页面"可超过 180 s，属**容量**而非产品缺陷——把容量红灯
+  当部署闸门会让每次部署都红，红灯也就失去意义。判定由 `scripts/smoke-verdict.mjs` 分四类，
+  **只有用例级失败才算产品问题**（那类失败仍会让作业红）。
 - 判据自身的两次校准与一次既存用例的时序修正，如实记录在 `VERIFICATION-EVIDENCE.md` §4.1。
 
 代码修改后的验证顺序：
