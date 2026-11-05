@@ -129,10 +129,12 @@ node scripts/evidencecheck.mjs --require-source --require-build   # npm run evid
   （阈值写死 200 ms）。同一台 runner 上，页面空闲时单次 `setTimeout(0)` 往返就要几十到上百毫秒，
   这个绝对值描述的是"这台机器的软件渲染有多慢"，不是协作取消的优劣；随后一个长 `evaluate`
   又撞到 CDP 的 `protocolTimeout`（`Runtime.callFunctionOn timed out` / `Network.enable timed out`）。
-- 修法（本轮）：① 判据改为**相对空闲基线**——取消 ≤ max(200 ms, 2×空闲 p95)、运行期 p95 ≤ max(200 ms, 4×空闲 p95)，
-  同时照常打印绝对值与"是否参考环境（空闲 p95 ≤ 50 ms）"；参考环境的绝对目标仍是 200 ms（本机实测 11~13 ms / 5 ms）。
+- 修法（本轮）：① 判据改为**三层**——取消 ≤ max(200 ms, 3×空闲 p95) **且** ≤ 0.8×整枚种子的实测耗时，
+  运行期 p95 ≤ max(200 ms, 4×空闲 p95)；绝对值与「是否参考环境（空闲 p95 ≤ 50 ms）」照常打印。
+  参考环境的绝对目标仍是 200 ms（本机 11~17 ms / 5 ms）。第二层直接编码"种子跑完之前就停下"，与机器快慢无关。
   ② 长等待从"单个 evaluate 里循环"改成 **Node 侧轮询**，`protocolTimeout` 随容量倍率放大（默认 300 s，慢环境 900 s）。
-  这两条都不放松产品性质：协作取消若退化成"等整个种子跑完"，两条断言会成倍超标。
+  ③ 另一条被误判的产品级失败是**引导课程**："点完立刻读"在慢 runner 上取到的是上一帧的设置——
+  改为"等计数器变化 + 两帧"再取快照（等待有明确判别依据，不是盲等）。
 
 本轮把 CI 改成 Windows-only 后，真实的 windows-latest 运行说明了三件事：
 

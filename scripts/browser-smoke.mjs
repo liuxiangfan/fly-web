@@ -3966,8 +3966,25 @@ try {
       next: document.getElementById("tour-next").textContent,
     });
     steps.push(snap());
+    /**
+     * 每步之后**等 UI 落定**再取快照，而不是"点完立刻读"。
+     * CI 的 2 vCPU runner 实测过"第 2 步读到的还是第 1 步的设置"：步骤应用里有会跨帧完成的
+     * UI 同步（视图分段控件过渡、面板展开、实验参数落到控件），点完立刻读就取到上一帧。
+     * 这里的等待有明确的判别依据：计数器（render 里同步写）先变，再让出两帧给跨帧的那部分。
+     */
+    const settle = async () => {
+      await new Promise((r) => setTimeout(r, 0));
+      await new Promise((r) => requestAnimationFrame(() => r(null)));
+      await new Promise((r) => requestAnimationFrame(() => r(null)));
+    };
     for (let k = 0; k < 13; k++) {
+      const before = document.getElementById("tour-counter").textContent;
       document.getElementById("tour-next").click();
+      // 计数器变化 = 这一步的 render 已经跑过；最多等 3 s（慢 runner 上一帧可能上百毫秒）
+      for (let w = 0; w < 60 && document.getElementById("tour-counter").textContent === before; w++) {
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      await settle();
       steps.push(snap());
     }
     const done = document.getElementById("tour-card").classList.contains("hidden");
