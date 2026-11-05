@@ -1,7 +1,7 @@
 # 验证证据与证明边界
 
 > 本轮（2026-11-05 · 软件工单实施轮）在本机 Windows 上重采了全部证据。
-> 冻结构建：源码摘要 `777bf03778ed01e1058d6688d7798968`（83 个构建输入文件），构建标识 `777bf03778ed-ecc49ed8c2c3e858`，`distHash ecc49ed8c2c3e858`。
+> 冻结构建：源码摘要 `d97bbbafb374…`（83 个构建输入文件），构建标识 `d97bbbafb374-4ace2bc8a8795108`，`distHash 4ace2bc8a8795108`（**可复现**：同一份源码两次构建哈希相同）。
 > 机器索引：[`generated/evidence-manifest.json`](generated/evidence-manifest.json)；软件评分与未完成项见 [`QUALITY-SOFTWARE-ONLY.md`](QUALITY-SOFTWARE-ONLY.md)。
 > 每一条 current 证据都要能同时回答四件事：**报告正文结论是什么**、**对应哪份源码**、**对应哪份产物**、**被测服务跑的是不是这份产物**。
 
@@ -56,8 +56,8 @@ node scripts/evidencecheck.mjs --require-source --require-build   # npm run evid
 
 | 文件 | 结果 | 能证明 | 不能证明 |
 |---|---|---|---|
-| `generated/soak-batch-600-777bf037.json` | PASS：600 s、3/3 批、常驻水位 +2.8 MB、峰值增量 23.4 MB、趋势 11.1 MB、末段判据 PASS、采样覆盖 PASS（117 样本 / 仿真时钟 253.8 s / 墙钟 600 s） | 当前源码在连续多批批量评测下**容器封顶、无持续泄漏、无末段翘尾** | 不能证明真机，也不能替代跨平台稳定性 |
-| `generated/soak-reconnect-600-777bf037.json` | PASS：600 s、66 次断线 66 次恢复（每个丢弃段都有独立 open 且真的消费过首帧）、水位 +5.5 MB、峰值 23.5 MB、趋势 15.2 MB、末段与采样覆盖 PASS | mock 传输层长时间断连／恢复不残留资源 | **不是真机**：真实驱动／蓝牙栈行为需真机报告（硬件不在本轮范围） |
+| `generated/soak-batch-600-d97bbbaf.json` | PASS：600 s、3/3 批、常驻水位 +3.6 MB、峰值增量 23.7 MB、趋势 9.8 MB、末段判据 PASS、采样覆盖 PASS（仿真时钟 292.6 s / 墙钟 600 s） | 当前源码在连续多批批量评测下**容器封顶、无持续泄漏、无末段翘尾** | 不能证明真机，也不能替代跨平台稳定性 |
+| `generated/soak-reconnect-600-d97bbbaf.json` | PASS：600 s、66 次断线 66 次恢复（每个丢弃段都有独立 open 且真的消费过首帧）、水位 +7.4 MB、峰值 25.7 MB、趋势 15.5 MB、末段与采样覆盖 PASS | mock 传输层长时间断连／恢复不残留资源 | **不是真机**：真实驱动／蓝牙栈行为需真机报告（硬件不在本轮范围） |
 | `generated/soak-batch-600-7f0b5966.json`、`generated/soak-reconnect-600-7f0b5966.json` | 历史观测（更早两版源码） | 早期某次 600 s 通过 | 不是当前源码；按新口径不能充当当前证据（索引里已标为历史） |
 | `generated/soak-batch-600.json`、`soak-reconnect-600.json`、`soak.json` | 历史观测 | 更早轮次 | 无 commit/dist/browser，`provenanceComplete:false` |
 
@@ -84,7 +84,7 @@ node scripts/evidencecheck.mjs --require-source --require-build   # npm run evid
 
 | 类别 | 结果 | 证据 |
 |---|---|---|
-| 本机 Windows `--shard=both --runs=5`（当前源码） | **5/5 全绿（每轮 107 项，零 warning、零重启）** —— `generated/stability-local-windows-777bf037.json` | 版本化摘要（`verdict.kind` + 每轮完整集合与耗时）+ `.audit-current/stability-final3/`（各轮日志与结构化结果，本地） |
+| 本机 Windows `--shard=both --runs=5`（当前源码） | **5/5 全绿（每轮 107 项，零 warning、零重启）** —— `generated/stability-local-windows-d97bbbaf.json` | 版本化摘要（`verdict.kind` + 每轮完整集合与耗时）+ `.audit-current/stability-final3/`（各轮日志与结构化结果，本地） |
 | CI（Ubuntu / Windows）5× | **未跑** | 需要一次 push 或 workflow_dispatch（本轮未获授权）；`scripts/register-ci-run.mjs` 已强化为"workflow/job/attempt + 冒烟步骤真的执行 + 产物五轮完整集合 + 摘要绑定 head_sha"后才会登记 |
 | 历史：Windows CI 5×（`830e4e3`） | **FAIL** | GitHub run `41555321631`：gate 与单轮分片通过，5× 稳定性作业死于**基础设施超时**，无一条产品断言失败 |
 | 历史：Ubuntu CI 5×（`e8e6a8e`） | PASS | GitHub run `41530523646`（祖先提交，不证明当前 SHA） |
@@ -115,7 +115,7 @@ node scripts/evidencecheck.mjs --require-source --require-build   # npm run evid
 
 | 报告 | 内容 | 结论 |
 |---|---|---|
-| `generated/perf-report.json` | 真实墙钟指标：首次可交互、rAF 帧间隔（墙钟帧率）、长任务、输入延迟 p95、批量（Worker）耗时、**主线程降级取消延迟**、堆峰值 | PASS：控制台零错误、输入延迟 p95 5.1 ms、取消延迟 11.3 ms、首次可交互 5.5 s、墙钟帧率 14.1 fps、堆峰值 19.0 MB |
+| `generated/perf-report.json` | 真实墙钟指标：首次可交互、rAF 帧间隔（墙钟帧率）、长任务、输入延迟 p95、批量（Worker）耗时、**主线程降级取消延迟**、堆峰值 | PASS：控制台零错误、输入延迟 p95 6.1 ms、取消延迟 10.0 ms、首次可交互 3.0 s |
 | `generated/size-report.json` | sourcemap 定量归因（独立重建到 `dist-size/`，不动 `dist/`）：chunk 级 raw/gzip + 主包按职责分组 | three（vendor）513.1 KB / 128.8 gzip、主包 281.8 KB / 105.0 gzip、Worker 43.0 / 15.4、文档演示 22.3 / 9.1、引导课程 11.7 / 6.4 |
 
 **性能口径（不许混用）**：`perf-report` 的 fps 来自真实 rAF 墙钟间隔；界面读数里的 fps 用被夹到 50 ms 的仿真 dt 计算，

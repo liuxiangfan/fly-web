@@ -1,14 +1,14 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-11-05T13:42:56.218Z",
-  "startedAt": "2026-11-05T13:42:37.401Z",
-  "finishedAt": "2026-11-05T13:42:56.218Z",
+  "generatedAt": "2026-11-05T17:05:16.606Z",
+  "startedAt": "2026-11-05T17:05:01.630Z",
+  "finishedAt": "2026-11-05T17:05:16.606Z",
   "url": "http://127.0.0.1:4173/",
-  "commit": "d21915a6aec86d1175c5284835871cd1832d8a96",
-  "sourceDigest": "777bf03778ed01e1058d6688d7798968",
+  "commit": "1f41e479dc20550117872dd5efad8a0bc291c018",
+  "sourceDigest": "d97bbbafb374c820d3661319d58a12dc",
   "worktree": "dirty",
-  "buildId": "777bf03778ed-ecc49ed8c2c3e858",
-  "distHash": "ecc49ed8c2c3e858",
+  "buildId": "d97bbbafb374-4ace2bc8a8795108",
+  "distHash": "4ace2bc8a8795108",
   "browserVersion": "Edg/156.0.4314.58",
   "viewport": {
     "width": 1440,
@@ -18,45 +18,45 @@
   "headless": true,
   "note": "headless + swiftshader 软件渲染：数值是下限参照，不代表真实 GPU 环境；同一环境前后对比才有意义。",
   "timings": {
-    "interactiveMs": 5543,
-    "domContentLoadedMs": 2700.5999999940395,
-    "wallFrameWindowSec": 5.01920000000298
+    "interactiveMs": 2996,
+    "domContentLoadedMs": 1276.7000000029802,
+    "wallFrameWindowSec": 5.005199999988079
   },
   "frames": {
-    "fpsWall": 14.145680586539257,
-    "count": 71,
-    "frameMsP50": 66.70000000000073,
-    "frameMsP95": 85.40000000000055,
-    "frameMsMax": 100
+    "fpsWall": 17.3819228003291,
+    "count": 87,
+    "frameMsP50": 50.100000000000364,
+    "frameMsP95": 66.70000000000073,
+    "frameMsMax": 83.19999999999982
   },
   "longTasks": {
-    "count": 4,
-    "maxMs": 2601
+    "count": 3,
+    "maxMs": 1209
   },
   "inputLatency": {
     "samples": [
-      0.5999999940395355,
+      0.3999999910593033,
+      0,
       0.20000000298023224,
-      0.09999999403953552,
-      0.10000000894069672,
+      0,
       0.09999999403953552,
       0,
-      5.0999999940395355,
-      4.800000011920929,
-      5.0999999940395355,
-      4.200000002980232
+      6.100000008940697,
+      4.899999991059303,
+      5.100000008940697,
+      4.899999991059303
     ],
-    "p50": 0.5999999940395355,
-    "p95": 5.0999999940395355
+    "p50": 0.3999999910593033,
+    "p95": 6.100000008940697
   },
   "batch": {
-    "workerMs": 5299.899999991059,
+    "workerMs": 4445.20000000298,
     "rows": 5,
     "workerMode": "worker",
-    "mainCancelLatencyMs": 11.299999997019768,
+    "mainCancelLatencyMs": 10,
     "partialSeeds": 1,
-    "peakHeapMb": 19.046770095825195,
-    "heapFinalMb": 12.08004379272461
+    "peakHeapMb": 16.537802696228027,
+    "heapFinalMb": 17.252488136291504
   },
   "consoleErrors": [],
   "pass": true

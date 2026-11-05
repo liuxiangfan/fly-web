@@ -1,23 +1,23 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-11-05T13:42:36.205Z",
-  "sourceCommit": "d21915a6aec86d1175c5284835871cd1832d8a96",
-  "sourceDigest": "777bf03778ed01e1058d6688d7798968",
+  "generatedAt": "2026-11-05T17:05:00.662Z",
+  "sourceCommit": "1f41e479dc20550117872dd5efad8a0bc291c018",
+  "sourceDigest": "d97bbbafb374c820d3661319d58a12dc",
   "sourceFiles": 83,
-  "worktree": "clean",
-  "buildId": "777bf03778ed-ecc49ed8c2c3e858",
-  "distHash": "ecc49ed8c2c3e858",
+  "worktree": "dirty",
+  "buildId": "d97bbbafb374-4ace2bc8a8795108",
+  "distHash": "4ace2bc8a8795108",
   "url": "http://127.0.0.1:4173/",
   "browserVersion": "Edg/156.0.4314.58",
-  "startedAt": "2026-11-05T13:41:17.843Z",
-  "finishedAt": "2026-11-05T13:42:36.205Z",
+  "startedAt": "2026-11-05T17:04:03.759Z",
+  "finishedAt": "2026-11-05T17:05:00.662Z",
   "consoleErrors": [],
   "servedProblems": [],
   "driftProblems": [],
   "shots": [
     {
       "name": "desktop-1440x900",
-      "file": "screenshots/visual-d21915a/desktop-1440x900.png",
+      "file": "screenshots/visual-1f41e47/desktop-1440x900.png",
       "note": "桌面主视图（姿态 3D + 曲线 + 评测表）",
       "viewport": {
         "width": 1440,
@@ -25,8 +25,8 @@
         "deviceScaleFactor": 1,
         "printMedia": false
       },
-      "bytes": 184605,
-      "sha256": "7660ebcd3acada1a330a16489710a19cb72f78bdb3c2d9fa2f3776e2dc40ff9c",
+      "bytes": 185061,
+      "sha256": "66531f5bea39ffcb0b5b3c37b70498ff13e9063172d8abe772d39cac829e992a",
       "metrics": {
         "scrollW": 1440,
         "innerW": 1440,
@@ -38,7 +38,7 @@
     },
     {
       "name": "tablet-768x1024",
-      "file": "screenshots/visual-d21915a/tablet-768x1024.png",
+      "file": "screenshots/visual-1f41e47/tablet-768x1024.png",
       "note": "平板竖屏：面板折行后仍无横向溢出",
       "viewport": {
         "width": 768,
@@ -46,8 +46,8 @@
         "deviceScaleFactor": 1,
         "printMedia": false
       },
-      "bytes": 124200,
-      "sha256": "9efa446b87d20d20086fa7a280189542adb97b1aac0169432efaedb97d5b8bdd",
+      "bytes": 123655,
+      "sha256": "39008a24299948612ce01109f071bac1d915fccb112e67a95ade26f6b63670fb",
       "metrics": {
         "scrollW": 768,
         "innerW": 768,
@@ -59,7 +59,7 @@
     },
     {
       "name": "narrow-390x844",
-      "file": "screenshots/visual-d21915a/narrow-390x844.png",
+      "file": "screenshots/visual-1f41e47/narrow-390x844.png",
       "note": "手机竖屏（390）：面板与画布等宽",
       "viewport": {
         "width": 390,
@@ -67,8 +67,8 @@
         "deviceScaleFactor": 1,
         "printMedia": false
       },
-      "bytes": 61724,
-      "sha256": "92515b6d0fadbf2a3491dd871583c0cc4dbbfc0a3b0485aa6f0acfa0013c38d1",
+      "bytes": 61132,
+      "sha256": "3dfa06de085434cf99576bdaefbb27fd754a2e3dd2384320629dc680978567f3",
       "metrics": {
         "scrollW": 390,
         "innerW": 390,
@@ -80,7 +80,7 @@
     },
     {
       "name": "tiny-320x568",
-      "file": "screenshots/visual-d21915a/tiny-320x568.png",
+      "file": "screenshots/visual-1f41e47/tiny-320x568.png",
       "note": "最窄 320：iPhone SE 级宽度，仍无横向滚动",
       "viewport": {
         "width": 320,
@@ -88,8 +88,8 @@
         "deviceScaleFactor": 1,
         "printMedia": false
       },
-      "bytes": 41287,
-      "sha256": "da27117c7674c88dd02adc8c9214c487e9bb49fdc16898db9d61f579c8d355e6",
+      "bytes": 40877,
+      "sha256": "2413bfc68b1a7f589d40f8b6f6d182898cadb4fef5ead597ec3bdb955659437e",
       "metrics": {
         "scrollW": 320,
         "innerW": 320,
@@ -101,7 +101,7 @@
     },
     {
       "name": "zoom200-1440x900",
-      "file": "screenshots/visual-d21915a/zoom200-1440x900.png",
+      "file": "screenshots/visual-1f41e47/zoom200-1440x900.png",
       "note": "200% 文字缩放（CSS 视口 720×450 @DPR2 = 1440×900 设备像素）",
       "viewport": {
         "width": 720,
@@ -109,8 +109,8 @@
         "deviceScaleFactor": 2,
         "printMedia": false
       },
-      "bytes": 141774,
-      "sha256": "ff8760f7a6550587aefe3c186cc619b3a25a69151e959e393a0b8e60ca08edab",
+      "bytes": 142239,
+      "sha256": "d8d6ea865225de2ba71eb457a2e6eca9de648dd0a73f9c6513d26624f7905301",
       "metrics": {
         "scrollW": 720,
         "innerW": 720,
@@ -122,7 +122,7 @@
     },
     {
       "name": "view-attitude",
-      "file": "screenshots/visual-d21915a/view-attitude.png",
+      "file": "screenshots/visual-1f41e47/view-attitude.png",
       "note": "3D 视图：姿态（机体 + 幻影）",
       "viewport": {
         "width": 1440,
@@ -130,8 +130,8 @@
         "deviceScaleFactor": 1,
         "printMedia": false
       },
-      "bytes": 184660,
-      "sha256": "367ec7fe2ec8a50ab62e3858acb9f1a8101829cc94e3dfa481fac941ca845789",
+      "bytes": 184860,
+      "sha256": "95c85edaa8faa64f78f7f4c6ef705bb79ada3c76fe51d792fb9cba2336515e7e",
       "metrics": {
         "scrollW": 1440,
         "innerW": 1440,
@@ -143,7 +143,7 @@
     },
     {
       "name": "view-gimbal",
-      "file": "screenshots/visual-d21915a/view-gimbal.png",
+      "file": "screenshots/visual-1f41e47/view-gimbal.png",
       "note": "3D 视图：万向节（三轴正交与死锁可视化）",
       "viewport": {
         "width": 1440,
@@ -151,8 +151,8 @@
         "deviceScaleFactor": 1,
         "printMedia": false
       },
-      "bytes": 235168,
-      "sha256": "9d8553a703b134ec4be029988a422ffda6e73fc0092ac0a6b043792b6b14df02",
+      "bytes": 235251,
+      "sha256": "119c06c0c0b4677b3e80911dc81309da18034ffa0725243c6894fcb70d374249",
       "metrics": {
         "scrollW": 1440,
         "innerW": 1440,
@@ -164,7 +164,7 @@
     },
     {
       "name": "view-quat",
-      "file": "screenshots/visual-d21915a/view-quat.png",
+      "file": "screenshots/visual-1f41e47/view-quat.png",
       "note": "3D 视图：四元数（分量弧线 + 单位球）",
       "viewport": {
         "width": 1440,
@@ -172,8 +172,8 @@
         "deviceScaleFactor": 1,
         "printMedia": false
       },
-      "bytes": 172168,
-      "sha256": "1358d08126aa7fd838c2689124424aebe1b5e21cb9f1ca4ddd07b7764b7382ee",
+      "bytes": 171936,
+      "sha256": "d6b311ec41d9c6fec8384fde66e36c0bc2e8be0ae999786649fe828768c53984",
       "metrics": {
         "scrollW": 1440,
         "innerW": 1440,
@@ -185,7 +185,7 @@
     },
     {
       "name": "docs-math",
-      "file": "screenshots/visual-d21915a/docs-math.png",
+      "file": "screenshots/visual-1f41e47/docs-math.png",
       "note": "应用内文档：数学分页（KaTeX 排版）",
       "viewport": {
         "width": 1440,
@@ -206,7 +206,7 @@
     },
     {
       "name": "print-docs-794x1123",
-      "file": "screenshots/visual-d21915a/print-docs-794x1123.png",
+      "file": "screenshots/visual-1f41e47/print-docs-794x1123.png",
       "note": "打印媒体 A4（794×1123）：只剩当前文档页",
       "viewport": {
         "width": 794,
@@ -227,7 +227,7 @@
     },
     {
       "name": "print-desktop-1440x900",
-      "file": "screenshots/visual-d21915a/print-desktop-1440x900.png",
+      "file": "screenshots/visual-1f41e47/print-desktop-1440x900.png",
       "note": "打印媒体（桌面尺寸）：外壳隐藏、正文可读",
       "viewport": {
         "width": 1440,

@@ -27,13 +27,13 @@
 - `contracts` 链（每个文件都是独立反例集）：time / schema / doc-search / archive-ui / lifecycle / worker / trace，以及 node:test 的 soak / evidence / smoke-verdict / status / budget 契约。
 - `npm run budget` = **14 项**产物预算；判定已抽成纯函数（`scripts/budget-core.mjs`），报告同时给出**名义上限 / 有效门槛（90%）/ 剩余字节 / 相对冻结基线（830e4e3）增量**，修法提示只指向减重。主包 JS 当前 282.4 KB（有效门槛 283.5 KB，剩 1.1 KB）——**余量很薄，是已知待办**。
 - 浏览器冒烟声明 **107 项**（app 87 + devices 20）；驱动器比对的是**完整集合**（清单 `scripts/smoke-manifest.json`，由契约测试守着不漂移），不是 PASS 行数。
-- 产品源码摘要（本轮冻结构建）：`777bf03778ed01e1058d6688d7798968`（83 个构建输入文件）；构建标识 `777bf03778ed-ecc49ed8c2c3e858`。
+- 产品源码摘要（本轮冻结构建）：`d97bbbafb374…`（83 个构建输入文件）；构建标识 `d97bbbafb374-4ace2bc8a8795108`。**构建可复现**（`builtAt` 取提交时间，两次构建 `distHash` 相同）——证据不会因"重建一次"而失效。
 - 全部 JS gzip 约 266 KiB（名义上限 300 KiB，有效门槛 270 KiB，剩约 4 KiB）。
 
 本轮证据（同一份冻结构建，均在本机 Windows 采集并已登记进索引）：
 
-- 长稳 **600 s ×2**：批量（3/3 批、水位 +2.8 MB、峰值 23.4、趋势 11.1、末段与采样覆盖 PASS）与重连（66/66 恢复、水位 +5.5、峰值 23.5、趋势 15.2）——`generated/soak-*-600-777bf037.json`。
-- 稳定性 **5×(app+devices)**：每轮 **107 项完整集合**、零失败零 warning 零重启——`generated/stability-local-windows-777bf037.json`。
+- 长稳 **600 s ×2**：批量（3/3 批、水位 +3.6 MB、峰值 23.7、趋势 9.8、末段与采样覆盖 PASS）与重连（66/66 恢复、水位 +7.4、峰值 25.7、趋势 15.5）——`generated/soak-*-600-d97bbbaf.json`。
+- 稳定性 **5×(app+devices)**：每轮 **107 项完整集合**、零失败零 warning 零重启——`generated/stability-local-windows-d97bbbaf.json`。
 - 视觉 11 张（含 200% 页面缩放与打印）——`generated/visual-evidence.json`；性能与体积归因——`generated/perf-report.json`、`generated/size-report.json`。
 - 严格验收通过：`npm run evidence:verify`（源码摘要 + 产物摘要 + buildId 三层绑定）。
 - **线上部署已通过**（run 42040828875 / 提交 95a80413）：部署后 smoke 第 1 次即过——页脚构建标识与提交一致、
