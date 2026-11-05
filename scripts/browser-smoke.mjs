@@ -2174,17 +2174,25 @@ try {
   const cancelLatency = mainCancel.after.state.cancelLatencyMs;
   /**
    * 阈值口径（**环境相关，必须说清**）：
-   *   · 绝对目标：参考环境（普通桌面）取消 ≤200 ms、交互 p95 ≤200 ms——本机实测 11~13 ms / 5 ms；
-   *   · CI 的 2 vCPU + 软件 WebGL runner 单帧就要上百毫秒，绝对 200 ms 描述的是它对渲染的容量，
-   *     不是协作取消的优劣。所以断言用**相对基线**：取消 ≤ max(200, 2×空闲 p95)、
-   *     运行期 p95 ≤ max(200, 4×空闲 p95)。协作取消一旦退化成"等整个种子跑完"，这两条会成倍超标。
+   *   · 绝对目标：参考环境（普通桌面）取消 ≤200 ms、交互 p95 ≤200 ms——本机实测 11~17 ms / 5 ms；
+   *   · 慢环境（2 vCPU + 软件 WebGL、或本机同时跑着五轮稳定性）里，连"空闲时一次 setTimeout(0) 往返"
+   *     都能到 150 ms 量级；绝对 200 ms 此时描述的是机器负载，不是协作取消的优劣。
+   * 所以断言用三层，**都不放松产品性质**：
+   *   ① 取消 ≤ max(200 ms, 3×空闲 p95)——等一次事件循环抖动的量级；
+   *   ② 取消 ≤ 0.8×**整枚种子的实测耗时**——这一条直接编码"在种子跑完之前就停下"，
+   *      与机器快慢无关（退化成长等待、等整枚种子跑完的实现必然超标）；
+   *   ③ 运行期交互 p95 ≤ max(200 ms, 4×空闲 p95)。
+   * 绝对 200 ms 仍是参考环境的验收目标，报告里照常打印绝对值与"是否参考环境（空闲 p95 ≤ 50 ms）"。
    */
   const idleP95 = mainCancel.idleLatency.p95;
-  const cancelBudget = Math.max(200, idleP95 * 2);
+  const perSeedMs = mainCancel.restart.elapsedMs / 10;
+  const cancelBudget = Math.min(Math.max(200, idleP95 * 3), Math.max(200, perSeedMs * 0.8));
+  const cancelBudgetIdle = Math.max(200, idleP95 * 3);
+  const cancelBudgetSeed = perSeedMs * 0.8;
   const responseBudget = Math.max(200, idleP95 * 4);
   const referenceEnv = idleP95 <= 50;
   check(
-    "SW-10 主线程降级：真实点击取消在首个种子中途生效，下一片即停（参考环境 ≤200 ms；其余环境按空闲基线 2× 判定）",
+    "SW-10 主线程降级：真实点击取消在首个种子中途生效，下一片即停（参考环境 ≤200 ms；慢环境按空闲基线 3× 且必须早于整枚种子）",
     mainCancel.during.state.running &&
       mainCancel.during.state.button.includes("取消") &&
       mainCancel.during.state.workerDisabled === true &&
@@ -2194,7 +2202,8 @@ try {
       mainCancel.after.state.running === false,
     `运行中 running=${mainCancel.during.state.running}、按钮「${mainCancel.during.state.button}」、` +
       `强制降级=${mainCancel.during.state.workerDisabled}；取消时延 ${cancelLatency === null ? "未记录" : `${cancelLatency.toFixed(0)} ms`}` +
-      `（额度 ${cancelBudget.toFixed(0)} ms = max(200, 2×空闲 ${idleP95.toFixed(0)} ms)；参考环境=${referenceEnv}）；` +
+      `（额度 ${cancelBudget.toFixed(0)} ms = min(max(200, 3×空闲 ${idleP95.toFixed(0)} ms)=${cancelBudgetIdle.toFixed(0)}, ` +
+      `0.8×种子 ${perSeedMs.toFixed(0)} ms=${cancelBudgetSeed.toFixed(0)}）；参考环境=${referenceEnv}）；` +
       `被丢弃的半成品种子 ${mainCancel.after.state.partialSeeds} 个；状态「${mainCancel.after.status.slice(0, 16)}」`,
   );
   check(
