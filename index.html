@@ -1002,47 +1002,58 @@
     <div class="docs-shell">
       <nav class="docs-toc" aria-label="文档模块">
         <button class="btn" id="btn-docs-close">← 返回演示</button>
-        <div class="toc-title">文档模块</div>
-        <button class="module-link active" data-doc="manual">
-          <span class="mod-name">控制项手册</span>
-          <span class="mod-desc">每个滑块与标记的百科</span>
-        </button>
-        <button class="module-link" data-doc="math">
-          <span class="mod-name">数学原理</span>
-          <span class="mod-desc">从零开始的完整推导</span>
-        </button>
-        <button class="module-link" data-doc="math-topics">
-          <span class="mod-name">数学原理 · 专题</span>
-          <span class="mod-desc">直觉 · 插值 · 单帧定姿 · 圆锥</span>
-        </button>
-        <button class="module-link" data-doc="filters">
-          <span class="mod-name">滤波算法讲解</span>
-          <span class="mod-desc">五种算法的直觉与选型</span>
-        </button>
-        <button class="module-link" data-doc="labs">
-          <span class="mod-name">实验与练习</span>
-          <span class="mod-desc">学习路径 · 实验索引 · 自测题</span>
-        </button>
-        <button class="module-link" data-doc="guide">
-          <span class="mod-name">硬件与固件</span>
-          <span class="mod-desc">真实 IMU 接入 · 帧协议 · 磁校准</span>
-        </button>
-        <button class="module-link" data-doc="trouble">
-          <span class="mod-name">排障手册</span>
-          <span class="mod-desc">曲线不对 / 接不上 / 页面异常</span>
-        </button>
-        <button class="module-link" data-doc="glossary">
-          <span class="mod-name">术语与符号索引</span>
-          <span class="mod-desc">全库术语、符号、约定速查</span>
-        </button>
-        <button class="module-link" data-doc="refs">
-          <span class="mod-name">参考文献</span>
-          <span class="mod-desc">出处与延伸阅读（含外链）</span>
-        </button>
-        <button class="module-link" data-doc="about">
-          <span class="mod-name">关于本装置</span>
-          <span class="mod-desc">口径声明 · 变更日志 · 致谢</span>
-        </button>
+        <!-- 窄屏折叠（SW-11）：模块目录默认收起，首屏先看到正文；
+             用 <details>/<summary> 而不是自绘折叠——键盘（Enter/Space）与读屏（展开状态）原生可用。
+             宽屏由 CSS 隐藏 summary 并保持 open，外观与行为不变。 -->
+        <details class="toc-disclosure" id="toc-disclosure" open>
+          <summary class="toc-summary">
+            <span class="toc-title">文档模块</span>
+            <span class="toc-current" id="toc-current">控制项手册</span>
+            <span class="toc-toggle-hint" aria-hidden="true">展开 / 收起</span>
+          </summary>
+          <div class="toc-list">
+          <button class="module-link active" data-doc="manual">
+            <span class="mod-name">控制项手册</span>
+            <span class="mod-desc">每个滑块与标记的百科</span>
+          </button>
+          <button class="module-link" data-doc="math">
+            <span class="mod-name">数学原理</span>
+            <span class="mod-desc">从零开始的完整推导</span>
+          </button>
+          <button class="module-link" data-doc="math-topics">
+            <span class="mod-name">数学原理 · 专题</span>
+            <span class="mod-desc">直觉 · 插值 · 单帧定姿 · 圆锥</span>
+          </button>
+          <button class="module-link" data-doc="filters">
+            <span class="mod-name">滤波算法讲解</span>
+            <span class="mod-desc">五种算法的直觉与选型</span>
+          </button>
+          <button class="module-link" data-doc="labs">
+            <span class="mod-name">实验与练习</span>
+            <span class="mod-desc">学习路径 · 实验索引 · 自测题</span>
+          </button>
+          <button class="module-link" data-doc="guide">
+            <span class="mod-name">硬件与固件</span>
+            <span class="mod-desc">真实 IMU 接入 · 帧协议 · 磁校准</span>
+          </button>
+          <button class="module-link" data-doc="trouble">
+            <span class="mod-name">排障手册</span>
+            <span class="mod-desc">曲线不对 / 接不上 / 页面异常</span>
+          </button>
+          <button class="module-link" data-doc="glossary">
+            <span class="mod-name">术语与符号索引</span>
+            <span class="mod-desc">全库术语、符号、约定速查</span>
+          </button>
+          <button class="module-link" data-doc="refs">
+            <span class="mod-name">参考文献</span>
+            <span class="mod-desc">出处与延伸阅读（含外链）</span>
+          </button>
+          <button class="module-link" data-doc="about">
+            <span class="mod-name">关于本装置</span>
+            <span class="mod-desc">口径声明 · 变更日志 · 致谢</span>
+          </button>
+          </div>
+        </details>
         <div class="docs-search">
           <input type="search" id="docs-search-input" placeholder="搜索全文（Ctrl/⌘ + K）" aria-label="在全部文档中搜索" autocomplete="off" />
           <div class="docs-search-hits hidden" id="docs-search-hits" role="listbox" aria-label="搜索结果"></div>
@@ -5267,12 +5278,17 @@ export function applyMagCalibration(m, cal) {
             <li><b>技术栈</b>：TypeScript + Vite；Three.js 是唯一运行时依赖（程序化建模，无外部模型文件）；数学排版只用了 KaTeX 的字体（无其运行时）；图表是手写 Canvas 2D；无前端框架。</li>
             <li><b>坐标系</b>：世界 NED、机体 FRD、四元数为机体系→世界系；显示坐标 X=北、Y=上、Z=东。</li>
             <li><b>数值</b>：姿态积分用精确指数映射（不是一阶欧拉）；两姿态夹角用相对四元数的 atan2（零角附近分辨率 ~1e-15 而非 acos 的 1e-8）；欧拉角在 ±90° 处按通行约定取 roll := 0。</li>
-            <li><b>验证</b>：类型检查 + <b>117 项数值自检</b> + <b>10 项三维场景几何自检</b> + <b>15 项 HTML↔TS 契约检查</b> +
-              <b>1 项文档基准引用检查</b> + <b>76 项浏览器端到端冒烟</b> + <b>1 项计数一致性检查</b>（含文档演示「真的在动」、<b>全部 15 个文档页</b>的文字对比度达 WCAG AA、
-              长跑时滚动容器封顶、串口/BLE 断线自动重连恢复数据流且<b>不清空本轮实验</b>、批量评测真的走 Worker 且可取消、
-              界面与 runner 逐帧一致、校准历史可恢复、每个滑杆数值框都能键入、连接防重入、深链全控件往返。
-              最后一项会真的灌 40 s 仿真时间进去，证明裁剪逻辑在跑而不只是「看起来正常」）。
-              所有断言都可在本地复现（见页脚与仓库 README）。</li>
+            <li><!-- facts:begin --><b>验证</b>：类型检查 + <b>126 项数值自检</b> + <b>10 项三维场景几何自检</b> + <b>15 项 HTML↔TS 契约检查</b> +
+              <b>4 项文档基准检查</b> + 独立时间/schema/生命周期/Worker/trace/soak/status/budget/evidence 契约 +
+              <b>106 项浏览器端到端冒烟</b>（app / devices 两片）+ <b>14 项产物预算</b>。
+              <!-- verify: check=155 contracts=yes status=yes smoke=106 budget=14 evidence=yes --><!-- facts:end -->
+              浏览器用例覆盖文档演示、15 页对比度、容器封顶、串口/BLE 重连、Worker 取消、UI/runner trace、
+              校准历史、控件接线、档案事务（三类失败档案导入前后完好）、200% 文字缩放与深链往返；
+              <span class="mono">evidence:check</span> 机器核对证据索引，长稳与视觉证据用
+              <span class="mono">sourceDigest</span> 钉在具体源码上；仓库文档里的门禁数字由
+              <span class="mono">statuscheck</span> 与同一份实测对齐——手改这里会被门禁拦下。
+              当前百分制与证据边界见仓库 <span class="mono">docs/QUALITY-STATUS.md</span>
+              与 <span class="mono">docs/VERIFICATION-EVIDENCE.md</span>。真机和跨平台稳定性未完成的部分不会用 mock 冒充。</li>
             <li><b>可复算基准</b>：<span class="mono">npm run benchmark</span> 用无 DOM 运行内核生成
               <span class="mono">docs/generated/benchmarks.json</span>（配置、种子、窗口与指标一起保存）；
               <span class="mono">npm run doccheck</span> 校验文档引用。当前引用：
@@ -5304,7 +5320,7 @@ export function applyMagCalibration(m, cal) {
 
         <section id="a-changelog">
           <h2>变更日志</h2>
-          <p>面向使用者的变更摘要（开发视角的详细记录在仓库 <span class="mono">docs/PROJECT-STATE.md</span>）。</p>
+          <p>面向使用者的变更摘要（开发历史见 <span class="mono">docs/CHANGELOG.md</span>；当前质量、开放工单和证据边界分别见 <span class="mono">docs/QUALITY-STATUS.md</span>、<span class="mono">docs/ROADMAP.md</span>、<span class="mono">docs/VERIFICATION-EVIDENCE.md</span>）。</p>
           <div class="tscroll"><table class="docs-table">
             <thead><tr><th>版本 / 轮次</th><th>内容</th></tr></thead>
             <tbody>

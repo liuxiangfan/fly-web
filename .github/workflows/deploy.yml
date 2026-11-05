@@ -1,5 +1,8 @@
 name: Deploy to Cloudflare Workers
 
+# 只跑 Windows（本阶段只支持 Windows 本机）。verify 与 deploy 都在 windows-latest 上执行；
+# 浏览器用例走仓库自己的驱动器（自带 preview 与就绪等待），不依赖 shell 语法。
+
 on:
   push:
     branches: [master]
@@ -15,7 +18,7 @@ jobs:
   # 先跑「不依赖部署凭据」的全部检查；只有它通过才部署。
   # 这样 PR 与 push 走同一条验证链，部署步骤也不会把时间浪费在必然失败的提交上。
   verify:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -49,29 +52,27 @@ jobs:
       - name: Dist budget
         run: npm run budget
 
-      # 真浏览器端到端（含假 Web Serial 端口用例）。CI runner 上没有本机 Edge/Chrome，
-      # 这里用 setup-chrome 装一个，并通过 CHROME_PATH 覆盖脚本的自动探测。
-      - name: Setup Chrome
-        id: chrome
-        uses: browser-actions/setup-chrome@v1
-        with:
-          chrome-version: stable
-
-      - name: Browser smoke test
+      # 真浏览器端到端（含假 Web Serial / 假 BLE / 协议端到端）。windows-latest 预装 Chrome 与 Edge，
+      # 脚本的候选表里已含它们的标准路径，不需要额外安装。
+      # 一律走仓库自己的驱动器：它自己起 preview、自己等到就绪、自己收尾（不用 shell 的后台语法，
+      # 也不会踩「localhost 解析到 ::1」那类平台差异）。
+      - name: Browser smoke test（完整集合，一轮）
         env:
-          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
-          EDGE_PATH: ${{ steps.chrome.outputs.chrome-path }}
-        # 必须显式绑 127.0.0.1 并用 tcp: 探活：runner 上 `localhost` 会解析到 IPv6（::1），
-        # 而 vite preview 默认只绑 localhost，wait-on 探 127.0.0.1 会一直等到超时（首次跑 CI 就踩到）。
-        run: |
-          npm run preview -- --port 4173 --strictPort --host 127.0.0.1 > /tmp/preview.log 2>&1 &
-          npx --yes wait-on tcp:127.0.0.1:4173 --timeout 90000
-          npm run smoke || { echo "=== preview 日志 ==="; cat /tmp/preview.log; exit 1; }
+          SMOKE_VIEWPORT: 800x600
+        run: node scripts/ci-run-smoke.mjs --shard=both --runs=1 --out=.audit-smoke/deploy
+
+      - name: Upload smoke logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deploy-smoke-logs
+          path: .audit-smoke/deploy
+          if-no-files-found: ignore
 
   deploy:
     needs: verify
     if: github.event_name == 'push'
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -100,3 +101,37 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: deploy
           wranglerVersion: 4
+
+      # 部署后 smoke（**自动**）：把「线上到底跑的是哪个提交、核心功能是否还活着」变成每次部署
+      # 都会产生的证据，而不是事后手工跑一次（复核 P2：证据要么自动产生，要么不会产生）。
+      # 判定：HTTP 200 / 页面自报的构建标识等于本次提交 / 时钟真的在推进 / 5 行评测 / canvas /
+      # 控制台零错误——任一不过即判这次部署失败（可见，而不是静默放过）。
+      - name: Post-deploy smoke
+        # 这一步用 bash（windows-latest 预装 Git Bash）：重试循环与变量都是 shell 逻辑，
+        # 显式声明比依赖 runner 的默认 shell（PowerShell）更不容易踩平台差异。
+        shell: bash
+        env:
+          # windows-latest 预装 Chrome；脚本的候选表已含该路径。
+          CHROME_PATH: C:/Program Files/Google/Chrome/Application/chrome.exe
+        run: |
+          URL="https://fly_web.070616.xyz/"
+          OUT=".audit-smoke/postdeploy-${{ github.sha }}.json"
+          # CDN 传播可能有几秒延迟：重试 3 次、间隔 20 s，三次都不过才判失败。
+          for i in 1 2 3; do
+            if node scripts/postdeploy-smoke.mjs --url="$URL" --expect="${{ github.sha }}" --out="$OUT"; then
+              echo "部署后 smoke 通过（第 $i 次）"
+              exit 0
+            fi
+            echo "第 $i 次未通过（可能是 CDN 传播延迟），20 s 后重试"
+            sleep 20
+          done
+          echo "部署后 smoke 连续 3 次失败——线上产物与本次提交不一致，或核心功能已损坏"
+          exit 1
+
+      - name: Upload post-deploy evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: postdeploy-evidence
+          path: .audit-smoke/postdeploy-*.json
+          if-no-files-found: ignore

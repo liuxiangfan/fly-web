@@ -9,7 +9,10 @@
 
 **在线演示**：[fly_web.070616.xyz](https://fly_web.070616.xyz)　（备用：[workers.dev](https://quaternion-attitude-demo.liu06167492.workers.dev)）
 
-每次推送到 `master` 自动构建部署：类型检查 → 数值自检 121 + 场景几何 10 + HTML 契约 15 + 文档基准 2 + 计数一致性 7 → 产物预算 → 78 项浏览器冒烟 → Cloudflare Workers（PR 也会跑同一套验证，只是不部署）。
+<!-- facts:begin -->
+每次推送到 `master` 自动验证并部署：类型检查 → 数值自检 126 + 场景几何 10 + HTML 契约 15 + 文档基准 4 + 独立 contracts/status/evidence → 14 项产物预算 → 106 项浏览器冒烟（app / devices 两片）→ Cloudflare Workers；PR 运行同一 gate 与两片冒烟但不部署。
+<!-- verify: check=155 contracts=yes status=yes smoke=106 budget=14 evidence=yes -->
+<!-- facts:end -->
 
 ---
 
@@ -252,7 +255,7 @@ npm run preview   # 预览构建产物
 ```bash
 npx tsc --noEmit  # 类型检查
 npm run check     # 数值自检 + 场景几何 + HTML 契约 + 文档基准引用（0 FAIL）
-npm run budget    # 产物体积预算（9 项上限）
+npm run budget    # 产物体积预算（14 项上限）
 npm run smoke     # 真浏览器端到端（含导出→导入闭环、文本/MAVLink 假串口、假 BLE 设备、打印媒体、可访问性、
                   # 长跑稳定性、每个滑杆数值框可键入、连接防重入、深链全控件往返、器件预设可复现；需先 build + preview）
 npm run benchmark # 复算 docs/generated/benchmarks.json（多种子 RMSE / NIS-NEES / 圆锥 / 单帧定姿 / 六面校准）
@@ -344,8 +347,11 @@ npm run icons      # 从 favicon.svg 重新生成 PWA 图标
 │   ├── doccheck.ts         #   文档 data-benchmark 引用与基准 JSON 一致性
 │   ├── statuscheck.ts      #   文档计数与源码实测值对齐（实验库/演示/自检/冒烟/分页）
 │   ├── benchmark.ts        #   生成 docs/generated/benchmarks.json（多种子/NEES/圆锥/单帧/六面）
-│   ├── browser-smoke.mjs   #   真浏览器端到端（含 Worker 批量、断线重连、校准独立验证、可访问性与长跑稳定性）
-│   ├── distbudget.mjs      #   产物体积预算（8 项上限：外壳/文档分开算，懒加载 Worker 单独一项）
+│   ├── browser-smoke.mjs   #   真浏览器端到端（含 Worker 批量、断线重连、校准独立验证、可访问性、200% 缩放与长跑稳定性）
+│   ├── evidencecheck.mjs   #   证据索引机器校验（结构/哈希/唯一 current/溯源字段/supersedes 闭合）
+│   ├── source-digest.mjs   #   证据的源码绑定：对参与构建的文件做 sha256（未提交的工作树也有确定摘要）
+│   ├── visual-evidence.mjs #   视觉证据（320/390/768/1440 + 200% + 三视图 + 文档 + 打印，事实随仓库版本化）
+│   ├── distbudget.mjs      #   产物体积预算（14 项上限：外壳/文档分开算，懒加载 Worker 单独一项）
 │   ├── shot.mjs            #   开发用截图工具（视口/元素截图 + 页面内脚本）
 │   ├── make-icons.mjs      #   PWA 图标生成
 │   └── diag*.ts            #   收敛 / 剧烈机动诊断脚本
@@ -407,12 +413,12 @@ npx wrangler deploy
 ## 参考
 
 数学与工程口径核对过的外部资料（讲义、论文、开源实现）整理在
-[`docs/RESEARCH-NOTES.md`](docs/RESEARCH-NOTES.md)，项目架构与历次改动记录在
-[`docs/PROJECT-STATE.md`](docs/PROJECT-STATE.md)，
-一次全面评估的改进建议清单与**逐条落地状态**在
-[`docs/IMPROVEMENT-PROPOSAL.md`](docs/IMPROVEMENT-PROPOSAL.md)。
-下一轮实施任务书（含现状证据、依赖顺序、具体改法、文档修订地图与验收标准）见
-[`docs/NEXT-ITERATION-ROADMAP.md`](docs/NEXT-ITERATION-ROADMAP.md)。
+[`docs/RESEARCH-NOTES.md`](docs/RESEARCH-NOTES.md)。当前架构与约定见
+[`docs/PROJECT-STATE.md`](docs/PROJECT-STATE.md)；当前百分制质量结论见
+[`docs/QUALITY-STATUS.md`](docs/QUALITY-STATUS.md)；真实开放项见
+[`docs/ROADMAP.md`](docs/ROADMAP.md)；证据边界与机器索引见
+[`docs/VERIFICATION-EVIDENCE.md`](docs/VERIFICATION-EVIDENCE.md)；历史复核和产品变更分别见
+[`docs/QUALITY-AUDIT-HISTORY.md`](docs/QUALITY-AUDIT-HISTORY.md) 与 [`docs/CHANGELOG.md`](docs/CHANGELOG.md)。
 
 主要参考：i2Nav《惯性导航姿态算法》讲义与 KF-GINS、Madgwick 2011 报告、Solà 的 ESKF 四元数运动学、
 Mahony 2008 显式互补滤波、Shoemake 1985（Slerp / Squad）、Markley 的 MEKF 论述、

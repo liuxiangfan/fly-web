@@ -61,6 +61,7 @@ try {
   const status = resp?.status() ?? 0;
   await page.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: timeoutMs });
 
+  const browserVersion = await browser.version();
   const before = await page.evaluate(() => ({
     build: window.attitudeDemo?.build?.() ?? null,
     clock: parseFloat((document.getElementById("clock")?.textContent ?? "0").replace(/[^\d.]/g, "")) || 0,
@@ -96,6 +97,8 @@ try {
   const report = {
     generatedAt: new Date().toISOString(), startedAt, finishedAt: new Date().toISOString(),
     url, httpStatus: status, expectedCommit: expect || null,
+    // 溯源：报告必须能回答「用哪个浏览器、看的是哪个提交的线上产物」（复核 P2 证据治理）
+    browserVersion,
     observed: { commit: before.build?.commit ?? null, builtAt: before.build?.builtAt ?? null, stamp: before.stamp, clockFrom: before.clock, clockTo: after.clock, metricRows: after.rows, fps: after.fps, canvas: after.hasCanvas },
     checks: { statusOk: status === 200, commitOk, expectOk, clockAdvanced: clockOk, fiveEstimatorRows: rowsOk, stampRendered: stampOk, canvas: after.hasCanvas, consoleClean: consoleErrors.length === 0 },
     consoleErrors, pass,

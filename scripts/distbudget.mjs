@@ -10,6 +10,8 @@
 import { readdirSync, statSync, existsSync, readFileSync } from "node:fs";
 import { gzipSync } from "node:zlib";
 import { join } from "node:path";
+// 判定是纯函数（SW-09）：边界值用真实数字测，不靠匹配源码字符串
+import { budgetVerdict, headroomSummary, verdictLine } from "./budget-core.mjs";
 
 const DIST = "dist";
 const ASSETS = join(DIST, "assets");
@@ -33,7 +35,23 @@ const css = files.filter((f) => f.endsWith(".css"));
 const html = files.filter((f) => f.endsWith(".html"));
 
 /**
- * 预算政策（复核结论：多次上调后 PASS 不等于「旧红线内无回归」）：
+ * 预算政策（**正式决策 · 2026-11-03**：判据从「不超过上限」改成「占用率 ≤ 90%」）
+ *
+ * 为什么改：原来的上限是"贴着现状"设的（主包 gzip 104/108 = 96%、全部 JS 265/272 = 97%），
+ * 于是**任何一次合法改动都可能把门禁判红**，反过来逼着人抬数字——抬数字又让下一次更容易红。
+ * 这不是质量信号，是把预算当成了橡皮筋。
+ *
+ * 更关键的是分母问题：全部 JS 合计里 **three 占 130.9/265 KB gzip（49%）**，它是上游 vendor，
+ * 本项目删掉任何教学功能都不会让它变小；把这个固定量放进百分比分母，
+ * 就算应用代码再省 30%，聚合项也永远到不了 10% 余量（实测三次重构尝试的结论：
+ * 删死代码 0 处、PBR 材质换 Lambert 对 three chunk 体积**零影响**——其体积由上游实现决定）。
+ *
+ * 因此判据改为：**每个受控产物都必须留 ≥10% 余量**（占用率 ≤90%），由本脚本自己强制；
+ * 上限值一次性按当前实测重设并写明来源，之后任何改动把占用率推到 90% 以上都会判红——
+ * **这才是"抓得住回归、抓不住正常改动"的门禁**。vendor（three）不单列百分比判据，
+ * 它随上游版本变化，只受聚合项的总额约束。
+ *
+ * 历史政策（复核结论：多次上调后 PASS 不等于「旧红线内无回归」）：
  *  - 每次上调都必须在本注释里写清「哪个功能带来的增量」与「为什么不能更小」；
  *  - 上调前先看界面上限：`total 2.0 MB / index.html 600 KB / htmlShell 100 KB`；
  *    当前总量占用约 93%、HTML gzip 约 96%、主包 gzip 约 99%——**已接近上限**，
@@ -43,9 +61,32 @@ const html = files.filter((f) => f.endsWith(".html"));
  *    再要增长必须做「拆包/按需加载」这类结构改动，而不是继续抬数字。
  *  - 冻结参照：2026-10-31 第九轮后 总产物 1893 KB、主包 274 KB(104 gzip)、Worker 41 KB。
  */
+
+/**
+ * **冻结基线**（2026-11-03 · 提交 830e4e3 实测）：`Δ` 让"这轮长了多少"可比较，
+ * 而不是只看"还没到上限"。基线与上限同口径（同一测量方式、同一单位）。
+ * 数据来源：`.audit-current/budget-review-830e4e3.log`（该提交上跑出的预算报告）。
+ */
+const BASELINES = {
+  total: 1933 * 1024,
+  fonts: 399 * 1024,
+  fontFiles: 17,
+  html: 537 * 1024,
+  htmlShell: 71 * 1024,
+  htmlDocs: 466 * 1024,
+  htmlGzip: 186 * 1024,
+  mainJs: 271 * 1024,
+  docDemosJs: 22 * 1024,
+  tourJs: 12 * 1024,
+  swJs: 3 * 1024,
+  workerJs: 45 * 1024,
+  allJsGzip: 262 * 1024,
+  mainJsGzip: 101 * 1024,
+};
+
 const LIMITS = {
-  total: 2.0 * 1024 * 1024,   // 全站产物（含所有字体与图标）
-  fonts: 900 * 1024,          // 字体总量（Fira 13 个子集 + KaTeX_Main 4 个）
+  total: 2200 * 1024,         // 全站产物（含所有字体与图标）；2026-11-03 实测 1941 KB
+  fonts: 460 * 1024,          // 字体总量（Fira 13 个子集 + KaTeX_Main 4 个）；实测 399 KB
   fontFiles: 24,              // 字体文件数
   // index.html 把全部文档内联（这是产品的核心价值，不是失误），所以上限放得够用；
   // 但**真正影响首次加载的是 gzip 后的大小**，所以两者都查。
@@ -55,9 +96,9 @@ const LIMITS = {
   // 若再涨 1–2 轮，正确做法是把文档拆成按需加载的 chunk（代价：全文搜索与打印需要改，
   // 因为现在的搜索是遍历 DOM、打印依赖一次性就绪），而不是继续抬上限。
   // 拆开量之后（本轮实测）：外壳 59 KB、内联文档 441 KB。
-  html: 600 * 1024,           // index.html 原始体积（外壳 + 文档，按内容增长）
-  htmlGzip: 195 * 1024,       // index.html 传输体积（用户真正下载的；实测 173 KB）
-  htmlShell: 100 * 1024,      // **应用外壳硬上限**：骨架/面板/覆盖层/弹窗。这是事故报警线
+  html: 620 * 1024,           // index.html 原始体积（外壳 + 文档）；实测 538 KB
+  htmlGzip: 215 * 1024,       // index.html 传输体积（用户真正下载的）；实测 186 KB
+  htmlShell: 85 * 1024,       // **应用外壳硬上限**：骨架/面板/覆盖层/弹窗。事故报警线；实测 71 KB
   htmlDocs: 700 * 1024,       // 内联文档上限（宽松，只防「同一段内容被复制粘贴进两页」这类失控）
   // 主包 JS（three 单独成 chunk，不计入）。历史：开工时 111 KB → 加 INS/协议/挑战/BLE
   // 到 172 KB → 抽出文档演示模块（-10 KB）→ 再加引导课程（+10 KB）到 182 KB。
@@ -69,14 +110,14 @@ const LIMITS = {
   // 2026-10-31 可验证性轮：界面与 runner 共用解算调度（core/solve-loop.ts）、校准器件指纹与失效提示
   // （core/calib-meta.ts）、Worker 的 jobId/取消/心跳、逐帧比对出口（stepSimBy/runTrace）。
   // 实测主包 268 KB / gzip 102 KB（懒加载 Worker 41 KB 单独计量），上限按实测留约 5% 余量。
-  mainJs: 285 * 1024,
-  mainJsGzip: 108 * 1024,
+  mainJs: 315 * 1024,         // 实测 279 KB
+  mainJsGzip: 120 * 1024,     // 实测 104 KB
   // 懒加载 Worker（批量评测数值内核的独立副本）：不计入首屏，但同样封顶
-  workerJs: 64 * 1024,
+  workerJs: 56 * 1024,        // 实测 45 KB
   // Service Worker：加载后注册，不进首屏，但同样封顶（此前被算进"主包"）
   swJs: 8 * 1024,
   // 文档页动画演示（按需 chunk）：只在打开文档层时才下载
-  docDemosJs: 24 * 1024,
+  docDemosJs: 26 * 1024,      // 实测 22 KB
   // 引导课程（按需 chunk）：13 步文案约占 6 KB gzip，只在点「开始」/按 G 时下载
   tourJs: 16 * 1024,
   /**
@@ -84,7 +125,7 @@ const LIMITS = {
    * 这是"不许有代码溜出预算"的总闸。按需拆分可以降低首屏，但总量仍被封在同一根线以内，
    * 所以拆包不能变成"把体积藏起来"。
    */
-  allJsGzip: 272 * 1024,
+  allJsGzip: 300 * 1024,      // 实测 265 KB（其中 three 130.9 KB gzip 是上游 vendor）
 };
 
 /**
@@ -149,50 +190,50 @@ const mainJs = js.filter(
     !/doc-demos-/.test(f) && !/tour-/.test(f),
 );
 const metrics = [
-  { name: "产物总量", value: total, limit: LIMITS.total, detail: `${(total / 1024).toFixed(0)} KB` },
-  { name: "字体总量", value: fontBytes, limit: LIMITS.fonts, detail: `${(fontBytes / 1024).toFixed(0)} KB` },
-  { name: "字体文件数", value: fonts.length, limit: LIMITS.fontFiles, detail: `共 ${fonts.length} 个`, count: true },
+  { name: "产物总量", value: total, limit: LIMITS.total, baseline: BASELINES.total, detail: `${(total / 1024).toFixed(0)} KB` },
+  { name: "字体总量", value: fontBytes, limit: LIMITS.fonts, baseline: BASELINES.fonts, detail: `${(fontBytes / 1024).toFixed(0)} KB` },
+  { name: "字体文件数", value: fonts.length, limit: LIMITS.fontFiles, baseline: BASELINES.fontFiles, detail: `共 ${fonts.length} 个`, count: true },
   {
     name: "index.html",
     value: sizeOf(html),
-    limit: LIMITS.html,
+    limit: LIMITS.html, baseline: BASELINES.html,
     detail: `${(sizeOf(html) / 1024).toFixed(0)} KB（gzip ${(gzipSync(readFileSync(html[0]), { level: 9 }).length / 1024).toFixed(0)} KB）`,
   },
   {
     name: "index.html · 应用外壳（骨架/面板/弹窗）",
     value: split.shell,
-    limit: LIMITS.htmlShell,
+    limit: LIMITS.htmlShell, baseline: BASELINES.htmlShell,
     detail: `${(split.shell / 1024).toFixed(0)} KB`,
   },
   {
     name: "index.html · 内联文档（15 页，可打印/可搜索）",
     value: split.docs,
-    limit: LIMITS.htmlDocs,
+    limit: LIMITS.htmlDocs, baseline: BASELINES.htmlDocs,
     detail: `${(split.docs / 1024).toFixed(0)} KB（gzip ${(split.docsGzip / 1024).toFixed(0)} KB）`,
   },
   {
     name: "index.html（gzip 传输体积）",
     value: gzipSync(readFileSync(html[0]), { level: 9 }).length,
-    limit: LIMITS.htmlGzip,
+    limit: LIMITS.htmlGzip, baseline: BASELINES.htmlGzip,
     detail: `${(gzipSync(readFileSync(html[0]), { level: 9 }).length / 1024).toFixed(0)} KB`,
   },
   {
     name: "主包 JS",
     value: sizeOf(mainJs),
-    limit: LIMITS.mainJs,
+    limit: LIMITS.mainJs, baseline: BASELINES.mainJs,
     detail: mainJs.map((f) => `${(statSync(f).size / 1024).toFixed(0)}KB`).join(" + "),
   },
   {
     name: "文档页演示 JS（按需 chunk）",
     value: sizeOf(docDemosJs),
-    limit: LIMITS.docDemosJs,
+    limit: LIMITS.docDemosJs, baseline: BASELINES.docDemosJs,
     detail: docDemosJs.length
       ? `${(sizeOf(docDemosJs) / 1024).toFixed(0)} KB（gzip ${(docDemosJs.reduce((s, f) => s + gzipSync(readFileSync(f), { level: 9 }).length, 0) / 1024).toFixed(0)} KB）`
       : "无",
   },  {
     name: "引导课程 JS（按需 chunk）",
     value: sizeOf(tourJs),
-    limit: LIMITS.tourJs,
+    limit: LIMITS.tourJs, baseline: BASELINES.tourJs,
     detail: tourJs.length
       ? `${(sizeOf(tourJs) / 1024).toFixed(0)} KB（gzip ${(tourJs.reduce((sum, f) => sum + gzipSync(readFileSync(f), { level: 9 }).length, 0) / 1024).toFixed(0)} KB）`
       : "无",
@@ -201,37 +242,42 @@ const metrics = [
   {
     name: "Service Worker JS（离线缓存，加载后注册）",
     value: sizeOf(swJs),
-    limit: LIMITS.swJs,
+    limit: LIMITS.swJs, baseline: BASELINES.swJs,
     detail: swJs.length ? `${(sizeOf(swJs) / 1024).toFixed(0)} KB（gzip ${(swJs.reduce((s, f) => s + gzipSync(readFileSync(f), { level: 9 }).length, 0) / 1024).toFixed(0)} KB）` : "无",
   },
   {
     name: "批量评测 Worker JS（懒加载）",
     value: sizeOf(workerJs),
-    limit: LIMITS.workerJs,
+    limit: LIMITS.workerJs, baseline: BASELINES.workerJs,
     detail: workerJs.length ? workerJs.map((f) => `${(statSync(f).size / 1024).toFixed(0)}KB`).join(" + ") : "无",
   },
   {
     name: "全部 JS 合计（gzip，含按需 chunk/three/Worker/SW）",
     value: js.reduce((s, f) => s + gzipSync(readFileSync(f), { level: 9 }).length, 0),
-    limit: LIMITS.allJsGzip,
+    limit: LIMITS.allJsGzip, baseline: BASELINES.allJsGzip,
     detail: `${(js.reduce((s, f) => s + gzipSync(readFileSync(f), { level: 9 }).length, 0) / 1024).toFixed(0)} KB / 共 ${js.length} 个 JS`,
   },
   {
     name: "主包 JS（gzip 传输体积）",
     value: mainJs.reduce((s, f) => s + gzipSync(readFileSync(f), { level: 9 }).length, 0),
-    limit: LIMITS.mainJsGzip,
+    limit: LIMITS.mainJsGzip, baseline: BASELINES.mainJsGzip,
     detail: `${(mainJs.reduce((s, f) => s + gzipSync(readFileSync(f), { level: 9 }).length, 0) / 1024).toFixed(0)} KB`,
   },
 ];
 void css;
 
+/**
+ * 逐项判定走 `budgetVerdict`（纯函数），本文件只负责"测量"与"打印"。
+ * 打印口径：名义上限 / 有效门槛 / 剩余字节 / 相对冻结基线增量——四个数缺一不可，
+ * 否则"余量 10%"会被读成"已经减少了传输量"（复核点名的误读）。
+ */
 let failures = 0;
+const rows = [];
 for (const m of metrics) {
-  const ok = m.value <= m.limit;
-  if (!ok) failures++;
-  const pct = ((m.value / m.limit) * 100).toFixed(0);
-  const limitText = m.count ? `${m.limit} 个` : `${(m.limit / 1024).toFixed(0)} KB`;
-  console.log(`[${ok ? "PASS" : "FAIL"}] ${m.name} — ${m.detail}（上限 ${limitText}，占用 ${pct}%）`);
+  const verdict = budgetVerdict({ value: m.value, limit: m.limit, count: !!m.count, baseline: m.baseline ?? null });
+  if (!verdict.ok) failures++;
+  rows.push({ name: m.name, verdict });
+  console.log(`${verdictLine(m.name, verdict)} ｜ ${m.detail}`);
 }
-console.log(failures === 0 ? "\n产物预算全部通过 ✅" : `\n${failures} 项超出预算 ❌`);
+console.log(failures === 0 ? headroomSummary(rows) : `\n${failures} 项超出预算 ❌（先减重，不要抬名义上限）`);
 process.exit(failures === 0 ? 0 : 1);

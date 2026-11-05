@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-11-05T08:11:55.788Z",
+  "startedAt": "2026-11-05T08:11:40.051Z",
+  "finishedAt": "2026-11-05T08:11:55.788Z",
+  "url": "http://127.0.0.1:4173/",
+  "commit": "830e4e3786bcf4dddbada7514fed05a8fd3a83ad",
+  "sourceDigest": "a958b3483f31361ef9221a68700884a7",
+  "worktree": "dirty",
+  "buildId": "a958b3483f31-c5ca62bf5ef97f56",
+  "distHash": "c5ca62bf5ef97f56",
+  "browserVersion": "Edg/156.0.4314.58",
+  "viewport": {
+    "width": 1440,
+    "height": 900,
+    "deviceScaleFactor": 1
+  },
+  "headless": true,
+  "note": "headless + swiftshader 软件渲染：数值是下限参照，不代表真实 GPU 环境；同一环境前后对比才有意义。",
+  "timings": {
+    "interactiveMs": 3197,
+    "domContentLoadedMs": 1336.4000000059605,
+    "wallFrameWindowSec": 5.003800000011921
+  },
+  "frames": {
+    "fpsWall": 16.587393580839013,
+    "count": 83,
+    "frameMsP50": 66.59999999999945,
+    "frameMsP95": 66.70000000000073,
+    "frameMsMax": 116.60000000000036
+  },
+  "longTasks": {
+    "count": 3,
+    "maxMs": 1271
+  },
+  "inputLatency": {
+    "samples": [
+      0.3999999910593033,
+      0,
+      0.20000000298023224,
+      0,
+      0,
+      0.09999999403953552,
+      6.100000008940697,
+      13.399999991059303,
+      4.600000008940697,
+      5.200000002980232
+    ],
+    "p50": 0.3999999910593033,
+    "p95": 13.399999991059303
+  },
+  "batch": {
+    "workerMs": 4835.29999999702,
+    "rows": 5,
+    "workerMode": "worker",
+    "mainCancelLatencyMs": 9.300000011920929,
+    "partialSeeds": 1,
+    "peakHeapMb": 16.47107219696045,
+    "heapFinalMb": 14.4951810836792
+  },
+  "consoleErrors": [],
+  "pass": true
+}

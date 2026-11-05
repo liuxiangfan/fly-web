@@ -13,6 +13,7 @@ import {
   migrateExperimentConfig,
   experimentConfigProblems,
   cloneExperimentConfig,
+  canonicalizeExperimentConfig,
   type ExperimentConfig,
 } from "./experiment-config";
 
@@ -50,9 +51,12 @@ export interface ExperimentArchive {
   run: ArchiveRunInfo;
 }
 
-/** 构造档案对象（纯函数：调用方负责提供配置与运行信息） */
+/**
+ * 构造档案对象（纯函数：调用方负责提供配置与运行信息）。
+ * 配置先过 `canonicalizeExperimentConfig`：导出即规范形，`导出 → 导入 → 再导出` 逐字节稳定。
+ */
 export function buildArchive(config: ExperimentConfig, run: ArchiveRunInfo): ExperimentArchive {
-  return { schema: ARCHIVE_SCHEMA, kind: ARCHIVE_KIND, restore: "config-only", config, run };
+  return { schema: ARCHIVE_SCHEMA, kind: ARCHIVE_KIND, restore: "config-only", config: canonicalizeExperimentConfig(config), run };
 }
 
 /** run 也属于不可信档案输入：声明了就完整校验，返回具体字段路径。 */
@@ -142,7 +146,10 @@ export function parseArchive(raw: unknown): ArchiveParse {
   if (runError) return { ok: false, error: `档案运行信息不合法：${runError}` };
   const run = o.run == null ? null : { ...o.run, metrics: o.run.metrics.map(m => ({ ...m })) };
 
-  return { ok: true, config, run, ...(strict ? {} : { migratedFrom: declaredVersion ?? undefined }), notes };
+  // 两条路径都收敛到**规范形**：任何合法档案只有一种表示，
+  // 于是「导出 → 导入 → 再导出」逐字节稳定（含可选字段补齐与键顺序）。
+  const canonical = canonicalizeExperimentConfig(config);
+  return { ok: true, config: canonical, run, ...(strict ? {} : { migratedFrom: declaredVersion ?? undefined }), notes };
 }
 
 /** 档案里记录的运行信息 → 一句人类可读的补充说明（导入提示用） */

@@ -1,13 +1,14 @@
 name: CI
 
-# 门禁与冒烟。默认只跑「便宜且必须快」的部分；「连续 N 次冒烟」这种要跑几十分钟的
+# 门禁与冒烟（**只跑 Windows**：本阶段只支持 Windows 本机，Ubuntu 不再运行）。
+# 默认只跑「便宜且必须快」的部分；「连续 N 次冒烟」这种要跑几十分钟的
 # 稳定性验收放在 workflow_dispatch 里手动触发——它在私有仓库上是要吃 Actions 配额的。
 on:
   pull_request:
     branches: [master]
   # 稳定性验收专用分支：`workflow_dispatch` 只认**默认分支**上的 workflow 文件，
   # 而把 5×冒烟挂在每次 push 上又太贵（私有仓库要算配额）。所以约定一个一次性分支名：
-  # 把提交推成 `ci-stability` 就会在 Ubuntu 上连跑 5 次；跑完删掉分支即可。
+  # 把提交推成 `ci-stability`（或 `ci-stability-win`）就会在 Windows 上连跑 5 次；跑完删掉分支即可。
   push:
     branches: [ci-stability, ci-stability-win]
   workflow_dispatch:
@@ -16,10 +17,10 @@ on:
         description: "稳定性验收：连续跑几次冒烟（0 = 跳过）"
         default: "5"
       stability_os:
-        description: "稳定性跑在哪个系统上（both = Ubuntu + Windows）"
-        default: "both"
+        description: "稳定性跑在哪个系统上（本阶段只支持 Windows）"
+        default: "windows"
         type: choice
-        options: [both, ubuntu, windows]
+        options: [windows]
 
 permissions:
   contents: read
@@ -27,7 +28,7 @@ permissions:
 jobs:
   # 不依赖浏览器的门禁：tsc / check / build / budget / doccheck。
   gate:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -51,7 +52,7 @@ jobs:
   # 用矩阵并行跑，任何一片红都让 PR 红——不允许「只看一片」。
   smoke-shards:
     needs: gate
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     strategy:
       fail-fast: false
       matrix:
@@ -67,6 +68,9 @@ jobs:
       - name: Build
         run: npm run build
       - name: Smoke shard ${{ matrix.shard }}
+        env:
+          # 视口只影响「桌面布局用多大的窗口看」，断言不变（窄屏/设备用例仍自设 390×844 / 1280×800）。
+          SMOKE_VIEWPORT: 800x600
         run: node scripts/ci-run-smoke.mjs --shard=${{ matrix.shard }} --runs=1 --out=.audit-smoke/ci
       - name: Upload logs
         if: always()
@@ -76,34 +80,9 @@ jobs:
           path: .audit-smoke/ci
           if-no-files-found: ignore
 
-  # 稳定性验收（push 到 ci-stability 分支）：Ubuntu 连续 5 次完整冒烟。
-  smoke-stability-branch:
-    if: github.event_name == 'push' && github.ref_name == 'ci-stability'
-    needs: gate
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-      - name: Install
-        run: npm ci
-      - name: Build
-        run: npm run build
-      - name: Smoke × 5 (Ubuntu)
-        run: node scripts/ci-run-smoke.mjs --shard=both --runs=5 --out=.audit-smoke/stability
-      - name: Upload logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: smoke-stability-ubuntu
-          path: .audit-smoke/stability
-          if-no-files-found: ignore
-
-  # 同上，但跑在 Windows（复核要求「Windows 与 Ubuntu CI 各连续 5 次」）。
+  # 稳定性验收（push 到 ci-stability / ci-stability-win 分支）：Windows 连续 5 次完整冒烟。
   smoke-stability-branch-win:
-    if: github.event_name == 'push' && github.ref_name == 'ci-stability-win'
+    if: github.event_name == 'push' && (github.ref_name == 'ci-stability' || github.ref_name == 'ci-stability-win')
     needs: gate
     runs-on: windows-latest
     steps:
@@ -137,11 +116,8 @@ jobs:
   smoke-stability:
     if: github.event_name == 'workflow_dispatch'
     needs: gate
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ${{ fromJSON(inputs.stability_os == 'both' && '["ubuntu-latest","windows-latest"]' || (inputs.stability_os == 'windows' && '["windows-latest"]' || '["ubuntu-latest"]')) }}
-    runs-on: ${{ matrix.os }}
+    # 本阶段只跑 Windows（要恢复双平台时把 matrix 加回来即可）。
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -152,13 +128,15 @@ jobs:
         run: npm ci
       - name: Build
         run: npm run build
-      - name: Smoke × ${{ inputs.stability_runs }} (${{ matrix.os }})
+      - name: Smoke × ${{ inputs.stability_runs }} (windows)
         if: inputs.stability_runs != '0'
-        run: node scripts/ci-run-smoke.mjs --shard=all --runs=${{ inputs.stability_runs }} --out=.audit-smoke/stability
+        env:
+          SMOKE_VIEWPORT: 800x600
+        run: node scripts/ci-run-smoke.mjs --shard=both --runs=${{ inputs.stability_runs }} --out=.audit-smoke/stability
       - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: smoke-stability-${{ matrix.os }}
+          name: smoke-stability-windows
           path: .audit-smoke/stability
           if-no-files-found: ignore

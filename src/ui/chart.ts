@@ -40,6 +40,23 @@ export class RollingChart {
     return { count: this.count, cap: this.cap };
   }
 
+  /**
+   * 曲线**内容**摘要（诊断/自动化用）：对已存样本做一次确定性加权求和。
+   *
+   * 为什么需要：`size` 只说"有多少点"，说不出"点是不是同一批"。档案探测/回滚这类
+   * 事务性验收必须能证明「曲线内容一个采样都没变」，而不仅是点数没变。
+   */
+  contentDigest(): number {
+    let acc = 0;
+    for (let k = 0; k < this.count; k++) {
+      const idx = (this.head - this.count + k + this.cap) % this.cap;
+      acc += this.times[idx]! * (31 + (k % 7));
+      for (let s = 0; s < this.series.length; s++) acc += this.vals[s * this.cap + idx]! * (0.5 + (k % 5));
+    }
+    // 固定小数位，避免不同路径的浮点末位差异
+    return Math.round(acc * 1e6) / 1e6;
+  }
+
   setVisible(mask: boolean[]): void {
     this.visible = mask;
     this.render();

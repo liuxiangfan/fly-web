@@ -9,7 +9,7 @@
  *
  * 播放器只负责「这一拍该消费哪几帧、每帧 dt 多少」，不碰 DOM、估计器和时钟。
  */
-import type { ReplayFrame } from "./replay";
+import { monotonicTimelineMs, type ReplayFrame } from "./replay";
 
 export interface ReplayStep {
   frame: ReplayFrame;
@@ -64,20 +64,14 @@ export class ReplayPlayer {
 
   private rebuildTimeline(): void {
     const n = this.frames.length;
-    const out = new Array<number>(n);
-    let total = 0;
-    // 有效时间轴 = 运行最大值（单调不降）：
-    // 时间列允许少量回退（replay.ts 的容忍策略），但**回退段不能再积分一次**。
+    // 有效时间轴 = 运行最大值（单调不降），与解析器的时长提示共用同一份纯函数实现：
+    // 时间列允许少量回退（见 replay.ts 的容忍策略），但**回退段不能再积分一次**。
     // 旧实现把负间隔夹成 0、却仍从回退后的时间继续累计，于是 200→150→210 会把
     // 已被 150..200 覆盖的 50 ms 再积一遍（0.40 s 的日志积出 0.44 s）。
-    // 现在回退帧 dt=0，后续帧从前驱的**历史最大时刻**起算，Σdt 恒等于单调覆盖跨度。
-    let prevT = n > 0 ? this.frames[0]!.tMs : 0;
-    for (let i = 0; i < n; i++) {
-      const t = Math.max(prevT, this.frames[i]!.tMs);
-      if (i > 0) total += (t - prevT) / 1000;
-      out[i] = total;
-      prevT = t;
-    }
+    const mono = monotonicTimelineMs(this.frames.map((f) => f.tMs));
+    const out = new Array<number>(n);
+    const base = n > 0 ? mono[0]! : 0;
+    for (let i = 0; i < n; i++) out[i] = (mono[i]! - base) / 1000;
     this.timelineSec = out;
   }
 

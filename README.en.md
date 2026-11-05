@@ -13,7 +13,10 @@
 
 **Live demo**: [fly_web.070616.xyz](https://fly_web.070616.xyz)　(backup: [workers.dev](https://quaternion-attitude-demo.liu06167492.workers.dev))
 
-Every push to `master` builds and deploys automatically: type-check → 121 numeric + 10 scene-geometry + 15 HTML-contract + 2 doc-benchmark + 7 count-consistency checks → bundle-size budget → 78 browser end-to-end checks → Cloudflare Workers (pull requests run the same verification, they just don't deploy).
+<!-- facts:begin -->
+Every push to `master` verifies and deploys automatically: type-check → 126 numeric + 10 scene-geometry + 15 HTML-contract + 4 doc-benchmark checks + independent contracts/status/evidence checks → 14 bundle budgets → 106 browser checks (two shards: app / devices) → Cloudflare Workers. Pull requests run the same gate and both smoke shards without deploying.
+<!-- verify: check=155 contracts=yes status=yes smoke=106 budget=14 evidence=yes -->
+<!-- facts:end -->
 
 ---
 
@@ -316,9 +319,9 @@ npm run preview   # preview the built output
 
 ```bash
 npx tsc --noEmit  # type check
-npm run check     # 105 assertions: 80 numeric + 10 scene geometry + 15 HTML contracts
-npm run budget    # bundle-size budget (9 ceilings: total / fonts / font count / HTML / app shell / docs / gzip / main JS / main JS gzip)
-npm run smoke     # 51 real-browser end-to-end checks (export→import round trip, fake text/MAVLink serial
+npm run check     # 154 assertions: 125 numeric + 10 scene geometry + 15 HTML contracts + 4 doc benchmarks
+npm run budget    # bundle-size budget (14 ceilings: total / fonts / font count / HTML / app shell / docs / gzip / main JS / main JS gzip / on-demand chunks)
+npm run smoke     # 106 real-browser end-to-end checks (export→import round trip, fake text/MAVLink serial
                   # ports, a fake BLE device, print media, accessibility, long-run stability, every slider's
                   # number box being typeable, connect re-entrancy, deep-link round trip; needs build+preview)
 ```
@@ -397,8 +400,8 @@ npm run icons      # regenerate PWA icons from favicon.svg
 │   ├── selftest.ts         #   numeric self-tests (80)
 │   ├── scenecheck.ts       #   scene-geometry self-tests (10)
 │   ├── htmlcheck.ts        #   HTML↔TS contract self-tests (15)
-│   ├── browser-smoke.mjs   #   real-browser end-to-end (51, incl. accessibility, long-run stability, deep-link round trip)
-│   ├── distbudget.mjs      #   bundle-size budget (9 ceilings; HTML is split into app shell vs inlined docs)
+│   ├── browser-smoke.mjs   #   real-browser end-to-end (full suite, incl. accessibility, long-run stability, deep-link round trip)
+│   ├── distbudget.mjs      #   bundle-size budget (14 ceilings; HTML is split into app shell vs inlined docs)
 │   ├── shot.mjs            #   developer screenshot tool (viewport/element shots + in-page scripts)
 │   ├── make-icons.mjs      #   PWA icon generation
 │   └── diag*.ts            #   convergence / violent-manoeuvre diagnostics
@@ -463,13 +466,13 @@ If you deploy under a sub-path, set `base: './'` in `vite.config.ts` and rebuild
 
 ## References
 
-External material checked against the maths and engineering conventions used here (lecture notes, papers,
-open-source implementations) is collected in [`docs/RESEARCH-NOTES.md`](docs/RESEARCH-NOTES.md); the project's
-architecture and change history are in [`docs/PROJECT-STATE.md`](docs/PROJECT-STATE.md); a full improvement
-review with **per-item status** is in [`docs/IMPROVEMENT-PROPOSAL.md`](docs/IMPROVEMENT-PROPOSAL.md).
-The next implementation roadmap, including evidence, dependencies, concrete tasks, documentation revisions
-and acceptance criteria, is in [`docs/NEXT-ITERATION-ROADMAP.md`](docs/NEXT-ITERATION-ROADMAP.md).
-(The `docs/` files are in Chinese.)
+External material checked against the maths and engineering conventions used here is collected in
+[`docs/RESEARCH-NOTES.md`](docs/RESEARCH-NOTES.md). Architecture and conventions are in
+[`docs/PROJECT-STATE.md`](docs/PROJECT-STATE.md); the current quality score is in
+[`docs/QUALITY-STATUS.md`](docs/QUALITY-STATUS.md); open work is in [`docs/ROADMAP.md`](docs/ROADMAP.md);
+evidence boundaries and historical reviews are in [`docs/VERIFICATION-EVIDENCE.md`](docs/VERIFICATION-EVIDENCE.md)
+and [`docs/QUALITY-AUDIT-HISTORY.md`](docs/QUALITY-AUDIT-HISTORY.md); product changes are in
+[`docs/CHANGELOG.md`](docs/CHANGELOG.md). (The `docs/` files are in Chinese.)
 
 Primary sources: i2Nav's *Inertial Navigation Attitude Algorithms* lecture notes and KF-GINS,
 Madgwick's 2011 report, Solà's quaternion kinematics for the ESKF, Mahony's 2008 explicit complementary filter,

@@ -204,5 +204,35 @@ await test("非整步时长精确截末步，trace/同步/异步不超请求；�
   assert.ok(trace.steps.every(step => step.dt === RUN_H), "整步golden路径h不能调整");
 });
 
+/**
+ * SW-10 的**协作取消契约**（主线程降级路径真正依赖的那几件事）：
+ *   · 取消在**下一个计算片**生效，而不是等整个种子跑完（旧实现要在同步循环里等 ~550 ms）；
+ *   · 片预算有界，且只影响调度、不影响数值结果；
+ *   · 被取消的种子带着 `termination.reason === "cancelled"` 出来，调用方据此把它从完成统计里丢掉
+ *     （"半成品不许计入完成"这条在主线程降级分支与冒烟用例里各有一道断言）。
+ * 「让出的是 macrotask」由上面的计时器用例单独钉住，这里不重复。
+ */
+await test("协作取消：取消在下一片生效，片预算有界且只影响调度", async () => {
+  const config = { ...defaultExperimentConfig(), durationSec: 30 };
+  let sliceCount = 0;
+  const startedAt = Date.now();
+  const cancelled = await runExperimentAsync(config, {
+    stepsPerSlice: 128,
+    onProgress: () => { sliceCount++; return true; },
+    shouldCancel: () => sliceCount >= 1,
+  });
+  const elapsedMs = Date.now() - startedAt;
+  assert.equal(cancelled.termination.reason, "cancelled", "取消后必须报告 cancelled，而不是「跑完了」");
+  assert.ok(cancelled.termination.endSec < config.durationSec, `取消点必须早于末点：${cancelled.termination.endSec}`);
+  assert.ok(sliceCount <= 3, `取消必须在下一片生效（实际经过 ${sliceCount} 片）`);
+  assert.ok(elapsedMs < 2000, `取消响应必须远小于整段计算（实际 ${elapsedMs} ms）`);
+
+  // 片预算：越界/非有限值被夹到 [1,512]，且数值结果与同步路径逐位一致
+  const one = { ...defaultExperimentConfig(), durationSec: 1 };
+  const coerced = await runExperimentAsync(one, { stepsPerSlice: 100000 as unknown as number });
+  assert.equal(coerced.termination.reason, "completed");
+  assert.deepEqual(await runExperimentAsync(one), runExperiment(one), "片预算只影响调度，不允许影响数值结果");
+});
+
 console.log(`worker-contract: ${passed} PASS / ${failed} FAIL`);
 if (failed) process.exitCode = 1;

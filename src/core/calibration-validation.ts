@@ -118,10 +118,21 @@ export function copyCalibration(kind: "mag", raw: Record<string, unknown>): MagC
 export function copyCalibration(kind: "accel", raw: Record<string, unknown>): AccelCalibration;
 export function copyCalibration(kind: "mag" | "accel", raw: Record<string, unknown>): MagCalibration | AccelCalibration {
   const out: Record<string, unknown> = {};
-  for (const k of kind === "mag" ? ["offset", "scale", "field", "residual", "count", "kind", "matrix"] : ["M", "bias", "rmse", "count", "faces"]) {
-    if (raw[k] !== undefined) out[k] = Array.isArray(raw[k]) ? [...raw[k]] : raw[k];
+  if (kind === "mag") {
+    // **键序固定**：kind 的位置由推导结果决定，而不是"存在就按输入序、缺失就补到末尾"。
+    // 复核 SW-04：旧实现先按输入顺序拷 `matrix`，再把推导出的 `kind` 追加到最后，于是
+    // 「省略 kind 的 full 模型」第一次复制是 `…count,matrix,kind`、第二次变成 `…count,kind,matrix`，
+    // 导出字节首轮就不稳定（规范形必须幂等）。
+    for (const k of ["offset", "scale", "field", "residual", "count"]) {
+      if (raw[k] !== undefined) out[k] = Array.isArray(raw[k]) ? [...(raw[k] as unknown[])] : raw[k];
+    }
+    out.kind = raw.kind === "diag" || raw.kind === "full" ? raw.kind : (raw.matrix !== undefined ? "full" : "diag");
+    if (raw.matrix !== undefined) out.matrix = Array.isArray(raw.matrix) ? [...raw.matrix] : raw.matrix;
+  } else {
+    for (const k of ["M", "bias", "rmse", "count", "faces"]) {
+      if (raw[k] !== undefined) out[k] = Array.isArray(raw[k]) ? [...(raw[k] as unknown[])] : raw[k];
+    }
   }
-  if (kind === "mag" && out.kind === undefined) out.kind = out.matrix !== undefined ? "full" : "diag";
   if (isRecord(raw.validation)) {
     const v = raw.validation, dst: Record<string, unknown> = {};
     const keys = kind === "mag" ? ["residual", "count", "maxErrUt", "ratio"] : ["meanNormErrMs2", "maxNormErrMs2", "heldOutFaces", "meanDirErrDeg", "maxDirErrDeg"];

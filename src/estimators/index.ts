@@ -634,7 +634,9 @@ export class MadgwickEstimator implements Estimator {
     const gdY = 0.5 * (w * gyro[1] - x * gyro[2] + z * gyro[0]);
     const gdZ = 0.5 * (w * gyro[2] + x * gyro[1] - y * gyro[0]);
 
-    let dw = gdW, dx = gdX, dy = gdY, dz = gdZ;
+    // 观测修正项单独累计（**不含**陀螺项）：遥测要如实回答"这一步修正了多少"，
+    // 把陀螺微分项混进去会让零观测修正的场景也报出非零修正（复核 SW-02）。
+    let cdw = 0, cdx = 0, cdy = 0, cdz = 0;
     const norm = Math.hypot(accel[0], accel[1], accel[2]);
     const predicted: V3 = [2 * (x * z - w * y), 2 * (w * x + y * z), 1 - 2 * x * x - 2 * y * y];
     const measured: V3 = norm > 1e-6 ? [accel[0] / norm, accel[1] / norm, accel[2] / norm] : [0, 0, 0];
@@ -678,10 +680,10 @@ export class MadgwickEstimator implements Estimator {
           + (-4 * bx * z + 2 * bz * x) * f4 + (-2 * bx * w + 2 * bz * y) * f5 + 2 * bx * x * f6;
         const sNorm = Math.hypot(s0, s1, s2, s3);
         if (sNorm > 1e-9) {
-          dw -= (betaEff * s0) / sNorm;
-          dx -= (betaEff * s1) / sNorm;
-          dy -= (betaEff * s2) / sNorm;
-          dz -= (betaEff * s3) / sNorm;
+          cdw -= (betaEff * s0) / sNorm;
+          cdx -= (betaEff * s1) / sNorm;
+          cdy -= (betaEff * s2) / sNorm;
+          cdz -= (betaEff * s3) / sNorm;
         }
       } else {
         // ---- IMU 版（或简化 MARG）：只用重力梯度 ----
@@ -706,26 +708,35 @@ export class MadgwickEstimator implements Estimator {
           while (yawErr < -Math.PI) yawErr += 2 * Math.PI;
           const dir = yawErr > 0 ? 1 : -1;
           const magS = 0.5 * Math.min(1, Math.abs(yawErr)); // 修正强度随误差饱和（避免过冲）
-          dw += dir * magS * (-z);
-          dx += dir * magS * (y);
-          dy += dir * magS * (-x);
-          dz += dir * magS * (w);
+          cdw += dir * magS * (-z);
+          cdx += dir * magS * (y);
+          cdy += dir * magS * (-x);
+          cdz += dir * magS * (w);
         }
         const sNorm = Math.hypot(s0, s1, s2, s3);
         if (sNorm > 1e-9) {
           s0 /= sNorm; s1 /= sNorm; s2 /= sNorm; s3 /= sNorm;
-          dw -= betaEff * s0;
-          dx -= betaEff * s1;
-          dy -= betaEff * s2;
-          dz -= betaEff * s3;
+          cdw -= betaEff * s0;
+          cdx -= betaEff * s1;
+          cdy -= betaEff * s2;
+          cdz -= betaEff * s3;
         }
       }
     }
+    // 积分 = 陀螺微分项 + 观测修正项（与旧实现逐位一致：旧代码只是在同一个累加器里加这两项）
+    const dw = gdW + cdw, dx = gdX + cdx, dy = gdY + cdy, dz = gdZ + cdz;
     this.q = qNorm({ w: w + dw * dt, x: x + dx * dt, y: y + dy * dt, z: z + dz * dt });
-    // 梯度步对应的等效角速度修正：Δq = ½·ε·q·dt，取 Δq 的旋转增量部分得 ω_corr = 2·vec(ε·q⁻¹)
-    const cx = 0.5 * (dx * w - dy * z + dz * y);
-    const cy = 0.5 * (dx * z + dy * w - dz * x);
-    const cz = 0.5 * (-dx * y + dy * x + dz * w);
+    /**
+     * 修正对应的**机体系**等效角速度：q̇_corr = ½·q ⊗ ω_corr，故 ω_corr = 2·vec(q* ⊗ q̇_corr)。
+     *
+     * 旧实现有两个错：① 把含陀螺项的 q̇ 当成修正导数，于是"零修正"也报 gyro/2；
+     * ② 用 `vec(q̇ ⊗ q*)`（世界系）并额外乘 ½，量纲与坐标系都不对——单位姿态下就少一半，
+     * 非单位姿态下还会把修正指到世界系方向。这里用与 `rawGyro` 同一套约定（机体系）计算，
+     * 未修正时 correction 恰为 0、rate 恰为 gyro。**只改遥测，不改积分轨迹。**
+     */
+    const cx = w * cdx - x * cdw - y * cdz + z * cdy;
+    const cy = w * cdy - y * cdw - z * cdx + x * cdz;
+    const cz = w * cdz - z * cdw - x * cdy + y * cdx;
     this.telemetry = {
       rate: [gyro[0] + 2 * cx, gyro[1] + 2 * cy, gyro[2] + 2 * cz],
       rawGyro: [gyro[0], gyro[1], gyro[2]],
@@ -737,7 +748,8 @@ export class MadgwickEstimator implements Estimator {
       magValid: magOk,
       detail: {
         residual,
-        stepNorm: Math.hypot(dx, dy, dz) * dt,
+        // 梯度步长只反映**修正项**（旧实现把陀螺项也算进去，"没有修正的直线积分"会显得步子很大）
+        stepNorm: Math.hypot(cdw, cdx, cdy, cdz) * dt,
         alignErrorDeg: alignDeg,
         gateMode: this.gate.mode(wouldReject),
         rejectRatio: this.gate.ratio,

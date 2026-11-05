@@ -1,5 +1,8 @@
 import { defineConfig } from "vite";
 import { execFileSync } from "node:child_process";
+import { resolve } from "node:path";
+// 构建溯源（SW-06）：产物必须能证明"由这份源码构建"。纯 JS 模块，可被 Node 脚本与 CI 复用。
+import { writeProvenance } from "./scripts/build-provenance.mjs";
 
 /**
  * 构建标识：线上页面要能回答「我现在看的是哪个提交」。
@@ -25,8 +28,18 @@ export default defineConfig({
     __BUILD_COMMIT__: JSON.stringify(stamp.commit),
     __BUILD_TIME__: JSON.stringify(stamp.builtAt),
   },
+  plugins: [
+    {
+      name: "quat-build-provenance",
+      // 产物写完再写溯源：外面能按 buildId 把"哪份源码 → 哪份产物"钉在一起
+      writeBundle(outputOptions) {
+        const outDir = outputOptions.dir ?? resolve(__dirname ?? ".", "dist");
+        writeProvenance(process.cwd(), outDir, { commit: stamp.commit, builtAt: stamp.builtAt });
+      },
+    },
+  ],
   build: {
-    target: "es2020",
+    target: "esnext",
     chunkSizeWarningLimit: 700,
     rollupOptions: {
       output: {

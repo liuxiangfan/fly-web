@@ -1,0 +1,147 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-11-05T09:20:03.616Z",
+  "sourceCommit": "830e4e3786bcf4dddbada7514fed05a8fd3a83ad",
+  "sourceDigest": "a958b3483f31361ef9221a68700884a7",
+  "distHash": "c5ca62bf5ef97f56",
+  "buildId": "a958b3483f31-c5ca62bf5ef97f56",
+  "note": "体积归因用的是一次**带 sourcemap 的独立重建**（dist-size/），不修改 dist/；chunk 级 raw/gzip 与 dist/ 同源同配置。",
+  "chunks": [
+    {
+      "name": "three-Df8GycVh.js",
+      "file": "three-Df8GycVh.js",
+      "kind": "vendor-three",
+      "raw": 525393,
+      "gzip": 131882
+    },
+    {
+      "name": "index-kwZzlBGR.js",
+      "file": "index-kwZzlBGR.js",
+      "kind": "main",
+      "raw": 289231,
+      "gzip": 107862
+    },
+    {
+      "name": "batch.worker-vgz_vkXA.js",
+      "file": "batch.worker-vgz_vkXA.js",
+      "kind": "worker-batch",
+      "raw": 44058,
+      "gzip": 15736
+    },
+    {
+      "name": "doc-demos-DrK9XFUE.js",
+      "file": "doc-demos-DrK9XFUE.js",
+      "kind": "lazy-doc-demos",
+      "raw": 22808,
+      "gzip": 9307
+    },
+    {
+      "name": "tour-B5wnUiRt.js",
+      "file": "tour-B5wnUiRt.js",
+      "kind": "lazy-tour",
+      "raw": 11945,
+      "gzip": 6545
+    }
+  ],
+  "mainAttribution": {
+    "groups": [
+      {
+        "group": "装配层(main.ts)",
+        "sourceBytes": 356627
+      },
+      {
+        "group": "数值内核",
+        "sourceBytes": 202924
+      },
+      {
+        "group": "数据通路/存档",
+        "sourceBytes": 168480
+      },
+      {
+        "group": "场景渲染",
+        "sourceBytes": 69299
+      },
+      {
+        "group": "界面",
+        "sourceBytes": 53149
+      }
+    ],
+    "topModules": [
+      {
+        "module": "main.ts",
+        "group": "装配层(main.ts)",
+        "bytes": 356627
+      },
+      {
+        "module": "estimators/index.ts",
+        "group": "数值内核",
+        "bytes": 52544
+      },
+      {
+        "module": "core/runner.ts",
+        "group": "数值内核",
+        "bytes": 38784
+      },
+      {
+        "module": "core/experiment-config.ts",
+        "group": "数据通路/存档",
+        "bytes": 33639
+      },
+      {
+        "module": "scene/quatview.ts",
+        "group": "场景渲染",
+        "bytes": 28465
+      },
+      {
+        "module": "core/magcal.ts",
+        "group": "数据通路/存档",
+        "bytes": 23422
+      },
+      {
+        "module": "core/replay.ts",
+        "group": "数据通路/存档",
+        "bytes": 20774
+      },
+      {
+        "module": "core/serial.ts",
+        "group": "数值内核",
+        "bytes": 20466
+      },
+      {
+        "module": "scene/gimbal.ts",
+        "group": "场景渲染",
+        "bytes": 19324
+      },
+      {
+        "module": "core/transport-session.ts",
+        "group": "数据通路/存档",
+        "bytes": 19110
+      },
+      {
+        "module": "core/accelcal.ts",
+        "group": "数据通路/存档",
+        "bytes": 18970
+      },
+      {
+        "module": "core/solve-loop.ts",
+        "group": "数值内核",
+        "bytes": 16421
+      },
+      {
+        "module": "ui/experiments.ts",
+        "group": "界面",
+        "bytes": 14942
+      },
+      {
+        "module": "core/archive-ui.ts",
+        "group": "数据通路/存档",
+        "bytes": 14225
+      },
+      {
+        "module": "core/quat.ts",
+        "group": "数值内核",
+        "bytes": 13065
+      }
+    ]
+  }
+}

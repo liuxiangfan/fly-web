@@ -345,6 +345,16 @@ button:disabled { cursor: default; }
   letter-spacing: 0.015em;
 }
 
+/*
+ * 高倍率文字缩放（200%）：CSS 视口只剩 720×450，3D 区域被压得很矮，
+ * 而左侧读数条仍按 CSS 像素逐条堆下来，正好压到右下角这条提示上——
+ * 实测（视觉证据 zoom200）「陀螺仪 / 加速度计」两行被盖住。
+ * 提示只是"拖拽 / 滚轮"的顺手说明，读数才是内容：矮视口下直接隐藏提示。
+ */
+@media (max-height: 560px) {
+  #viewport-hint { display: none; }
+}
+
 /* ==========================================================================
    右侧控制面板
    ========================================================================== */
@@ -1792,6 +1802,12 @@ body[data-imu-mode="real"] .section-experiments .hint::before {
 .docs-toc .mod-name { font-size: 13px; font-weight: 600; }
 .docs-toc .mod-desc { font-size: 11px; color: var(--text-faint); }
 
+/* 模块目录的折叠外壳（SW-11）：宽屏下与之前完全一致——目录常开、summary 不显示 */
+.toc-disclosure { display: flex; flex-direction: column; gap: 6px; }
+.toc-disclosure > summary { display: none; }
+.toc-disclosure > .toc-list { display: flex; flex-direction: column; gap: 6px; }
+.toc-current { display: none; }
+
 
 /* ---- 右栏：内容面板（独立滚动，纸面留白） ---- */
 .doc-pages {
@@ -2236,7 +2252,28 @@ body[data-imu-mode="real"] .section-experiments .hint::before {
     border-bottom: 1px solid var(--border);
   }
   #btn-docs-close { align-self: auto; margin-bottom: 0; }
-  .toc-title { width: 100%; }
+  .toc-title { width: auto; padding: 0; margin: 0; border: none; }
+  /* 窄屏：目录收成一条「当前模块 + 展开」横条；展开后最多占 45% 视口高
+     （首屏必须能看到正文，而不只是完整导航——SW-11 第 1 条） */
+  .toc-disclosure { width: 100%; order: 3; }
+  .toc-disclosure > summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    cursor: pointer;
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+  .toc-disclosure > summary::-webkit-details-marker { display: none; }
+  .toc-disclosure > summary::marker { content: ""; }
+  .toc-current { display: inline; color: var(--text); font-weight: 600; font-size: 13px; }
+  .toc-toggle-hint { margin-left: auto; color: var(--text-faint); font-size: 11px; }
+  .toc-disclosure[open] > .toc-list { max-height: 45vh; overflow-y: auto; }
+  .toc-list { flex-direction: row; flex-wrap: wrap; }
   .doc-pages { height: auto; overflow: visible; }
   .doc-page { padding: 24px 20px 70px; }
 }

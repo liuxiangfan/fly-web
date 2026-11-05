@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { SolveLoop } from "../src/core/solve-loop";
 import { ReplayPlayer, type ReplayStep } from "../src/core/replay-player";
-import { parseImuCsv, type ReplayFrame } from "../src/core/replay";
+import { parseImuCsv, monotonicTimelineMs, type ReplayFrame } from "../src/core/replay";
 import { runTrace } from "../src/core/runner";
 import { TruthTrack } from "../src/core/truth-track";
 import { defaultExperimentConfig } from "../src/core/experiment-config";
@@ -266,11 +266,97 @@ test("trace 被步数上限截断时：endSec/事件计数与已记录步数同�
   }
 });
 
+test("页面时长/进度必须共用 ReplayPlayer 的有效时间轴（不得再算末帧减首帧）", () => {
+  // 复核 P1：播放器已经用单调有效时间轴，页面却按「末帧原始时刻 − 首帧原始时刻」算时长，
+  // 末帧时间回退时提示偏短、与积分/状态条各说各话。这里锁死"页面只许有一个时长口径"。
+  const main = readFileSync(new URL("../src/main.ts", import.meta.url), "utf8");
+  const start = main.indexOf("function replayDuration()");
+  assert.ok(start > 0, "main.ts 必须保留 replayDuration()（页面与调试出口共用）");
+  const body = main.slice(start, main.indexOf("\n}", start));
+  assert.ok(/replayPlayer\.durationSec/.test(body), `replayDuration() 必须直接返回 ReplayPlayer 的时长：${body}`);
+  assert.ok(!/tMs\s*-/.test(body), `replayDuration() 不得再自行用原始时间戳相减：${body}`);
+  // 页面任何地方都不许再出现第二套「末帧 − 首帧」时长
+  assert.equal((main.match(/\.tMs\s*-\s*[A-Za-z_$][\w$]*\s*\[\s*0\s*\]\.tMs/g) ?? []).length, 0,
+    "main.ts 出现第二套“末帧 − 首帧”时长口径");
+  // 调试出口必须暴露与状态条同源的 durationSec / playedSec
+  assert.ok(/durationSec:\s*replayPlayer\.durationSec/.test(main), "回放调试出口必须暴露 durationSec");
+  assert.ok(/playedSec:\s*replayPlayer\.playedSec/.test(main), "回放调试出口必须暴露 playedSec");
+});
+
 test("旧接口与生产接口不得混用（同一段回放两套状态机会互相矛盾）", () => {
   const p = workPlayer(new ReplayPlayer());
   p.load([frame(0), frame(10)], 1);
   p.advanceWork(0.02, (w) => w.remainingSec, 5);
   assert.throws(() => p.advance(0.02), /不能混用/);
+});
+
+/**
+ * SW-01：日志时间单位。
+ *
+ * 复核反例：表头写 `t_s`、时间 0…19（1 Hz）的日志，曾被「中位间隔 >0.5 s 就除 1000」的启发式
+ * 再缩一次，19 秒变成 0.019 秒——时长、积分与收敛判断一起失真，而界面上看不出哪里不对。
+ * 现在：**声明了单位就严格按声明解释**；单位未知也不静默改写，按秒解释并给出可操作提示。
+ */
+test("时间单位：显式 s/ms/us 严格换算，不被启发式覆盖；等价日志时长一致", () => {
+  const NL = String.fromCharCode(10);
+  const row = (t: number): string => `${t},0,0,1,0,0,9.80665`;
+  const csv = (header: string, times: number[]): string => [header, ...times.map(row)].join(NL);
+  const seq = (n: number, step: number, base = 0): number[] => Array.from({ length: n }, (_, i) => base + i * step);
+  const load = (text: string): { frames: number; lastMs: number; durationSec: number; notes: string[]; error?: string } => {
+    const res = parseImuCsv(text);
+    const p = workPlayer(new ReplayPlayer());
+    p.load(res.frames, 0);
+    return { frames: res.frames.length, lastMs: res.frames[res.frames.length - 1]?.tMs ?? NaN, durationSec: p.durationSec, notes: res.notes, error: res.error };
+  };
+
+  // ① 19 秒反例：显式秒、1 Hz，必须是 19 s 而不是 0.019 s
+  const sec = load(csv("t_s,gx,gy,gz,ax,ay,az", seq(20, 1)));
+  assert.equal(sec.error, undefined);
+  assert.equal(sec.lastMs, 19000, `显式秒 1 Hz 的末帧必须是 19000 ms：${sec.lastMs}`);
+  assert.ok(Math.abs(sec.durationSec - 19) < 1e-9, `显式秒时长应为 19 s：${sec.durationSec}`);
+
+  // ② 秒 / 毫秒 / 微秒三份等价日志：全部换算到同一条时间轴
+  const ms = load(csv("t_ms,gx,gy,gz,ax,ay,az", seq(20, 1000)));
+  const us = load(csv("t_us,gx,gy,gz,ax,ay,az", seq(20, 1e6)));
+  const timeS = load(csv("time_s,gx,gy,gz,ax,ay,az", seq(20, 1, 5)));
+  for (const [name, r] of [["毫秒", ms], ["微秒", us]] as const) {
+    assert.equal(r.lastMs, 19000, `${name}列必须换算到 19000 ms：${r.lastMs}`);
+    assert.ok(Math.abs(r.durationSec - sec.durationSec) < 1e-9, `${name}与秒列时长必须一致`);
+  }
+  assert.equal(timeS.lastMs, 24000, `非零起点的秒列必须保留绝对偏移：${timeS.lastMs}`);
+
+  // ③ 低频秒列不再被"毫秒回退"改写：300 s 间隔仍是 300 s
+  const slow = load(csv("t_s,gx,gy,gz,ax,ay,az", seq(20, 300, 1000)));
+  assert.equal(slow.lastMs, 6_700_000, `300 s 间隔必须按秒解释：${slow.lastMs}`);
+  assert.ok(Math.abs(slow.durationSec - 5700) < 1e-9, `300 s×19 应为 5700 s：${slow.durationSec}`);
+  assert.ok(slow.notes.some((n) => n.includes("已声明为秒")), "低频秒列必须说明「按声明解释」而不是静默改写");
+
+  // ④ 快速秒列：2 ms 间隔（500 Hz）不被放大也不被缩小
+  const fast = load(csv("t_s,gx,gy,gz,ax,ay,az", seq(20, 0.002).map((v) => Number(v.toFixed(3)))));
+  assert.ok(Math.abs(fast.durationSec - 0.038) < 1e-9, `2 ms 间隔应为 0.038 s：${fast.durationSec}`);
+
+  // ⑤ 单位未知（裸 t）：按秒解释 + 可操作提示，不静默改写
+  const bare = load(csv("t,gx,gy,gz,ax,ay,az", seq(20, 1)));
+  assert.ok(Math.abs(bare.durationSec - 19) < 1e-9, `裸 t 的 1 Hz 日志不得被当成毫秒：${bare.durationSec}`);
+  assert.ok(bare.notes.some((n) => n.includes("未声明单位") && n.includes("t_ms")), `未知单位必须给出可操作提示：${JSON.stringify(bare.notes)}`);
+
+  // ⑥ tick（固件毫秒计数）仍按毫秒
+  const tick = load(csv("tick,gx,gy,gz,ax,ay,az", seq(20, 5)));
+  assert.ok(Math.abs(tick.durationSec - 0.095) < 1e-9, `tick 5 ms 应为 0.095 s：${tick.durationSec}`);
+
+  // ⑦ 解析器与播放器共用同一条有效时间轴（含回退与重复时间戳）
+  const back = parseImuCsv(["# imu=raw", "t_s,gx,gy,gz,ax,ay,az", ...Array.from({ length: 22 }, (_, i) => {
+    const t = i < 20 ? i * 0.02 : i === 20 ? 0.30 : 0.30; // 0.38 → 回退到 0.30 再收尾
+    return [t.toFixed(2), 1, 0, 0, 0, 0, 9.8].join(",");
+  })].join(NL));
+  const backP = workPlayer(new ReplayPlayer());
+  backP.load(back.frames, 0);
+  const mono = monotonicTimelineMs(back.frames.map((f) => f.tMs));
+  const monoSpan = (mono[mono.length - 1]! - mono[0]!) / 1000;
+  assert.ok(Math.abs(backP.durationSec - monoSpan) < 1e-9, `播放器时长必须等于单调覆盖跨度：${backP.durationSec} vs ${monoSpan}`);
+  const rawSpan = (back.frames[back.frames.length - 1]!.tMs - back.frames[0]!.tMs) / 1000;
+  assert.ok(backP.durationSec > rawSpan + 1e-9, "末帧回退时有效时长必须大于原始首末差");
+  assert.ok(back.notes.some((n) => n.includes("回退") && n.includes("有效时长")), `时长提示必须说明回退口径：${JSON.stringify(back.notes)}`);
 });
 
 console.log(`time-contract: ${pass} PASS / ${fail} FAIL`);

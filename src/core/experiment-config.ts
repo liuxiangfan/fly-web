@@ -173,8 +173,21 @@ function structuredCloneTuning(
   src: Record<EstimatorId, EstimatorTuning>,
 ): Record<EstimatorId, EstimatorTuning> {
   const out = {} as Record<EstimatorId, EstimatorTuning>;
-  for (const id of Object.keys(src) as EstimatorId[]) {
-    out[id] = { ...src[id], params: { ...src[id].params } };
+  // 只遍历**已知算法 id**，并对缺失/空条目回落到默认值。
+  //
+  // 旧实现按 `Object.keys(src)` 遍历：档案里多一个 `"extension": null` 就会去读 `null.params`
+  // 直接抛 TypeError（复核 SW-04：schema 校验放行、克隆却崩，parseArchive 不返回约定的失败结果）。
+  // 现在克隆是**全函数**：多余的容器键被忽略（当前 schema 由 experimentConfigProblems 明确拒绝），
+  // 缺失的条目补默认，不会把异常漏给调用方。
+  for (const id of Object.keys(DEFAULT_ESTIMATOR_TUNING) as EstimatorId[]) {
+    const t = src?.[id];
+    const def = DEFAULT_ESTIMATOR_TUNING[id];
+    // 默认值兜底 + 输入覆盖：缺条目、缺字段、空 params 都能克隆出**可被内核消费**的完整配置
+    out[id] = {
+      ...def,
+      ...(t && typeof t === "object" ? t : {}),
+      params: { ...def.params, ...(t?.params ?? {}) },
+    };
   }
   return out;
 }
@@ -228,6 +241,88 @@ export function cloneExperimentConfig(c: ExperimentConfig): ExperimentConfig {
 /** 生成默认配置（每次返回独立对象） */
 export function defaultExperimentConfig(): ExperimentConfig {
   return cloneExperimentConfig(DEFAULT_EXPERIMENT_CONFIG);
+}
+
+/**
+ * 规范形（canonical form）：任何**合法当前 schema** 的配置只有一种表示。
+ *
+ * 为什么需要：schema 允许若干可选字段（`magTargetUts` / `autoCoarseAlign` / `steadyFromSec` /
+ * `manualTargetDeg` / `ab` / kalman 的三个可选键 / 非固定轴的 `axis,angleDeg` / 未知扩展键），
+ * 于是「同一语义」可以有多种合法 JSON——默认配置自己往返稳定，一份省略了可选字段的合法档案
+ * 却会解析成"另一份配置"（界面探测、深链、批量评测各看到一套）。
+ *
+ * 本函数是**纯函数**：把所有**可选**字段补齐为文档默认值、统一表示形态、丢掉内核不读的扩展键，
+ * 并把键顺序固定为默认配置的顺序，于是 `parse → canonicalize → buildArchive` 逐字节稳定。
+ *
+ * 明确**不做**的事（否则会把"用户明确要求的配置"悄悄改掉，比拒绝更糟）：
+ *  - 不归一化 fixed-axis 的轴方向与转角，不重算校准，不清洗任何数值；
+ *  - 不改动 schema 要求的必填语义字段（`enabled` / 各算法的 `magEnabled` / 门控阈值 …）：
+ *    这类"界面表达不了"的取值仍由界面层的可表达性判定拒绝，而不是在这里被抹平；
+ *  - 越界/非法值仍由 `experimentConfigProblems` 拦在解析阶段。
+ */
+export function canonicalizeExperimentConfig(c: ExperimentConfig): ExperimentConfig {
+  const magCal = c.magCalibration ? copyCalibration("mag", c.magCalibration as unknown as Record<string, unknown>) : null;
+  const accelCal = c.accelCalibration ? copyCalibration("accel", c.accelCalibration as unknown as Record<string, unknown>) : null;
+  const estimators = {} as Record<EstimatorId, EstimatorTuning>;
+  for (const id of Object.keys(DEFAULT_ESTIMATOR_TUNING) as EstimatorId[]) {
+    const src = c.estimators[id];
+    // 必填语义字段原样保留（类型已在解析阶段验过）；只补可选键。
+    const out: EstimatorTuning = {
+      enabled: src.enabled,
+      magEnabled: src.magEnabled,
+      accelGate: src.accelGate,
+      gateDeg: src.gateDeg,
+      gateMagPct: src.gateMagPct,
+      gateRecovery: src.gateRecovery,
+      rampEnabled: src.rampEnabled,
+      magMode: src.magMode,
+      params: {},
+    };
+    // kalman 的三个可选键只属于 kalman：其它算法不许携带（否则同一语义有两种表示）
+    if (id === "kalman") {
+      out.kalmanGate = src.kalmanGate === "mahalanobis" ? "mahalanobis" : "angle";
+      out.kalmanChi2 = isFiniteNumber(src.kalmanChi2) ? src.kalmanChi2 : DEFAULT_ESTIMATOR_TUNING.kalman.kalmanChi2;
+      out.kalmanResetCov = src.kalmanResetCov === true;
+    }
+    // params：只保留内核**真正读取**的白名单键，顺序固定为默认表顺序。
+    // 未知键既不落盘也不参与比较：`experimentConfigProblems` 对当前 schema 直接拒绝它们，
+    // 旧 schema 迁移时由 notes 报出（不再"保留一个内核不读的参数"）。
+    const params: Record<string, number> = {};
+    for (const k of Object.keys(DEFAULT_ESTIMATOR_TUNING[id].params)) params[k] = src.params[k];
+    out.params = params;
+    estimators[id] = out;
+  }
+  const imu = { ...DEFAULT_IMU_PARAMS } as ImuParams;
+  for (const k of Object.keys(DEFAULT_IMU_PARAMS) as Array<keyof ImuParams>) {
+    const v = c.imu?.[k];
+    if (isFiniteNumber(v)) (imu as unknown as Record<string, number>)[k] = v;
+  }
+  const kind = c.initialAttitude?.kind === "random" ? "random" : c.initialAttitude?.kind === "fixed-axis" ? "fixed-axis" : "level";
+  const initial: InitialAttitudeSpec =
+    kind === "fixed-axis"
+      ? { kind, axis: [...(c.initialAttitude.axis ?? [1, 0, 0])] as V3, angleDeg: c.initialAttitude.angleDeg ?? 30 }
+      : { kind };
+  // 键顺序 = DEFAULT_EXPERIMENT_CONFIG 的顺序：规范形因此逐字节可比
+  return {
+    schemaVersion: EXPERIMENT_SCHEMA_VERSION,
+    seed: c.seed,
+    scenario: c.scenario,
+    durationSec: c.durationSec,
+    solveRateHz: c.solveRateHz,
+    imu,
+    estimators,
+    initialAttitude: initial,
+    manualTargetDeg: c.manualTargetDeg ? ([...c.manualTargetDeg] as [number, number, number]) : [0, 0, 0],
+    magModel: c.magModel === "full" ? "full" : "diag",
+    magTargetUts: c.magTargetUts ?? magCal?.field ?? 50,
+    magCalibration: magCal,
+    accelCalibration: accelCal,
+    magCalibrationApplied: magCal !== null && c.magCalibrationApplied !== false,
+    accelCalibrationApplied: accelCal !== null && c.accelCalibrationApplied !== false,
+    autoCoarseAlign: c.autoCoarseAlign !== false,
+    steadyFromSec: c.steadyFromSec ?? null,
+    ab: { mode: c.ab?.mode === "online-fork" ? "online-fork" : "same-start" },
+  };
 }
 
 export interface ConfigProblem {
@@ -377,18 +472,40 @@ export function experimentConfigProblems(raw: unknown, required = true): ConfigP
     check(imu, k, `imu.${k}`, num(), required && !optional);
   }
   const estimators = entry(raw, "estimators", "estimators", required);
-  if (estimators) for (const id of Object.keys(DEFAULT_ESTIMATOR_TUNING) as EstimatorId[]) {
-    const path = `estimators.${id}`, t = entry(estimators, id, path, required);
-    if (!t) continue;
-    for (const k of ["enabled", "magEnabled", "accelGate", "gateRecovery", "rampEnabled"]) check(t, k, `${path}.${k}`, bool, required);
-    check(t, "gateDeg", `${path}.gateDeg`, v => isFiniteNumber(v) && v > 0 && v <= 180, required);
-    check(t, "gateMagPct", `${path}.gateMagPct`, positive, required);
-    check(t, "magMode", `${path}.magMode`, v => v === "yaw" || v === "full", required);
-    check(t, "kalmanGate", `${path}.kalmanGate`, v => v === "angle" || v === "mahalanobis");
-    check(t, "kalmanChi2", `${path}.kalmanChi2`, positive);
-    check(t, "kalmanResetCov", `${path}.kalmanResetCov`, bool);
-    const params = entry(t, "params", `${path}.params`, required);
-    if (params) for (const k of Object.keys(DEFAULT_ESTIMATOR_TUNING[id].params)) check(params, k, `${path}.params.${k}`, num(), required);
+  if (estimators) {
+    /**
+     * 未知算法 id / 未知参数键：**明确报出字段路径**，不再静默保留。
+     *
+     * 复核 SW-04：旧实现只校验五个已知算法与已知参数，多余的键却能穿过校验被克隆进配置；
+     * 运行侧（`setParams`）只读白名单里的键，于是"解析成功、运行无视、读回比较失败"三件事同时发生
+     * （`unknownKernelParam=3` 就是这么来的）。现在当前 schema 直接拒绝，旧 schema 由调用方记进 notes。
+     */
+    for (const key of Object.keys(estimators)) {
+      if (!Object.prototype.hasOwnProperty.call(DEFAULT_ESTIMATOR_TUNING, key)) {
+        add(`estimators.${key}`, "未知算法 id（内核只认 pure / comp / mahony / madg / kalman）");
+      }
+    }
+    for (const id of Object.keys(DEFAULT_ESTIMATOR_TUNING) as EstimatorId[]) {
+      const path = `estimators.${id}`, t = entry(estimators, id, path, required);
+      if (!t) continue;
+      for (const k of ["enabled", "magEnabled", "accelGate", "gateRecovery", "rampEnabled"]) check(t, k, `${path}.${k}`, bool, required);
+      check(t, "gateDeg", `${path}.gateDeg`, v => isFiniteNumber(v) && v > 0 && v <= 180, required);
+      check(t, "gateMagPct", `${path}.gateMagPct`, positive, required);
+      check(t, "magMode", `${path}.magMode`, v => v === "yaw" || v === "full", required);
+      check(t, "kalmanGate", `${path}.kalmanGate`, v => v === "angle" || v === "mahalanobis");
+      check(t, "kalmanChi2", `${path}.kalmanChi2`, positive);
+      check(t, "kalmanResetCov", `${path}.kalmanResetCov`, bool);
+      const params = entry(t, "params", `${path}.params`, required);
+      if (params) {
+        const knownParams = Object.keys(DEFAULT_ESTIMATOR_TUNING[id].params);
+        for (const k of knownParams) check(params, k, `${path}.params.${k}`, num(), required);
+        for (const key of Object.keys(params)) {
+          if (!knownParams.includes(key)) {
+            add(`${path}.params.${key}`, `未知参数键（${id} 只读 ${knownParams.join(" / ") || "（无参数）"}）——内核不会读取它`);
+          }
+        }
+      }
+    }
   }
   const ia = entry(raw, "initialAttitude", "initialAttitude", required);
   if (ia) {
@@ -452,8 +569,12 @@ export function migrateExperimentConfig(raw: unknown): ExperimentConfig {
       if (typeof r.kalmanChi2 === "number" && Number.isFinite(r.kalmanChi2)) dst.kalmanChi2 = r.kalmanChi2;
       if (typeof r.kalmanResetCov === "boolean") dst.kalmanResetCov = r.kalmanResetCov;
       if (r.params && typeof r.params === "object") {
+        // 迁移宽容但**不留无效语义**：只接受默认表里认识的参数键。
+        // 未知键由 notes 报出（旧 schema 走 `experimentConfigProblems(raw, false)`），
+        // 但不写进迁移结果——否则"迁移成功"的配置仍会被当前 schema 校验拒绝（复核 SW-04）。
+        const dstParams = dst.params;
         for (const [k, v] of Object.entries(r.params as Record<string, unknown>)) {
-          if (typeof v === "number" && Number.isFinite(v)) dst.params[k] = v;
+          if (typeof v === "number" && Number.isFinite(v) && Object.prototype.hasOwnProperty.call(dstParams, k)) dstParams[k] = v;
         }
       }
     }

@@ -523,6 +523,67 @@ const dirty: ImuParams = { gyroBiasDps: 1, gyroNoiseDps: 0.2, gyroWalkDps: 0, gy
   );
 }
 
+// 13b. Madgwick 遥测的修正量必须与实际修正一致（SW-02）
+//      复核反例：单位姿态、陀螺 [0,0,1]、加计与预测重力完全一致时，实际没有观测修正，
+//      遥测却报 correction=[0,0,0.5]、rate=[0,0,1.5]（把含陀螺项的 q̇ 当成了修正导数，
+//      且用了世界系乘法与额外 ½）。页面会把不存在的修正显示成 28.65°/s，破坏教学对照。
+{
+  // ① 零观测修正（单位姿态）：correction 必须恰为 0、rate 恰为 gyro
+  const unit = new MadgwickEstimator();
+  unit.magEnabled = false;
+  unit.update([0, 0, 1], [0, 0, G_ACC], [0, 0, 0], 0.01);
+  const unitZero =
+    unit.telemetry.correction.every((v) => v === 0) &&
+    unit.telemetry.rate.every((v, i) => Math.abs(v - [0, 0, 1][i]!) < 1e-12);
+
+  // ② 零观测修正（**非单位姿态**）：只有"零修正"在单位姿态成立是不够的
+  const tilt = new MadgwickEstimator();
+  tilt.magEnabled = false;
+  const th = 30 * RAD;
+  tilt.q = { w: Math.cos(th / 2), x: 0, y: Math.sin(th / 2), z: 0 };
+  const q0 = { ...tilt.q };
+  const gravBody = [2 * (q0.x * q0.z - q0.w * q0.y), 2 * (q0.w * q0.x + q0.y * q0.z), 1 - 2 * q0.x * q0.x - 2 * q0.y * q0.y];
+  const gyro2: V3 = [0.5, -0.2, 0.1];
+  tilt.update(gyro2, gravBody.map((v) => v * G_ACC) as V3, [0, 0, 0], 0.01);
+  const tiltZero =
+    tilt.telemetry.correction.every((v) => Math.abs(v) < 1e-12) &&
+    tilt.telemetry.rate.every((v, i) => Math.abs(v - gyro2[i]!) < 1e-12);
+
+  // ③ beta=0（无增益）与加计被门控拒绝：同样不得报出修正
+  const noBeta = new MadgwickEstimator();
+  noBeta.beta = 0;
+  noBeta.magEnabled = false;
+  noBeta.update([0.3, 0, 0], [0, 0, G_ACC * 0.2], [0, 0, 0], 0.01); // 幅度严重不符 → 被门控拒绝
+  const noBetaZero = noBeta.telemetry.correction.every((v) => v === 0);
+
+  // ④ 有非零修正时，遥测 rate 必须等于**实际**姿态变化反解出的机体系角速度
+  const active = new MadgwickEstimator();
+  active.magEnabled = false;
+  active.q = { w: Math.cos(th / 2), x: 0, y: Math.sin(th / 2), z: 0 };
+  const a0 = { ...active.q };
+  const dt = 0.01;
+  active.update([0.4, 0.1, -0.2], [Math.sin(12 * RAD) * G_ACC, 0.3, Math.cos(12 * RAD) * G_ACC], [0, 0, 0], dt);
+  const a1 = { ...active.q };
+  const inv = { w: a0.w, x: -a0.x, y: -a0.y, z: -a0.z };
+  const dd = { w: (a1.w - a0.w) / dt, x: (a1.x - a0.x) / dt, y: (a1.y - a0.y) / dt, z: (a1.z - a0.z) / dt };
+  const vecOf = (a: { w: number; x: number; y: number; z: number }, b: { w: number; x: number; y: number; z: number }): V3 => [
+    a.w * b.x + a.x * b.w + (a.y * b.z - a.z * b.y),
+    a.w * b.y + a.y * b.w + (a.z * b.x - a.x * b.z),
+    a.w * b.z + a.z * b.w + (a.x * b.y - a.y * b.x),
+  ];
+  const actual = vecOf(inv, dd).map((v) => 2 * v) as V3;
+  const fdErr = Math.max(...actual.map((v, i) => Math.abs(v - active.telemetry.rate[i]!)));
+  const hasCorrection = Math.max(...active.telemetry.correction.map(Math.abs)) > 0.01;
+
+  check(
+    "玻璃盒遥测：Madgwick 修正角速度与实际修正一致（零修正恒零、有修正可反解核对）",
+    unitZero && tiltZero && noBetaZero && hasCorrection && fdErr < 5e-3,
+    `零修正(单位姿态) correction=${JSON.stringify(unit.telemetry.correction)} rate=${JSON.stringify(unit.telemetry.rate)}；` +
+      `零修正(30°俯仰) correction=[${tilt.telemetry.correction.map((v) => v.toExponential(1)).join(",")}]；` +
+      `beta=0 恒零=${noBetaZero}；有修正时 rate 与反解差 ${fdErr.toExponential(1)} rad/s（corr=[${active.telemetry.correction.map((v) => v.toFixed(3)).join(",")}]）`,
+  );
+}
+
 // 14. 万向节锁解说文案：锁定/接近/正常三个分支
 {
   const locked = narrateGimbal(90, true);

@@ -24,6 +24,7 @@ import { TruthTrack } from "./core/truth-track";
 import { gimbalDemo, gimbalInnerQuat, toDisplayVec } from "./core/gimbal";
 import * as THREE from "three";
 import { applyViewDom, narrateGimbal, type UiView } from "./ui/mode";
+import { buildDocIndex, hitsHtml, MIN_QUERY_LENGTH, movedSelection, searchDocBlocks, type DocBlock } from "./ui/doc-search";
 import { Gauss, mulberry32 } from "./core/rng";
 import {
   frameIntervalSec,
@@ -99,6 +100,7 @@ import {
   type EstimatorTuning,
   type MagCalModel,
 } from "./core/experiment-config";
+import { archiveControlRoundTripProblems, archiveUiSteps, quantizeSliderValue, type ControlSpecs } from "./core/archive-ui";
 import { TraceEvents } from "./core/trace-events";
 /** 构建期注入（vite define）：线上页面必须能回答「我看的是哪个提交」 */
 declare const __BUILD_COMMIT__: string;
@@ -108,6 +110,7 @@ import {
   applyTuning,
   resultDigest,
   runExperiment,
+  runExperimentAsync,
   runMonteCarlo,
   runTrace,
   seedSequence,
@@ -1028,13 +1031,12 @@ function bindSlider(
   const stepMin = baseStep / 100;
   const stepMax = (max - min) / 2;
 
-  /** 夹到范围并按当前步距对齐，消除浮点毛刺 */
+  /** 夹到范围并按当前步距对齐；量化规则与离线可表达性模型**共用同一函数**（见 core/archive-ui.ts）。
+   *  两边各写一份时，"越界值读回什么"会有两个答案：模型说 5、真实控件给 4（复核 SW-03）。 */
   const quantize = (raw: number): number => {
     if (!Number.isFinite(raw)) return parseFloat(input.value);
     const step = parseFloat(input.step) || baseStep;
-    const clamped = Math.min(max, Math.max(min, raw));
-    const snapped = Math.round((clamped - min) / step) * step + min;
-    return Math.min(max, Math.max(min, parseFloat(snapped.toFixed(6))));
+    return quantizeSliderValue(raw, min, max, step);
   };
 
   /** 把值同步到滑块、数值框与（可选的）output */
@@ -2084,52 +2086,134 @@ function syntheticCalibrationSamples(n = 280): V3[] {
   return out;
 }
 
-function updateMagCalUi(): void {
+/**
+ * 校准面板的**渲染计划**（SW-03）。
+ *
+ * 为什么要有"计划"这一层：`innerHTML = ...` 是面板更新里唯一会**解析 HTML、可能抛异常**的步骤。
+ * 档案导入必须在**写任何状态之前**把它做完（在脱离文档的元素上解析），于是渲染失败时现场一个字节都没动；
+ * 提交阶段只剩 `replaceChildren(已解析好的节点)` 与属性赋值，不再有可失败的解析。
+ * 计划的输入是**显式状态描述**而不是活全局：这样才能为"导入前 / 导入后 / 提交后"三份现场各算一份。
+ */
+interface MagPanelPlan {
+  status: string;
+  result: Node[];
+  applyDisabled: boolean;
+  applyChecked: boolean;
+  startLabel: string;
+  synthDisabled: boolean;
+}
+interface AccelPanelPlan {
+  status: string;
+  result: Node[];
+  applyDisabled: boolean;
+  applyChecked: boolean;
+}
+interface CalUiDesc {
+  mag: {
+    cal: MagCalibration | null; applied: boolean; collecting: boolean; sampleCount: number;
+    verifyLine: string; message: string;
+    history: Array<{ id: number; atText: string; model: "diag" | "full"; sampleCount: number; residual: number; lateResidual: number | null; active: boolean }>;
+  };
+  accel: { cal: AccelCalibration | null; applied: boolean; sampleCount: number; verifyLine: string; message: string };
+  model: MagCalModel;
+  /** 器件参数（决定「标定基于旧模型」提示）：档案导入会改它，所以必须显式传入 */
+  imu: ImuParams;
+  real: boolean;
+}
+
+/** 活状态 → 渲染描述（只读；不触发任何 DOM 写入） */
+function calUiDesc(): CalUiDesc {
+  return {
+    mag: {
+      cal: magCalState.cal,
+      applied: magCalState.applied,
+      collecting: magCalState.collecting,
+      sampleCount: magCalState.samples.length,
+      verifyLine: magCalState.verifyLine,
+      message: magCalState.message,
+      history: magCalHistory.map((h) => ({
+        id: h.id, atText: h.atText, model: h.model, sampleCount: h.sampleCount,
+        residual: h.residual, lateResidual: h.lateResidual,
+        // 用历史条目 id 判「当前」：快照是深拷贝，按引用比较永远不相等（冒烟实测 5 条全带恢复按钮）
+        active: h.id === activeMagCalHistoryId,
+      })),
+    },
+    accel: {
+      cal: accelCalState.cal,
+      applied: accelCalState.applied,
+      sampleCount: accelCalState.samples.length,
+      verifyLine: accelCalState.verifyLine,
+      message: accelCalState.message,
+    },
+    model: currentMagCalModel(),
+    imu: { ...imuParams },
+    real: state.real,
+  };
+}
+
+/** 解析一段 HTML 成脱离文档的节点数组（在 prepare 阶段调用；这是唯一可能抛错的步骤） */
+function nodesOfHtml(html: string): Node[] {
+  const holder = document.createElement("div");
+  holder.innerHTML = html;
+  return [...holder.childNodes];
+}
+
+function planMagPanel(d: CalUiDesc): MagPanelPlan {
+  const stale = calibrationStaleness(d.mag.cal?.fittedWith, d.imu, "mag", d.model);
+  const result = nodesOfHtml(magResultHtml(d.mag.cal, d.mag.verifyLine, stale) + magHistoryHtml(d.mag.history));
+  const base = magStatusText({
+    cal: d.mag.cal, applied: d.mag.applied, collecting: d.mag.collecting,
+    sampleCount: d.mag.sampleCount, message: "", verifyLine: d.mag.verifyLine, target: MAG_CAL_TARGET,
+  });
+  return {
+    status: d.mag.message || base,
+    result,
+    applyDisabled: d.mag.cal === null,
+    applyChecked: d.mag.applied && d.mag.cal !== null,
+    startLabel: d.mag.collecting ? "停止采集" : "开始实时采集",
+    synthDisabled: d.real,
+  };
+}
+
+function planAccelPanel(d: CalUiDesc): AccelPanelPlan {
+  const stale = calibrationStaleness(d.accel.cal?.fittedWith, d.imu, "accel");
+  return {
+    status: accelStatusText({
+      cal: d.accel.cal, applied: d.accel.applied, sampleCount: d.accel.sampleCount,
+      message: d.accel.message, verifyLine: d.accel.verifyLine, windowSeconds: ACCEL_CAL_SECONDS,
+    }),
+    result: nodesOfHtml(accelResultHtml(d.accel.cal, d.accel.verifyLine, stale)),
+    applyDisabled: d.accel.cal === null,
+    applyChecked: d.accel.applied && d.accel.cal !== null,
+  };
+}
+
+/** 应用计划：只有赋值与节点搬移，没有 HTML 解析 */
+function applyMagPanel(p: MagPanelPlan): void {
   const status = document.getElementById("magcal-status");
   const result = document.getElementById("magcal-result");
+  if (status) status.textContent = p.status;
+  if (result) result.replaceChildren(...p.result);
   const apply = document.getElementById("magcal-apply") as HTMLInputElement | null;
+  if (apply) { apply.disabled = p.applyDisabled; apply.checked = p.applyChecked; }
   const start = document.getElementById("magcal-start") as HTMLButtonElement | null;
+  if (start) start.textContent = p.startLabel;
   const synth = document.getElementById("magcal-synthetic") as HTMLButtonElement | null;
-  if (!status) return;
-  const n = magCalState.samples.length;
-  status.textContent = magStatusText({
-    cal: magCalState.cal,
-    applied: magCalState.applied,
-    collecting: magCalState.collecting,
-    sampleCount: n,
-    message: "",
-    verifyLine: magCalState.verifyLine,
-    target: MAG_CAL_TARGET,
-  });
-  if (result) {
-    // 器件参数可能在拟合之后被改（交叉轴/非线性/拟合模型）→ 提示标定基于旧模型
-    const stale = calibrationStaleness(magCalState.cal?.fittedWith, imuParams, "mag", currentMagCalModel());
-    result.innerHTML =
-      magResultHtml(magCalState.cal, magCalState.verifyLine, stale) +
-      magHistoryHtml(
-        magCalHistory.map((h) => ({
-          id: h.id,
-          atText: h.atText,
-          model: h.model,
-          sampleCount: h.sampleCount,
-          residual: h.residual,
-          lateResidual: h.lateResidual,
-          // 用历史条目 id 判「当前」：快照是深拷贝，按引用比较永远不相等（冒烟实测 5 条全带恢复按钮）
-          active: h.id === activeMagCalHistoryId,
-        })),
-      );
-  }
+  if (synth) synth.disabled = p.synthDisabled;
+}
 
-  if (apply) {
-    apply.disabled = magCalState.cal === null;
-    apply.checked = magCalState.applied && magCalState.cal !== null;
-  }
-  if (start) start.textContent = magCalState.collecting ? "停止采集" : "开始实时采集";
-  if (synth) synth.disabled = state.real;
-  if (magCalState.message) {
-    status.textContent = magCalState.message;
-    magCalState.message = "";
-  }
+function applyAccelPanel(p: AccelPanelPlan): void {
+  const status = document.getElementById("accelcal-status");
+  const result = document.getElementById("accelcal-result");
+  if (status) status.textContent = p.status;
+  if (result) result.replaceChildren(...p.result);
+  const apply = document.getElementById("accelcal-apply") as HTMLInputElement | null;
+  if (apply) { apply.disabled = p.applyDisabled; apply.checked = p.applyChecked; }
+}
+
+function updateMagCalUi(): void {
+  applyMagPanel(planMagPanel(calUiDesc()));
+  magCalState.message = ""; // 提示消费掉（与旧实现一致：显示一次即清）
 }
 
 function magCalFit(): void {
@@ -2249,28 +2333,8 @@ document.getElementById("magcal-result")?.addEventListener("click", (e) => {
 
 /* ---------- 加速度计六面校准 UI ---------- */
 function updateAccelCalUi(): void {
-  const status = document.getElementById("accelcal-status");
-  const result = document.getElementById("accelcal-result");
-  const apply = document.getElementById("accelcal-apply") as HTMLInputElement | null;
-  if (status) {
-    status.textContent = accelStatusText({
-      cal: accelCalState.cal,
-      applied: accelCalState.applied,
-      sampleCount: accelCalState.samples.length,
-      message: accelCalState.message,
-      verifyLine: accelCalState.verifyLine,
-      windowSeconds: ACCEL_CAL_SECONDS,
-    });
-  }
-  if (result) {
-    const stale = calibrationStaleness(accelCalState.cal?.fittedWith, imuParams, "accel");
-    result.innerHTML = accelResultHtml(accelCalState.cal, accelCalState.verifyLine, stale);
-  }
-  if (apply) {
-    apply.disabled = accelCalState.cal === null;
-    apply.checked = accelCalState.applied && accelCalState.cal !== null;
-  }
-  accelCalState.message = "";
+  applyAccelPanel(planAccelPanel(calUiDesc()));
+  accelCalState.message = ""; // 提示消费掉（与旧实现一致）
 }
 function fitAccelCal(): void {
   const cal = calibrateAccel(accelCalState.samples);
@@ -2999,19 +3063,47 @@ const BUILD_INFO = {
   commit: __BUILD_COMMIT__,
   builtAt: __BUILD_TIME__,
 };
+/**
+ * **被服务产物**的构建身份（SW-06）：`dist/build-provenance.json` 是构建结束时写下的，
+ * 它自己声明 buildId（源码摘要 + 产物摘要）。页面把它取回来，于是采集脚本能回答
+ * 「服务端跑的这份产物是不是我本地刚构建的那份」——只比提交号做不到这一点：
+ * 未提交的改动、换了产物没换源码，都能让两个不同的 dist 顶着同一个 commit。
+ * 开发服务器/离线包里没有这个文件（dev 直接跑源码），取不到就只显示提交与时间。
+ */
+const BUILD_IDENTITY: { buildId: string | null; distHash: string | null; sourceDigest: string | null } = {
+  buildId: null,
+  distHash: null,
+  sourceDigest: null,
+};
 function paintBuildStamp(): void {
   const el = document.getElementById("build-stamp-value");
   if (!el) return;
   const when = BUILD_INFO.builtAt.replace("T", " ").slice(0, 19);
-  el.textContent = `${BUILD_INFO.commit} · ${when} UTC`;
+  const artifact = BUILD_IDENTITY.buildId ? ` · 产物 ${BUILD_IDENTITY.buildId}` : "";
+  el.textContent = `${BUILD_INFO.commit} · ${when} UTC${artifact}`;
 }
 paintBuildStamp();
+async function loadBuildIdentity(): Promise<void> {
+  try {
+    const res = await fetch(new URL("build-provenance.json", document.baseURI).href, { cache: "no-store" });
+    if (!res.ok) return;
+    const raw = (await res.json()) as { buildId?: unknown; distHash?: unknown; sourceDigest?: unknown };
+    if (typeof raw.buildId === "string" && raw.buildId) {
+      BUILD_IDENTITY.buildId = raw.buildId;
+      BUILD_IDENTITY.distHash = typeof raw.distHash === "string" ? raw.distHash : null;
+      BUILD_IDENTITY.sourceDigest = typeof raw.sourceDigest === "string" ? raw.sourceDigest : null;
+      paintBuildStamp();
+    }
+  } catch { /* 没有溯源文件（dev / 离线包）：保持只显示提交与时间 */ }
+}
+void loadBuildIdentity();
 
 function resetSim(): void {
   // 档案导入的**验证阶段**禁止清现场：写控件会触发 change → resetSim，
   // 但此刻还没决定是否接受这份档案。只有 applyArchiveChecked 验证通过后
   // 才会退出抑制并显式提交一次。
   if (archiveProbeDepth > 0) return;
+  simResetCount++; // 诊断计数：每帧都在复位说明有控件事件在自激（时钟/曲线永远停在 0）
   // 确定性复位：World 用同一 seed 重新播种，传感器噪声序列从实验起点完整重放
   world.reset(experimentConfig.seed);
   // 「初始姿态偏差」演示：勾选后给所有算法同一个**由 seed 决定**的随机初值（20–35°，真值仍从水平出发）——
@@ -3286,6 +3378,23 @@ let sourceIntent: DataSourceKind = "simulation";
 
 /** 批量评测的执行路径（自检/冒烟用来确认走的是哪一条） */
 let batchLastMode: "worker" | "main" | null = null;
+/**
+ * 主线程降级路径的**协作取消**判据（SW-10）。
+ *
+ * 旧实现的问题：降级分支用同步 `runExperiment` 跑「整个种子」，只在种子之间 `setTimeout` 让出。
+ * 一个 30 s 实验要 ~550 ms 才能返回，这期间事件循环完全被占住——用户点了取消、甚至点了
+ * 其它控件，都得等这次计算跑完才轮到。被点名的验收目标是「取消后下一计算片即停止」与
+ * 「交互响应 p95 ≤ 200 ms」，这里就按这两条留证：
+ *   · `batchCancelLatencyMs`：从点取消到计算真正停下的时延（毫秒，最近一次）；
+ *   · `batchPartialSeeds`：因取消而被丢弃的**未完成**种子数（半成品不许计入完成统计）。
+ */
+let batchCancelLatencyMs: number | null = null;
+let batchPartialSeeds = 0;
+let batchCancelRequestedAt: number | null = null;
+/** 测试/验收开关：强制走主线程降级路径（否则本机总是 Worker，降级分支永远测不到） */
+let batchWorkerDisabled = false;
+/** 主线程降级的计算片预算（世界步数）：128 步 ≈ 5 ms，给点击/绘制/计时器留出机会 */
+const BATCH_MAIN_SLICE_STEPS = 128;
 let batchCompletedResult: { generation: number; seeds: number[]; summary: ReturnType<typeof summarizeRuns>["summary"] } | null = null;
 
 /**
@@ -3312,6 +3421,8 @@ let settleBatchWorker: ((v: EstimatorRunMetrics[][] | null) => void) | null = nu
 
 /** 批量评测的取消请求：由按钮或新批次触发 */
 function cancelBatch(reason: string): void {
+  // 记下取消时刻：主线程降级路径会在下一个计算片停下并回报真实时延（SW-10）
+  batchCancelRequestedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
   // 取消要覆盖两条路径：Worker 还在跑时终止它；Worker 已挂/不存在时正在跑主线程分片，
   // 此时 activeBatchJob 可能已经是 0——只看它会把「取消」吃掉（复核实测过这条）。
   if (!batchRunning && !activeBatchJob && !settleBatchWorker) return;
@@ -3361,6 +3472,12 @@ function runBatchInWorker(
   return new Promise((resolve) => {
     const jobId = ++batchJobSeq;
     activeBatchJob = jobId;
+    if (batchWorkerDisabled) {
+      // 显式禁用（自动化验收用）：走与「Worker 不可用」完全相同的回退路径
+      activeBatchJob = 0;
+      resolve(null);
+      return;
+    }
     let worker: Worker;
     try {
       worker = new Worker(new URL("./workers/batch.worker.ts", import.meta.url), { type: "module" });
@@ -3486,27 +3603,49 @@ async function runBatch(): Promise<void> {
     return;
   }
 
+  /**
+   * ② 主线程降级路径：用 runner 的**异步出口**逐片执行，取消在下一片生效（SW-10）。
+   *
+   * 与旧实现的差别：以前这里是「同步跑完一个种子 → setTimeout(0) 跑下一个」，
+   * 单种子内部的 500 Hz 循环全程占住主线程（30 s 实验 ≈ 550 ms 不可交互）。
+   * 现在直接复用 `runExperimentAsync` + `shouldCancel`（不另写一套积分内核）：
+   *   · 每 `BATCH_MAIN_SLICE_STEPS` 步 let 出一次 macrotask（不是 microtask，
+   *     否则收不到点击/计时器消息，只是"看起来让出了"）；
+   *   · `shouldCancel` 每步检查，取消后当前种子立即中止；
+   *   · 被中止的种子**不计入完成统计**（`termination.reason !== "completed"` 就丢掉）。
+   */
   const runs: HeadlessRunResult[] = [];
-  const next = (): void => {
-    if (stale() || !batchRunning) return; // 已被取消/被新批次替换
-    if (runs.length >= seeds.length) {
-      finishBatch(summarizeRuns(config, seeds, runs), runs.length, "main");
+  const cancelledNow = (): boolean => stale() || !batchRunning;
+  for (let i = 0; i < seeds.length; i++) {
+    if (cancelledNow()) return;
+    const result = await runExperimentAsync(
+      { ...config, seed: seeds[i] },
+      {
+        stepsPerSlice: BATCH_MAIN_SLICE_STEPS,
+        progressEverySec: 0.5,
+        shouldCancel: cancelledNow,
+        onProgress: () => !cancelledNow(),
+      },
+    );
+    if (cancelledNow()) {
+      // 取消：本次种子是半成品，丢弃并回报"取消到停止"的真实时延
+      batchPartialSeeds++;
+      if (batchCancelRequestedAt !== null && typeof performance !== "undefined") {
+        batchCancelLatencyMs = performance.now() - batchCancelRequestedAt;
+        batchCancelRequestedAt = null;
+      }
       return;
     }
-    // 让出一帧再跑下一个种子：浏览器主线程不会被长循环完全冻结
-    setTimeout(() => {
-      // 世代 + 取消标志双重检查：取消后已排队的定时器不得再跑旧种子的计算
-      if (stale() || !batchRunning) return;
-      runs.push(runExperiment({ ...config, seed: seeds[runs.length] }, {
-        progressEverySec: 0.5,
-        onProgress: () => !stale() && batchRunning, // 取消 → 当前种子立刻提前终止
-      }));
-      if (stale()) return;
-      status.textContent = `批量评测进行中（主线程）：${runs.length} / ${seeds.length}（当前 seed ${seeds[runs.length - 1]}）`;
-      next();
-    }, 0);
-  };
-  next();
+    if (result.termination.reason !== "completed") {
+      // 没有取消、却也没跑完：同样是"半个种子"，不能进统计
+      batchPartialSeeds++;
+      return;
+    }
+    runs.push(result);
+    status.textContent = `批量评测进行中（主线程）：${runs.length} / ${seeds.length}（当前 seed ${seeds[i]}）`;
+  }
+  if (cancelledNow()) return;
+  finishBatch(summarizeRuns(config, seeds, runs), runs.length, "main");
 }
 $("btn-batch")?.addEventListener("click", () => void runBatch());
 
@@ -3556,28 +3695,7 @@ function exportArchive(): void {
   toast(`已导出配置档案（seed ${archive.config.seed}，实际跑 ${archive.run.elapsedSec.toFixed(1)} s；导入将从 seed 起点复现配置）`);
 }
 
-/** IMU 参数 → 主界面控件（导入档案时逐项还原；没有 UI 的字段不会出现） */
-const ARCHIVE_IMU_CONTROLS: Array<[keyof ImuParams, string, number]> = [
-  ["gyroBiasDps", "imu-gyro-bias", 1],
-  ["gyroNoiseDps", "imu-gyro-noise", 1],
-  ["gyroWalkDps", "imu-gyro-walk", 1],
-  ["accelNoise", "imu-accel-noise", 1],
-  ["accelCrossAxis", "imu-cross-axis", 100],
-  ["accelNonlin", "imu-accel-nonlin", 100],
-  ["linAccel", "imu-lin-accel", 1],
-  ["vibration", "imu-vibration", 1],
-  ["magNoise", "imu-mag-noise", 1],
-  ["magQuantUts", "imu-mag-quant", 1],
-  ["disturbMag", "imu-mag-disturb", 1],
-  ["hardIron", "imu-hard-iron", 1],
-  ["magSoftIron", "imu-soft-iron", 1],
-  ["sensorDelayMs", "imu-delay", 1],
-  ["gyroScaleErr", "imu-gyro-scale", 100],
-  ["gyroMisalign", "imu-gyro-misalign", 100],
-  ["sensorBandwidthHz", "imu-bandwidth", 1],
-  ["sensorDelaySkewMs", "imu-delay-skew", 1],
-  ["sensorSampleHz", "imu-sample-rate", 1],
-];
+/** IMU 参数 → 主界面控件表在 core/archive-ui.ts（写控件与离线可表达性模型共用同一张表） */
 
 /**
  * 档案提交期间的联动复位抑制：写控件会触发 resetSim/场景重建，
@@ -3585,61 +3703,62 @@ const ARCHIVE_IMU_CONTROLS: Array<[keyof ImuParams, string, number]> = [
  */
 let archiveProbeDepth = 0;
 
+/** 提示的单调计数（档案事务验收用：失败导入不得留下提示，且与提示存活时间无关） */
+let toastSeq = 0;
+
+/** 复位次数（诊断）：每帧都在复位 = 某个控件事件在自激，时钟/曲线会永远停在 0 */
+let simResetCount = 0;
+
+/** 读取档案相关控件的**约束**（min/max/step/选项）：只读属性，不触发任何事件。 */
+function archiveControlSpecs(): ControlSpecs {
+  const specs: ControlSpecs = {};
+  for (const step of archiveUiSteps(defaultExperimentConfig())) {
+    const el = document.getElementById(step.id);
+    if (!el) continue;
+    if (el instanceof HTMLSelectElement) {
+      specs[step.id] = { kind: "select", options: [...el.options].map((o) => o.value) };
+    } else if (el instanceof HTMLInputElement && el.type === "checkbox") {
+      specs[step.id] = { kind: "check" };
+    } else if (el instanceof HTMLInputElement) {
+      specs[step.id] = {
+        kind: "slider",
+        min: parseFloat(el.min),
+        max: parseFloat(el.max),
+        step: parseFloat(el.step) || 0.01,
+      };
+    }
+  }
+  return specs;
+}
+
 /**
  * 写活状态与控件（**非破坏性**）：不碰历史、不重置本轮现场。
  * 校验失败时可以用同一函数把旧配置原样写回，现场保持不动。
+ * 写步骤来自 `archiveUiSteps`（与离线可表达性模型共用），不再手写第二份映射。
  */
-function writeArchiveState(cfg: ExperimentConfig): void {
+function writeArchiveState(cfg: ExperimentConfig, panels?: { mag?: MagPanelPlan; accel?: AccelPanelPlan }): void {
   archiveProbeDepth++;
   try {
-    // 导入的是具体数值：预设标签切到"自定义"，避免界面显示某预设名却跑另一组参数
-    setSelectValue("imu-preset", "custom");
-    const s = (id: string, v: number): void => setSliderValue(id, v);
-    for (const [key, id, scale] of ARCHIVE_IMU_CONTROLS) s(id, (cfg.imu[key] ?? 0) * scale);
-    // 0 也要显式写回：旧实现在 gyroRangeDps=0（不限量程）时跳过了下拉，导入后仍停在上一个量程，
-    // 读回比较会把它当成「档案无法恢复」——其实是这里漏写。
-    setSelectValue("imu-gyro-range", String(cfg.imu.gyroRangeDps ?? 0));
-    setSelectValue("scenario-select", cfg.scenario);
-    setSelectValue("solve-rate", String(cfg.solveRateHz));
-    // 初始姿态是档案的一部分（random 对应「随机初始偏差」开关）。
-    setCheckValue("init-offset-toggle", cfg.initialAttitude.kind === "random");
-    if (cfg.estimators.comp.params.alpha !== undefined) s("comp-alpha", cfg.estimators.comp.params.alpha);
-    if (cfg.estimators.mahony.params.kp !== undefined) s("mahony-kp", cfg.estimators.mahony.params.kp);
-    if (cfg.estimators.mahony.params.ki !== undefined) s("mahony-ki", cfg.estimators.mahony.params.ki);
-    if (cfg.estimators.madg.params.beta !== undefined) s("madg-beta", cfg.estimators.madg.params.beta);
-    if (cfg.estimators.kalman.params.gyroNoiseDps !== undefined) s("kalman-proc", cfg.estimators.kalman.params.gyroNoiseDps);
-    if (cfg.estimators.kalman.params.obsNoise !== undefined) s("kalman-obs", cfg.estimators.kalman.params.obsNoise);
-    const trio = cfg.estimators.comp;
-    setCheckValue("mag-enable", trio.magEnabled);
-    setCheckValue("gate-toggle", trio.accelGate);
-    setCheckValue("gate-recovery", trio.gateRecovery);
-    s("gate-deg", trio.gateDeg);
-    s("gate-mag", trio.gateMagPct * 100);
-    setSelectValue("mag-mode", cfg.estimators.mahony.magMode);
-    if (cfg.estimators.kalman.kalmanGate) setSelectValue("kalman-gate", cfg.estimators.kalman.kalmanGate);
-    setCheckValue("kalman-reset-cov", cfg.estimators.kalman.kalmanResetCov === true);
-    // 可选字段缺失时按**文档默认值**落盘（与读回口径一致）：旧档案没有这两个字段时，
-    // 不能因为「没写」就让当前控件停在上一个实验的取值上——那样往返比较必然失败，
-    // 而且用户看到的配置也不是档案语义。
-    const manual = cfg.manualTargetDeg ?? [0, 0, 0];
-    world.setManualTarget(manual);
-    setSliderValue("man-roll", manual[0]);
-    setSliderValue("man-pitch", manual[1]);
-    setSliderValue("man-yaw", manual[2]);
-    setSelectValue("ab-mode", cfg.ab?.mode ?? "same-start");
+    // 手动目标角先写进 World 实例（驱动仿真），随后 man-* 滑块会把它对齐到控件网格——
+    // 顺序反了会让读回拿到未量化的原值，与读回比较口径打架。
+    world.setManualTarget(cfg.manualTargetDeg ?? [0, 0, 0]);
+    for (const step of archiveUiSteps(cfg)) {
+      if (step.kind === "slider") setSliderValue(step.id, step.value);
+      else if (step.kind === "select") setSelectValue(step.id, step.value);
+      else setCheckValue(step.id, step.value);
+    }
     experimentConfig.seed = cfg.seed;
     if (seedInput) seedInput.value = String(cfg.seed);
-    // 校准对象与模型：先把下拉切到目标模型，再装载对象与「是否应用」
-    const model = cfg.magCalibration?.kind ?? cfg.magModel ?? "diag";
-    setSelectValue("magcal-model", model);
-    // 深拷贝：把档案里的对象直接挂到活状态上，之后任何一次「重新拟合」都会把
-    // 历史记录/档案对象一起改写（复核反例：恢复后再改 clone.axis 污染了原配置）。
+    // 校准对象与模型：深拷贝——把档案里的对象直接挂到活状态上，之后任何一次「重新拟合」
+    // 都会把历史记录/档案对象一起改写（复核反例：恢复后再改 clone.axis 污染了原配置）。
     magCalState.cal = cfg.magCalibration ? cloneMagCalibration(cfg.magCalibration) : null;
     magCalState.applied = magCalState.cal !== null && cfg.magCalibrationApplied !== false;
-    updateMagCalUi();
+    // 面板渲染计划在 prepare 阶段就算好了（HTML 解析已提前完成）——这里只做赋值与节点搬移，
+    // 提交路径不再有"解析失败 → 半提交"的窗口（SW-03）。
+    if (panels?.mag) applyMagPanel(panels.mag); else updateMagCalUi();
     accelCalState.cal = cfg.accelCalibration ? cloneAccelCalibration(cfg.accelCalibration) : null;
     accelCalState.applied = accelCalState.cal !== null && cfg.accelCalibrationApplied !== false;
-    updateAccelCalUi();
+    if (panels?.accel) applyAccelPanel(panels.accel); else updateAccelCalUi();
     // 逐算法参数最后写：上面的控件事件会把「全局开关」刷给所有算法（applyMagEnable /
     // applyAccelGate / applyKalmanGate），档案里的逐算法快照必须覆盖这次广播，
     // 否则 rampEnabled / kalmanChi2 这些界面上没有独立控件的字段会被静默丢掉。
@@ -3657,7 +3776,7 @@ function writeArchiveState(cfg: ExperimentConfig): void {
  * 只有验证通过后才会走到这里——失败回滚只调用 writeArchiveState(before)，
  * 不会清历史/样本/曲线。
  */
-function commitArchiveRestore(): void {
+function commitArchiveRestore(panels?: { mag: MagPanelPlan; accel: AccelPanelPlan }): void {
   // 档案导入会换掉标定：历史列表清空，避免「恢复」把用户带回到另一个实验的标定
   magCalHistory.length = 0;
   magCalHistorySeq = 0;
@@ -3666,14 +3785,15 @@ function commitArchiveRestore(): void {
   magCalState.collecting = false;
   magCalState.samples.length = 0;
   magCalState.verifyLine = "";
-  updateMagCalUi();
   // 档案里没有保存六面原始样本（只有拟合结果），不能凭空造训练数据；已有模型仍可直接应用
   accelCalState.samples = [];
   accelCalState.pending = null;
   accelCalState.window = [];
   accelCalState.verifyLine = "";
   accelCalState.message = "";
-  updateAccelCalUi();
+  // 提交后的面板同样用 prepare 阶段算好的计划（历史已清空的那一份），不再现场解析 HTML
+  if (panels) { applyMagPanel(panels.mag); applyAccelPanel(panels.accel); }
+  else { updateMagCalUi(); updateAccelCalUi(); }
   resetSim();
 }
 
@@ -3715,27 +3835,34 @@ function cloneAccelCalibration(cal: AccelCalibration): AccelCalibration {
 }
 
 /**
- * 档案配置的**提交事务**：可表达性检查 → 应用 → 读回比较 → 失败回滚。
+ * 档案配置的**提交事务**：可表达性检查 → prepare（含面板渲染计划）→ 提交 → 读回比较 → 失败回滚。
  *
  * 用户导入与自动化入口（attitudeDemo.experiment.importArchive）共用这一条路径，
  * 否则测试会「绕过校验仍然绿」——正是复审指出的门禁盲区。
+ *
+ * SW-03 的关键改动：**所有可能抛异常的渲染**（`innerHTML` 解析）都在 prepare 阶段、
+ * 在脱离文档的元素上完成；提交阶段只剩控件写入与赋值-搬移。于是"渲染失败留下半提交现场"
+ * 这个窗口被消掉了：渲染失败时现场一个字节都没动，而回滚也不再需要现场重算面板。
  */
 function applyArchiveChecked(cfg: ExperimentConfig):
   | { ok: true; notRestored: string[]; warnings: string[] }
   | { ok: false; error: string } {
+  const fmt = (ps: Array<{ path: string; message: string }>): string => ps.map((p) => `${p.path}（${p.message}）`).join("；");
   // ① 界面根本无法表示的取值：直接拒绝（解析成功 ≠ 能恢复）。
   const impossible = archiveExpressibilityProblems(cfg);
   if (impossible.length) {
-    return {
-      ok: false,
-      error: `档案里有界面无法表示的配置，未导入：${impossible.map((p) => `${p.path}（${p.message}）`).join("；")}`,
-    };
+    return { ok: false, error: `档案里有界面无法表示的配置，未导入：${fmt(impossible)}` };
   }
-  // ② 读回比较：控件会按 min/max/step 夹值（333 Hz → 500 Hz、999999 → 5）。
-  //    先保存原配置，apply 后逐字段核对；不一致就回滚，绝不"导入成功但跑的是另一份配置"。
+  // ② **离线**往返判定（不写任何控件、不触发任何事件）：控件会按 min/max/step 夹值
+  //    （333 Hz → 500 Hz、999999 → 5）、全局开关会向所有算法广播、下拉写不进枚举外的取值。
+  //    这些判定全部在**提交之前**算完——失败时现场一个字节都没动，
+  //    因此「导入失败」不再需要靠回滚去修补（旧实现回滚不全会漏掉 loop/preset/toast 等副作用）。
+  const impossible2 = archiveControlRoundTripProblems(cfg, archiveControlSpecs());
+  if (impossible2.length) {
+    return { ok: false, error: `档案无法在界面上完整恢复（当前实验现场未改动）：${fmt(impossible2)}` };
+  }
+  // ③ prepare。比较的是**语义**而不是"键有没有写"：可选字段在缺失时按文档默认值恢复。
   const before = currentExperimentConfig(cfg.durationSec);
-  // 比较的是**语义**而不是"键有没有写"：schema 里可选的字段在缺失时按文档默认值恢复
-  // （writeArchiveState 也是这么写的），否则一份合法的旧档案会因为少写一个可选键被拒。
   const want = cloneExperimentConfig(cfg);
   want.autoCoarseAlign = cfg.autoCoarseAlign !== false;
   want.steadyFromSec = cfg.steadyFromSec ?? null;
@@ -3744,18 +3871,66 @@ function applyArchiveChecked(cfg: ExperimentConfig):
   want.accelCalibrationApplied = want.accelCalibration != null && cfg.accelCalibrationApplied !== false;
   want.manualTargetDeg = cfg.manualTargetDeg ? [...cfg.manualTargetDeg] as [number, number, number] : [0, 0, 0];
   want.ab = { mode: cfg.ab?.mode ?? "same-start" };
-  // 先写控件做读回探测：这一阶段刻意**不清现场、不重置仿真**，
-  // 于是失败回滚只需要把旧配置写回控件，曲线/记录/校准历史都还在。
-  writeArchiveState(cfg);
-  const mismatch = archiveRoundTripProblems(want, currentExperimentConfig(cfg.durationSec));
-  if (mismatch.length) {
-    writeArchiveState(before);
+  const live = calUiDesc();
+  const afterMagCal = cfg.magCalibration ?? null;
+  const afterAccelCal = cfg.accelCalibration ?? null;
+  const afterModel: MagCalModel = (cfg.magCalibration?.kind ?? cfg.magModel) === "full" ? "full" : "diag";
+  const afterDesc: CalUiDesc = {
+    mag: {
+      ...live.mag,
+      cal: afterMagCal,
+      applied: afterMagCal !== null && cfg.magCalibrationApplied !== false,
+    },
+    accel: {
+      ...live.accel,
+      cal: afterAccelCal,
+      applied: afterAccelCal !== null && cfg.accelCalibrationApplied !== false,
+    },
+    model: afterModel,
+    imu: { ...cfg.imu },
+    real: live.real,
+  };
+  const committedDesc: CalUiDesc = {
+    ...afterDesc,
+    mag: { ...afterDesc.mag, collecting: false, sampleCount: 0, verifyLine: "", history: [] },
+    accel: { ...afterDesc.accel, sampleCount: 0, verifyLine: "", message: "" },
+  };
+  let planBefore: { mag: MagPanelPlan; accel: AccelPanelPlan };
+  let planAfter: { mag: MagPanelPlan; accel: AccelPanelPlan };
+  let planCommitted: { mag: MagPanelPlan; accel: AccelPanelPlan };
+  try {
+    planBefore = { mag: planMagPanel(live), accel: planAccelPanel(live) };
+    planAfter = { mag: planMagPanel(afterDesc), accel: planAccelPanel(afterDesc) };
+    planCommitted = { mag: planMagPanel(committedDesc), accel: planAccelPanel(committedDesc) };
+  } catch (err) {
+    // 面板渲染阶段就失败：**还没有写任何状态**，直接如实报错
     return {
       ok: false,
-      error: `档案无法在界面上完整恢复（当前实验现场未改动）：${mismatch.map((m) => `${m.path}（${m.message}）`).join("；")}`,
+      error: `档案面板渲染失败（当前实验现场未改动）：${err instanceof Error ? err.message : String(err)}`,
     };
   }
-  commitArchiveRestore();
+  // ④ 提交。控件写入仍可能被处理器抛错打断，因此用统一异常边界：失败就把配置与面板写回导入前的计划，
+  //    且**不做**清历史/清样本/重置仿真这些不可逆动作（它们只在⑤成功之后发生）。
+  try {
+    writeArchiveState(cfg, planAfter);
+  } catch (err) {
+    try { writeArchiveState(before, planBefore); } catch { /* 回滚尽力而为；下面的错误信息已说明现场可能不完整 */ }
+    return {
+      ok: false,
+      error: `档案应用失败（已回滚配置）：${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+  // ⑤ 兜底断言：真实读回必须与离线模型一致。不一致说明模型失真（离线判定与控件语义脱钩），
+  //    此时回滚并如实报错，绝不"导入成功但跑的是另一份配置"。
+  const mismatch = archiveRoundTripProblems(want, currentExperimentConfig(cfg.durationSec));
+  if (mismatch.length) {
+    writeArchiveState(before, planBefore);
+    return {
+      ok: false,
+      error: `档案无法在界面上完整恢复（当前实验现场未改动）：${fmt(mismatch)}`,
+    };
+  }
+  commitArchiveRestore(planCommitted);
   // 档案替换的是 A 组配置；B 组仍按导入前的快照冻结，继续对比会得出错误结论。
   // 与「装载实验基线关闭 A/B」同一约定——关闭并说明，而不是留下含混语义。
   const warnings: string[] = [];
@@ -3763,7 +3938,7 @@ function applyArchiveChecked(cfg: ExperimentConfig):
     setCheckValue("ab-toggle", false); // handler 会清掉 clones 并把 B 曲线置为不可见
     warnings.push("A/B 对比已关闭（导入替换了 A 组参数，旧 B 组不再可比，请按新配置重新开启）");
   }
-  // ③ 界面不可调整的字段：由调用方明确说"本次未恢复"。
+  // ⑥ 界面不可调整的字段：由调用方明确说"本次未恢复"。
   return {
     ok: true,
     notRestored: ARCHIVE_IGNORED_KEYS.filter((k) => (cfg as unknown as Record<string, unknown>)[k] !== undefined),
@@ -4414,6 +4589,14 @@ function frame(): void {
 
 // ---------- 文档页（左模块导航 + 中内容 + 右「本页目录」；按页记忆滚动位置） ----------
 const docsOverlay = document.getElementById("docs-overlay")!;
+/**
+ * 模块目录的折叠外壳（SW-11）：窄屏默认收起，让首屏先看到正文。
+ * 用 `<details>` 原生折叠——键盘 Enter/Space 可开合、读屏能读到展开状态，不需要自绘交互。
+ */
+const tocDisclosure = document.getElementById("toc-disclosure") as HTMLDetailsElement | null;
+const tocCurrent = document.getElementById("toc-current");
+const docsNarrow = (): boolean => window.matchMedia("(max-width: 860px)").matches;
+if (tocDisclosure && docsNarrow()) tocDisclosure.open = false;
 const docPagesEl = document.querySelector<HTMLElement>(".doc-pages")!;
 const chapterToc = document.getElementById("docs-chapter-toc")!;
 const docModuleBtns = [...document.querySelectorAll<HTMLButtonElement>(".docs-toc .module-link")];
@@ -4477,7 +4660,14 @@ function showDocPage(id: string, restore = false): void {
   if (activeDocPage !== id) docScrollMemory.set(activeDocPage, docPagesEl.scrollTop);
   activeDocPage = id;
   for (const p of docPageEls) p.hidden = p !== page;
-  for (const b of docModuleBtns) b.classList.toggle("active", b.dataset.doc === docModuleOf(id));
+  let activeBtn: HTMLButtonElement | null = null;
+  for (const b of docModuleBtns) {
+    const on = b.dataset.doc === docModuleOf(id);
+    b.classList.toggle("active", on);
+    if (on) activeBtn = b;
+  }
+  // 窄屏折叠条上要能读出现在在哪一页（只显示"文档模块"等于把导航藏起来又不说在哪）
+  if (activeBtn && tocCurrent) tocCurrent.textContent = activeBtn.querySelector(".mod-name")?.textContent?.trim() ?? "";
   buildChapterToc(page);
   docPagesEl.scrollTop = restore ? (docScrollMemory.get(id) ?? 0) : 0;
   void ensureDocDemos().then(() => docDemos?.refresh());
@@ -4523,6 +4713,11 @@ function trapDocsFocus(e: KeyboardEvent): void {
     first.focus();
   }
 }
+// 窄屏选中模块后自动收起目录：否则每次切页都要手动关一次
+if (tocDisclosure) tocDisclosure.addEventListener("click", (e) => {
+  const target = e.target as HTMLElement | null;
+  if (target?.closest(".module-link") && docsNarrow()) tocDisclosure.open = false;
+});
 $("btn-docs").addEventListener("click", () => setDocsOpen(true));
 $("btn-docs-close").addEventListener("click", () => setDocsOpen(false));
 window.addEventListener("keydown", (e) => {
@@ -4658,95 +4853,15 @@ function jumpToHash(target: HTMLElement): void {
    因此与左栏目录、右栏本页目录完全同源，不会出现第二套跳转逻辑。
    ========================================================================== */
 
-interface DocBlock {
-  page: string;
-  pageName: string;
-  id: string;
-  title: string;
-  text: string;
-}
+/**
+ * 文档全文搜索（SW-12 拆出到 `ui/doc-search.ts`）：索引/打分/片段/HTML 都在那边是纯函数，
+ * 这里只做装配——什么时候建索引、怎么把结果写进容器、按键怎么走。
+ */
 let docBlocks: DocBlock[] | null = null;
 
-/** 把一页切成「标题 + 正文」块：h1/h2/h3（带 id）起新块，section 递归进去 */
-function collectDocBlocks(page: HTMLElement, pageId: string, pageName: string, out: DocBlock[]): void {
-  let cur: DocBlock | null = null;
-  const walk = (el: Element): void => {
-    for (const child of Array.from(el.children)) {
-      const tag = child.tagName.toLowerCase();
-      const id = (child as HTMLElement).id;
-      if (tag === "h1" || tag === "h2" || (tag === "h3" && id)) {
-        if (cur) out.push(cur);
-        const secId = id || (child.parentElement as HTMLElement | null)?.id || "";
-        cur = { page: pageId, pageName, id: secId, title: (child.textContent ?? "").trim(), text: "" };
-        continue;
-      }
-      if (tag === "section") {
-        walk(child);
-        continue;
-      }
-      if (cur) cur.text += " " + (child.textContent ?? "");
-    }
-  };
-  walk(page);
-  if (cur) out.push(cur);
-}
-
-function buildDocIndex(): void {
-  const out: DocBlock[] = [];
-  for (const page of docPageEls) {
-    const pageId = page.dataset.docPage ?? "";
-    const pageName = page.querySelector("h1")?.textContent?.trim() ?? pageId;
-    collectDocBlocks(page, pageId, pageName, out);
-  }
-  for (const b of out) b.text = b.text.replace(/\s+/g, " ").trim();
-  docBlocks = out;
-}
-
-interface DocHit {
-  b: DocBlock;
-  snippet: string;
-  score: number;
-}
-
-/** 打分：标题命中权重高、正文命中按次数；片段取首个命中点前后各 32 字 */
-function searchDocs(query: string, limit = 14): DocHit[] {
-  if (!docBlocks) buildDocIndex();
-  const terms = query.toLowerCase().split(/\s+/).filter((t) => t.length > 0);
-  if (!terms.length) return [];
-  const hits: DocHit[] = [];
-  for (const b of docBlocks!) {
-    const hay = b.text.toLowerCase();
-    const titleLower = b.title.toLowerCase();
-    let score = 0;
-    let firstAt = -1;
-    let allPresent = true;
-    for (const t of terms) {
-      const inTitle = titleLower.split(t).length - 1;
-      let idx = hay.indexOf(t);
-      let count = 0;
-      let first = -1;
-      while (idx >= 0) {
-        if (first < 0) first = idx;
-        count++;
-        idx = hay.indexOf(t, idx + t.length);
-      }
-      // AND 语义：所有词都要在这一块里出现（任一词缺席则跳过这块，不是结束整个搜索）
-      if (inTitle === 0 && count === 0) {
-        allPresent = false;
-        break;
-      }
-      score += inTitle * 8 + Math.min(count, 6);
-      if (first >= 0 && (firstAt < 0 || first < firstAt)) firstAt = first;
-    }
-    if (!allPresent || score === 0) continue;
-    const from = Math.max(0, firstAt - 32);
-    const snippet =
-      (from > 0 ? "…" : "") +
-      b.text.slice(from, Math.min(b.text.length, firstAt + 64)) +
-      (firstAt + 64 < b.text.length ? "…" : "");
-    hits.push({ b, snippet, score });
-  }
-  return hits.sort((x, y) => y.score - x.score).slice(0, limit);
+function ensureDocIndex(): DocBlock[] {
+  if (!docBlocks) docBlocks = buildDocIndex(docPageEls);
+  return docBlocks;
 }
 
 const searchInput = document.getElementById("docs-search-input") as HTMLInputElement | null;
@@ -4755,35 +4870,22 @@ const searchHits = document.getElementById("docs-search-hits");
 function renderSearchHits(query: string): void {
   if (!searchInput || !searchHits) return;
   const q = query.trim();
-  if (q.length < 2) {
+  if (q.length < MIN_QUERY_LENGTH) {
     searchHits.classList.add("hidden");
     searchHits.innerHTML = "";
     return;
   }
-  const hits = searchDocs(q);
+  const hits = searchDocBlocks(ensureDocIndex(), q);
   searchHits.classList.remove("hidden");
-  if (!hits.length) {
-    searchHits.innerHTML = `<div class="dsh-empty">没有匹配「${q}」的章节</div>`;
-    return;
-  }
-  searchHits.innerHTML = hits
-    .map(
-      (h, i) =>
-        `<button type="button" class="dsh-item" role="option" aria-selected="${i === 0}" data-page="${h.b.page}" data-sec="${h.b.id}">` +
-        `<span class="dsh-path">${h.b.pageName}</span>` +
-        `<span class="dsh-title">${h.b.title}</span>` +
-        `<span class="dsh-snip">${h.snippet.replace(/</g, "&lt;")}</span>` +
-        `</button>`,
-    )
-    .join("");
+  searchHits.innerHTML = hitsHtml(hits, q);
 }
 
 /** 点击结果：切到该页并滚到对应章节（复用统一的锚点跳转） */
 searchHits?.addEventListener("click", (e) => {
   const item = (e.target as HTMLElement).closest<HTMLElement>(".dsh-item");
   if (!item) return;
-  const page = item.dataset.page!;
-  const secId = item.dataset.sec!;
+  const page = item.dataset.page ?? "";
+  const secId = item.dataset.sec ?? "";
   showDocPage(page);
   const target = secId ? document.getElementById(secId) : null;
   if (target) {
@@ -4800,10 +4902,10 @@ searchInput?.addEventListener("keydown", (e) => {
   const cur = items.findIndex((el) => el.getAttribute("aria-selected") === "true");
   if (e.key === "ArrowDown" || e.key === "ArrowUp") {
     e.preventDefault();
-    if (!items.length) return;
-    const next = e.key === "ArrowDown" ? Math.min(items.length - 1, cur + 1) : Math.max(0, cur - 1);
+    const next = movedSelection(cur, items.length, e.key);
+    if (next < 0) return;
     items.forEach((el, i) => el.setAttribute("aria-selected", String(i === next)));
-    items[next].scrollIntoView({ block: "nearest" });
+    items[next]?.scrollIntoView({ block: "nearest" });
     return;
   }
   if (e.key === "Enter") {
@@ -5106,6 +5208,10 @@ function updateHash(): void {
 }
 
 function toast(text: string, color = "#7ee787"): void {
+  // 档案探测阶段禁止弹提示：写控件会触发 onImuManual → warnIfCalibrationStale 之类的
+  // "顺带提示"，而此刻还没决定是否接受这份档案。导入自己的提示在决策**之后**才发。
+  if (archiveProbeDepth > 0) return;
+  toastSeq++; // 单调计数：自动化用它判断"这次导入有没有留下提示"（不依赖提示的存活时间）
   const chip = document.createElement("div");
   chip.className = "ov-chip";
   chip.style.color = color;
@@ -5696,6 +5802,23 @@ function setConnectButtonsBusy(busy: boolean): void {
   apply("btn-ble", bleOk);
 }
 
+/**
+ * 清掉**仍归我**的串口槽位（绝不碰新会话的句柄）。
+ *
+ * 为什么必须有：切换来源时 `serialDisconnect` 只在 `running || port` 为真时才被调用，
+ * 而「open 还在挂起、尚未 running」这一窗口里没有任何人会清槽位——旧实现因此留下一个
+ * 已释放的死引用，之后重连的归属判断（`serialState.session !== null`）会被它挡住。
+ * 这正是「切回放发生在正在 open 期间」必须收口的另一半。
+ */
+function clearSerialSlotIfOwned(session: SerialTransportSession | null): void {
+  if (!session || serialState.session !== session) return;
+  serialState.session = null;
+  serialState.port = null;
+  serialState.reader = null;
+  serialState.running = false;
+  setSerialBaudLocked(false);
+}
+
 async function serialConnect(): Promise<void> {
   if (!navigator.serial) {
     setSerialStatus("此浏览器不支持 Web Serial（需要 Chrome/Edge 且 HTTPS 或 localhost）", true);
@@ -5712,13 +5835,25 @@ async function serialConnect(): Promise<void> {
   const stale = (): boolean => connectGen !== connectionGeneration || serialState.connectingGen !== connectGen;
   try {
     const baud = serialBaud();
+    // 进度可见：连接动作本身可能挂起（驱动/蓝牙栈异常），没有状态文案时界面看起来毫无反应。
+    // 与 BLE 路径的「正在连接 GATT…」对称。
+    setSerialStatus("正在选择端口…（需要你在弹窗里点一下授权）");
     const requested = await navigator.serial.requestPort();
     if (stale()) return; // Unopened chooser results do not own an open-port lease.
     session = createSerialSession(requested, connectGen);
     serialState.session = session;
-    if (!(await session.open(baud)) || stale()) { await session.dispose(); return; }
+    setSerialStatus(`正在打开端口（${baud} 8N1）…`);
+    if (!(await session.open(baud)) || stale()) {
+      await serialCleanup.release(session);
+      clearSerialSlotIfOwned(session);
+      return;
+    }
     if (bleState.connected || bleState.device || bleState.session) await bleDisconnect(true, "已断开 BLE，切到串口数据");
-    if (stale() || serialState.session !== session) { await session.dispose(); return; }
+    if (stale() || serialState.session !== session) {
+      await serialCleanup.release(session);
+      clearSerialSlotIfOwned(session);
+      return;
+    }
     serialState.port = requested;
     serialState.running = true;
     sourceIntent = "serial";
@@ -5738,14 +5873,12 @@ async function serialConnect(): Promise<void> {
     setSerialBaudLocked(true);
     void serialReadLoop(session).catch(reportTransportError);
   } catch (err) {
-    const released = session ? await session.dispose() : true;
-    if (session && !released) quarantineSerialSession(session);
-    if (stale() || (session && serialState.session !== session)) return;
-    serialState.session = null;
-    serialState.port = null;
-    serialState.reader = null;
-    serialState.running = false;
-    setSerialBaudLocked(false);
+    await serialCleanup.release(session);
+    // 已有新会话接手 → 绝不碰它的状态；否则（哪怕本次尝试已作废）必须把槽位清干净。
+    if (session && serialState.session !== session) return;
+    clearSerialSlotIfOwned(session);
+    // 这里**不**因 stale 而跳过错误文案：本次尝试确实失败了，状态行必须如实收尾
+    // （否则"正在打开端口…"会永远挂在面板上）。切换来源时串口面板本就被禁用，不会误导。
     const msg = err instanceof Error ? err.message : String(err);
     setSerialStatus(`连接失败：${msg}（未选端口 / 端口被占用 / 波特率该平台不支持——SerialWeb 等其它工具需先断开）`, true);
   } finally {
@@ -5801,44 +5934,64 @@ function cancelSerialReconnect(): void {
  * 取消重连 ≠ 可以不关端口：pendingSession 仍要 dispose（close 会按实际结果记账）。
  */
 /**
- * 关闭失败的串口会话**不能丢引用**：驱动/蓝牙栈可能在稍后释放读锁或恢复。
- * 旧实现在 serialDisconnect 里清掉 session/port/lastPort 后就忽略 dispose 的 false，
- * 于是物理端口仍开着、代码却再也找不到它（复核 P1：open=1、close=0、800 ms 后仍占着）。
- * 这里保留会话并每 2 s 重试；只有 dispose 真正返回 true 才出队。
+ * 释放失败的会话**统一隔离重试**（串口与 BLE 共用一套语义）。
+ *
+ * 为什么必须统一：`dispose() === false` 的含义是「句柄物理上可能还开着」——
+ * 旧实现里散落的 `await session.dispose(); return;` 早退分支会把 false 静默丢掉，
+ * 于是端口/GATT 仍被占着、代码却再也找不到它（复核 P1：open=1、close=0、800 ms 后仍占着）。
+ * 现在所有释放路径都走 `release()`：拿到 false 就入队，每 2 s 重试，直到真正释放。
  */
-const serialCleanupQueue: SerialTransportSession[] = [];
-let serialCleanupTimer = 0;
-let serialCleanupWarned = false;
+class CleanupQueue<S extends { dispose(): Promise<boolean> }> {
+  private queue: S[] = [];
+  private timer = 0;
+  private warned = false;
+  constructor(private readonly label: string, private readonly warn: (msg: string) => void) {}
 
-function quarantineSerialSession(session: SerialTransportSession): void {
-  if (!serialCleanupQueue.includes(session)) serialCleanupQueue.push(session);
-  if (!serialCleanupWarned) {
-    serialCleanupWarned = true;
-    toast("串口关闭未完成：端口仍被占用，正在后台重试…", "#fbbf24");
-  }
-  scheduleSerialCleanupRetry();
-}
+  get size(): number { return this.queue.length; }
+  has(session: S): boolean { return this.queue.includes(session); }
 
-function scheduleSerialCleanupRetry(): void {
-  if (serialCleanupTimer || serialCleanupQueue.length === 0) return;
-  serialCleanupTimer = window.setTimeout(() => {
-    serialCleanupTimer = 0;
-    void flushSerialCleanup();
-  }, 2000);
-}
-
-async function flushSerialCleanup(): Promise<void> {
-  for (const session of [...serialCleanupQueue]) {
+  /** 释放一次；false 时入队重试。返回是否已真正释放。 */
+  async release(session: S | null | undefined): Promise<boolean> {
+    if (!session) return true;
+    if (this.has(session)) { void this.flush(); return false; }
     let released = false;
     try { released = await session.dispose(); } catch { released = false; }
-    if (released) {
-      const i = serialCleanupQueue.indexOf(session);
-      if (i >= 0) serialCleanupQueue.splice(i, 1);
-    }
+    if (!released) this.add(session);
+    return released;
   }
-  if (serialCleanupQueue.length) scheduleSerialCleanupRetry();
-  else serialCleanupWarned = false;
+
+  add(session: S): void {
+    if (!this.queue.includes(session)) this.queue.push(session);
+    if (!this.warned) {
+      this.warned = true;
+      this.warn(`${this.label}关闭未完成：句柄仍被占用，正在后台重试…`);
+    }
+    this.schedule();
+  }
+
+  private schedule(): void {
+    if (this.timer || this.queue.length === 0) return;
+    this.timer = window.setTimeout(() => { this.timer = 0; void this.flush(); }, 2000);
+  }
+
+  async flush(): Promise<void> {
+    for (const session of [...this.queue]) {
+      let released = false;
+      try { released = await session.dispose(); } catch { released = false; }
+      if (released) {
+        const i = this.queue.indexOf(session);
+        if (i >= 0) this.queue.splice(i, 1);
+      }
+    }
+    if (this.queue.length) this.schedule();
+    else this.warned = false;
+  }
 }
+
+const serialCleanup = new CleanupQueue<SerialTransportSession>("串口", (msg) => toast(msg, "#fbbf24"));
+
+/** BLE 侧的隔离重试队列（与串口同构；GATT 句柄同样不许悬空） */
+const bleCleanupQueue = new CleanupQueue<TransportSession<BleDeviceLike>>("BLE", (msg) => bleStatus(msg, true));
 
 function cancelPendingReconnects(): void {
   cancelSerialReconnect();
@@ -5849,7 +6002,7 @@ function cancelPendingReconnects(): void {
   bleReconnectState.lastDevice = null;
   if (pending) {
     void pending.dispose()
-      .then((released) => { if (!released) quarantineSerialSession(pending); })
+      .then((released) => { if (!released) serialCleanup.add(pending); })
       .catch(reportTransportError);
   }
 }
@@ -5973,9 +6126,13 @@ async function serialAutoReconnect(): Promise<void> {
   serialState.session = session;
   try {
     const released = previous ? await releaseOldSerialSession(previous) : true;
-    if (stale()) { await session.dispose(); return; }
+    if (stale()) { await serialCleanup.release(session); clearSerialSlotIfOwned(session); return; }
     if (!released) throw new Error("端口未能释放（读锁未解除）");
-    if (!(await session.open(serialState.baud)) || stale()) { await session.dispose(); return; }
+    if (!(await session.open(serialState.baud)) || stale()) {
+      await serialCleanup.release(session);
+      clearSerialSlotIfOwned(session);
+      return;
+    }
     serialReconnectState.pendingSession = null;
     serialState.port = port;
     serialState.running = true;
@@ -5994,8 +6151,8 @@ async function serialAutoReconnect(): Promise<void> {
     toast("串口已自动重连", "#7ee787");
     void serialReadLoop(session).catch(reportTransportError);
   } catch {
-    const released = await session.dispose();
-    if (!released) quarantineSerialSession(session);
+    const released = await serialCleanup.release(session);
+    if (!released) return;
     if (stale()) return;
     serialState.session = null;
     scheduleSerialReconnect("自动重连失败");
@@ -6034,10 +6191,8 @@ async function serialDisconnect(internal = false): Promise<void> {
   setSerialBaudLocked(false);
   if (!internal) setSerialStatus("真实 IMU 已断开——回到模拟模式");
   setConnectButtonsBusy(bleState.connecting);
-  const releases = await Promise.all([session?.dispose(), pending?.dispose()]);
-  // 旧会话即使已被新连接替代也必须继续清理，所以入队判断在世代检查之前。
-  if (session && releases[0] === false) quarantineSerialSession(session);
-  if (pending && releases[1] === false) quarantineSerialSession(pending);
+  // 旧会话即使已被新连接替代也必须继续清理：release() 内部在 false 时入队，与世代检查无关。
+  await Promise.all([serialCleanup.release(session), serialCleanup.release(pending)]);
   if (gen !== connectionGeneration || serialState.session) return;
   if (serialReconnectState.pendingSession === pending) serialReconnectState.pendingSession = null;
 }
@@ -6050,9 +6205,7 @@ function dropSerialSession(session: SerialTransportSession, reason: string): voi
   serialState.reader = null;
   serialState.connToken++;
   serialReconnectState.pendingSession = session;
-  void session.dispose()
-    .then((released) => { if (!released) quarantineSerialSession(session); })
-    .catch(reportTransportError);
+  void serialCleanup.release(session).catch(reportTransportError);
   serialState.queue.length = 0;
   serialState.lastTickMs = -1;
   setSerialBaudLocked(false);
@@ -6083,7 +6236,7 @@ async function serialReadLoop(session: SerialTransportSession): Promise<void> {
     if (current() && serialState.connToken === token) {
       dropSerialSession(session, "真实 IMU 连接中断（设备拔出或重置？）");
     }
-    await session.dispose();
+    await serialCleanup.release(session);
   }
 }
 
@@ -6338,10 +6491,15 @@ function referenceQ(): Quat {
   return (ests[2] as MahonyEstimator).q;
 }
 
+/**
+ * 本段回放时长：**唯一口径** = `ReplayPlayer` 的单调有效时间轴。
+ *
+ * 旧实现按「末帧原始时刻 − 首帧原始时刻」算，日志末帧时间回退时它比实际积分跨度**短**——
+ * 于是进度条/状态条/积分三者一致，而"已载入 X 帧（Y s）"的提示与调试出口报的是另一个数
+ * （复核 P1：0.22 s vs 0.18 s）。页面所有 duration/played/toast/debug 都必须走这一条函数。
+ */
 function replayDuration(): number {
-  const f = replayState.frames;
-  if (f.length < 2) return 0;
-  return (f[f.length - 1].tMs - f[0].tMs) / 1000;
+  return replayPlayer.durationSec;
 }
 
 /**
@@ -6774,12 +6932,14 @@ async function bleAutoReconnect(): Promise<void> {
   try {
     await session.lease.setup(async () => {
       const server = await device.gatt?.connect();
-      if (stale()) return;
+      // 迟到完成：这次连接尝试已经作废 → **必须自己断开**。旧的 `if (stale()) return;` 只是
+      // 不提交状态，物理上却留着一个没人管理的 GATT 连接（复核 SW-05 的生产路径反例）。
+      if (stale()) { closeBleGatt(device); return; }
       if (!server) throw new Error("GATT 重连失败");
       const service = await server.getPrimaryService(bleReconnectState.lastServiceUuid || bleServiceUuid());
-      if (stale()) return;
+      if (stale()) { closeBleGatt(device); return; }
       const chars = await service.getCharacteristics();
-      if (stale()) return;
+      if (stale()) { closeBleGatt(device); return; }
       notifiers = chars.filter((c) => c.properties.notify || c.properties.indicate);
       if (!notifiers.length) throw new Error("服务下没有可通知特征");
     });
@@ -6825,7 +6985,9 @@ function closeBleGatt(device: BleDeviceLike | null): void {
  * 也不摘监听——状态里 connected=false，物理上却仍连着，还留着一个掉线回调等着搞下一次连接。
  */
 async function disposeBleAttempt(session: BleSession | null): Promise<void> {
-  await session?.lease.dispose();
+  // 与串口同一套语义：lease.dispose() 返回 false（GATT 尚未真正断开 / setup 未落定）
+  // 一律进入隔离重试队列，不允许在这里静默丢掉。
+  if (session) await bleCleanupQueue.release(session.lease);
 }
 
 function scheduleBleReconnect(reason: string): void {
@@ -6951,12 +7113,13 @@ async function bleConnect(): Promise<void> {
     let notifiers: BleCharacteristicLike[] = [];
     await session.lease.setup(async () => {
       const server = await device.gatt?.connect();
-      if (stale()) return;
+      // 迟到完成：同上——超时/切源之后到达的 GATT 连接必须由本次尝试自己断开
+      if (stale()) { closeBleGatt(device); return; }
       if (!server) throw new Error("GATT 连接失败");
       const service = await server.getPrimaryService(serviceUuid);
-      if (stale()) return;
+      if (stale()) { closeBleGatt(device); return; }
       const chars = await service.getCharacteristics();
-      if (stale()) return;
+      if (stale()) { closeBleGatt(device); return; }
       notifiers = chars.filter((c) => c.properties.notify || c.properties.indicate);
       if (!notifiers.length) throw new Error("服务下没有支持通知（notify/indicate）的特征，请检查服务 UUID");
     });
@@ -7032,7 +7195,7 @@ async function bleDisconnect(
   ++bleSubToken;
   bleState.connecting = false;
   bleState.connectingGen = -1;
-  if (session) void session.lease.dispose(); // Invalidate immediately, before UI cleanup.
+  if (session) void bleCleanupQueue.release(session.lease); // Invalidate immediately, before UI cleanup.
   bleCleanup(message, false, session ?? undefined);
   setConnectButtonsBusy(serialState.connecting);
   await disposeBleAttempt(session);
@@ -7173,6 +7336,10 @@ resetSim(); // 统一时钟/统计/曲线起点（不改变已还原的深链参
     solveDropped: number;
     /** 关闭失败、仍在后台重试释放的串口会话数（应为 0） */
     pendingPortCleanup: number;
+    /** BLE 侧未完成的释放数（GATT 句柄不许悬空，应为 0） */
+    pendingBleCleanup: number;
+    /** 复位次数（诊断）：短时间内快速增长说明有事件在自激复位 */
+    simResets: number;
   } => ({
     serial: serialState.running,
     ble: bleState.connected,
@@ -7195,7 +7362,10 @@ resetSim(); // 统一时钟/统计/曲线起点（不改变已还原的深链参
     openPorts: serialOpenPorts,
     portCloseFailures,
     solveDropped: solveLoop.droppedFrames,
-    pendingPortCleanup: serialCleanupQueue.length,
+    pendingPortCleanup: serialCleanup.size,
+    /** BLE 侧同样必须为 0：GATT 句柄不许悬空 */
+    pendingBleCleanup: bleCleanupQueue.size,
+    simResets: simResetCount,
   }),
   /**
    * 长跑稳定性自检出口：四个「会被不断 push」的容器当前长度与容量。
@@ -7235,14 +7405,27 @@ resetSim(); // 统一时钟/统计/曲线起点（不改变已还原的深链参
     batchMode: (): "worker" | "main" | null => batchLastMode,
     batchResult: () => batchCompletedResult ? { ...batchCompletedResult, seeds: batchCompletedResult.seeds.slice(), summary: batchCompletedResult.summary.map((row) => ({ ...row })) } : null,
     /** 批量评测的运行/取消状态（自动化验收用）：running 期间再点按钮 = 取消 */
-    batchState: (): { running: boolean; activeJob: number; cancels: number; button: string; generation: number } => ({
+    batchState: (): {
+      running: boolean; activeJob: number; cancels: number; button: string; generation: number;
+      mode: "worker" | "main" | null; cancelLatencyMs: number | null; partialSeeds: number; workerDisabled: boolean;
+    } => ({
       running: batchRunning,
       activeJob: activeBatchJob,
       cancels: batchCancelCount,
       button: document.getElementById("btn-batch")?.textContent ?? "",
       /** 世代号：取消/新批次会 +1；自动化用它确认「旧世代没有回写」 */
       generation: batchGeneration,
+      /** 执行路径与取消证据（SW-10）：取消时延 = 从点取消到计算真正停下 */
+      mode: batchLastMode,
+      cancelLatencyMs: batchCancelLatencyMs,
+      partialSeeds: batchPartialSeeds,
+      workerDisabled: batchWorkerDisabled,
     }),
+    /** 强制走主线程降级路径（自动化验收用）：返回是否已生效 */
+    disableWorker: (): boolean => {
+      batchWorkerDisabled = true;
+      return batchWorkerDisabled;
+    },
     /**
      * 同步推进**界面自己的仿真** n 个 500 Hz 步（等价于把 rAF 主循环按固定步长跑 n 次）。
      * 用途只有一个：让自动化能把「界面路径」与「runner 路径」放在同一时间基上逐帧比对
@@ -7404,9 +7587,37 @@ resetSim(); // 统一时钟/统计/曲线起点（不改变已还原的深链参
       seed: number;
       steadyFromSec: number | null;
       autoCoarseAlign: boolean;
+      /** 闭环开关的勾选与禁用（场景联动会改写它们：探测写控件曾把它抹掉） */
+      loopOn: boolean;
+      loopDisabled: boolean;
+      /** IMU 预设标签与说明文字（写控件会"顺手"改写它们） */
+      preset: string;
+      presetNote: string;
+      /** 运行/暂停状态 */
+      paused: boolean;
+      /** 真实播放标志（与按钮文字同源，但直接读状态：二者脱钩本身就是要抓的缺陷） */
+      playing: boolean;
+      /** 档案探测/导入是否产生过提示（单调计数：失败导入不得留下提示） */
+      toasts: number;
+      /** 校准面板文字（渲染异常会在这里留下 NaN/undefined） */
+      magText: string;
+      accelText: string;
+      /** 曲线内容摘要（写控件不得悄悄清空曲线） */
+      chartDigest: number;
+      /** 估计器内部状态摘要：探测不得重置解算状态 */
+      estDigest: string;
+      /** A/B 运行态：克隆数量、冻结参数、B 组姿态摘要 */
+      abDigest: string;
+      /** 加计采集的挂起/窗口状态 */
+      accelPending: boolean;
+      accelWindow: number;
+      /** 磁采集状态 */
+      magCollecting: boolean;
+      magSamples: number;
     } => ({
       simTime: state.simTime,
       chartSizes: [attChart.size, errChart.size, imuChart.size],
+      chartDigest: attChart.contentDigest() + errChart.contentDigest() + imuChart.contentDigest(),
       logRows: logRows.length,
       rawRows: rawRecord.rows.length,
       magHistory: magCalHistory.length,
@@ -7418,10 +7629,29 @@ resetSim(); // 统一时钟/统计/曲线起点（不改变已还原的深链参
       seed: experimentConfig.seed,
       steadyFromSec,
       autoCoarseAlign: solveLoop.autoCoarseAlign,
+      loopOn: ($("loop-toggle") as HTMLInputElement | null)?.checked ?? false,
+      loopDisabled: ($("loop-toggle") as HTMLInputElement | null)?.disabled ?? false,
+      preset: ($("imu-preset") as HTMLSelectElement | null)?.value ?? "",
+      presetNote: document.getElementById("imu-preset-note")?.textContent ?? "",
+      paused: ($("btn-pause")?.textContent ?? "") === "继续",
+      playing: state.playing,
+      toasts: toastSeq,
+      magText: document.getElementById("magcal-result")?.textContent ?? "",
+      accelText: document.getElementById("accelcal-result")?.textContent ?? "",
+      estDigest: JSON.stringify(ests.map((e) => ({ id: e.id, q: e.q, mag: e.magEnabled }))),
+      abDigest: JSON.stringify({
+        on: abState.on,
+        frozen: abState.frozenTuning,
+        clones: abState.clones.map((c) => ({ id: c.id, q: c.q })),
+      }),
+      accelPending: accelCalState.pending !== null,
+      accelWindow: accelCalState.window.length,
+      magCollecting: magCalState.collecting,
+      magSamples: magCalState.samples.length,
     }),
   },
   /** 构建标识（部署后 smoke 用）：线上页面报的提交必须等于被部署的那个 */
-  build: () => ({ ...BUILD_INFO }),
+  build: () => ({ ...BUILD_INFO, ...BUILD_IDENTITY }),
   /** 校准状态快照（自动化验收用）：模型、是否应用、对象是否在 */
   calibration: (): {
     magModel: MagCalModel;
@@ -7550,6 +7780,12 @@ resetSim(); // 统一时钟/统计/曲线起点（不改变已还原的深链参
         idx: replayState.idx,
         speed: replayState.speed,
         real: state.real,
+        /**
+         * 时长与进度**唯一来源**是 ReplayPlayer 的有效时间轴：
+         * 页面提示、状态条、调试出口读的都是这两个数，不再各自计算（末帧时间回退时旧口径会偏短）。
+         */
+        durationSec: replayPlayer.durationSec,
+        playedSec: replayPlayer.playedSec,
         /** 日志声明的 IMU 语义（true=已校准）、当前是否在校准输入（false=原样解算） */
         imuCalibrated: replayState.imuCalibrated,
         applyCalibration: replayState.applyCalibration,

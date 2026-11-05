@@ -15,3 +15,5 @@ coverage/
 # 复核证据/门禁日志（本地留证，不进仓库）
 .audit-current/
 .audit-smoke/
+# 体积归因用的临时构建目录（scripts/size-report.mjs）
+dist-size/

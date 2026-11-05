@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 // @ts-expect-error Pure JS contract is independently covered by node:test.
-import { validateStatusClaims, validateGateManifest } from './status-contract.mjs';
+import { validateStatusClaims, validateGateManifest, validateDocFacts } from './status-contract.mjs';
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
 const read=(path:string):string=>readFileSync(resolve(root,path),'utf8');
 function countChecks(src:string):number {
@@ -39,6 +39,13 @@ const pkg=JSON.parse(read('package.json')) as {scripts?:Record<string,string>};
 // 的 check 链对齐——「check 里到底有没有契约」不再由文档自己说了算。
 const gateFailures:string[]=validateGateManifest(readFileSync(path,'utf8'),actual,{check:pkg.scripts?.check??''});
 failures.push(...gateFailures);
+// README 与应用内「技术口径」的门禁数字：与 PROJECT-STATE 用同一份实测校验，
+// 三处文档各自维护数字时最容易漂移（复核 P2：README 写「9 项产物预算」、应用内写「91 项冒烟」）。
+for (const [file, label] of [['README.md','README'],['README.en.md','README.en'],['index.html','应用内技术口径']] as const) {
+  const p=resolve(root,file);
+  if(!existsSync(p)){failures.push(`[FAIL] 找不到 ${file}（${label} 的门禁数字必须可校验）`);continue;}
+  failures.push(...validateDocFacts(readFileSync(p,'utf8'),actual,{check:pkg.scripts?.check??''},label));
+}
 if(failures.length){for(const problem of failures) console.log(`[FAIL] ${problem}`);}
 else {
   console.log(`[PASS] 当前 counts — ${Object.entries(actual).slice(0,5).map(([k,v])=>`${k}=${v}`).join(' ')}`);
@@ -46,7 +53,8 @@ else {
   console.log(`[PASS] 当前四项验证口径 — ${actual.selftest}/${actual.scene}/${actual.html}/${actual.doc}`);
   console.log(`[PASS] 当前 check 合计 — ${actual.selftest+actual.scene+actual.html+actual.doc} 项`);
   console.log(`[PASS] 当前预算 — ${actual.budget} 项`);
-  console.log(`[PASS] 门禁清单 — check/冒烟/预算与实测一致，contracts/status 开关与 package.json 的 check 链一致`);
+  console.log(`[PASS] 门禁清单 — check/冒烟/预算与实测一致，contracts/status/evidence 开关与 package.json 的 check 链一致`);
+  console.log('[PASS] README / README.en / 应用内技术口径 — 清单与正文数字都与同一份实测一致（含「N 项上限」这类散落数字）');
   console.log('[PASS] 唯一 current 区域与全部 history 边界完整，历史数值不参与当前校验');
 }
 console.log(failures.length?`\n${failures.length} 项不一致`:'\n动态计数校验通过');

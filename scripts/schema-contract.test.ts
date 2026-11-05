@@ -1,7 +1,8 @@
 /** 档案/schema 与校准入口契约；独立计数，不改变历史 selftest 门禁。 */
 import assert from "node:assert/strict";
 import { parseArchive, buildArchive, type ArchiveRunInfo } from "../src/core/experiment-archive";
-import { defaultExperimentConfig, parseMagCalibration, parseAccelCalibration, validateExperimentConfig, archiveExpressibilityProblems, archiveRoundTripProblems } from "../src/core/experiment-config";
+import { defaultExperimentConfig, parseMagCalibration, parseAccelCalibration, validateExperimentConfig, archiveExpressibilityProblems, archiveRoundTripProblems, cloneExperimentConfig } from "../src/core/experiment-config";
+import { copyCalibration } from "../src/core/calibration-validation";
 import { calibrateAccel, synthesizeAccelSamples, type AccelCalibration } from "../src/core/accelcal";
 import { applyMagCalibration, calibrateMag, calibrateMagFull, calibrateMagWithValidation } from "../src/core/magcal";
 import type { V3 } from "../src/core/quat";
@@ -253,5 +254,85 @@ test("合法磁 diag/full 生产拟合能导入", () => {
     assert.ok(cal); assert.ok(parseMagCalibration(JSON.parse(JSON.stringify(cal))));
   }
 });
+/**
+ * SW-04：schema、克隆、规范化与实际被消费的字段必须一致。
+ *
+ * 复核反例（都已在本机跑过）：
+ *  · `estimators.extension = null` 通过 schema（只校验五个已知算法），却在克隆时读 `null.params` 抛 TypeError；
+ *  · `params.unknownKernelParam = 3` 被 schema 放行、被规范化保留，但估计器只读 alpha ——
+ *    "解析成功、运行无视、读回比较失败"三件事同时发生；
+ *  · 缺 `kind` 的 full 磁模型第一次复制得到 `…count,matrix,kind`、第二次变成 `…count,kind,matrix`，
+ *    导出字节首轮就不稳定（规范形本该幂等）。
+ */
+test("SW-04 未知 estimator 容器键：受控结果，不得抛异常（null / 对象 / 数组）", () => {
+  for (const bad of [null, {}, [], 7, "x"]) {
+    const a = archive();
+    a.config.estimators.extension = bad;
+    let parsed: ReturnType<typeof parseArchive>;
+    assert.doesNotThrow(() => { parsed = parseArchive(a); }, `estimators.extension=${JSON.stringify(bad)} 不得抛异常`);
+    assert.equal(parsed!.ok, false, `未知算法 id 必须被拒绝：${JSON.stringify(bad)}`);
+    if (!parsed!.ok) assert.ok(parsed!.error.includes("estimators.extension"), `错误须含字段路径：${parsed!.error}`);
+  }
+});
+
+test("SW-04 未知参数键：当前 schema 拒绝；旧 schema 迁移改为 notes 且不落盘", () => {
+  const strictCase = archive();
+  strictCase.config.estimators.comp.params.unknownKernelParam = 3;
+  const rejected = parseArchive(strictCase);
+  assert.equal(rejected.ok, false, "当前 schema 的未知参数键必须拒绝");
+  if (!rejected.ok) assert.ok(rejected.error.includes("estimators.comp.params.unknownKernelParam"), rejected.error);
+
+  const legacy = archive();
+  legacy.config = { schemaVersion: 2, seed: 7, durationSec: 5, estimators: { comp: { params: { alpha: 2, unknownKernelParam: 3 } } } };
+  const migrated = parseArchive(legacy);
+  assert.equal(migrated.ok, true, migrated.ok ? "" : migrated.error);
+  if (migrated.ok) {
+    assert.ok(migrated.notes.some((n) => n.includes("unknownKernelParam")), `迁移必须把被丢弃的键写进 notes：${JSON.stringify(migrated.notes)}`);
+    assert.equal("unknownKernelParam" in migrated.config.estimators.comp.params, false, "迁移结果不得留下内核不读的参数");
+    assert.equal(migrated.config.estimators.comp.params.alpha, 2, "认识的参数仍要迁移过去");
+  }
+});
+
+test("SW-04 磁校准键序：缺省 kind 的 full 模型首次复制即字节稳定", () => {
+  const withoutKind = { offset: [0, 0, 0], scale: [1, 1, 1], field: 50, residual: 0, count: 20, matrix: [1, 0, 0, 0, 1, 0, 0, 0, 1] };
+  const once = copyCalibration("mag", withoutKind as unknown as Record<string, unknown>);
+  const twice = copyCalibration("mag", once as unknown as Record<string, unknown>);
+  assert.equal(JSON.stringify(once), JSON.stringify(twice), "复制必须幂等（键序不能因补默认值而变）");
+  assert.equal(once.kind, "full", "带 matrix 的模型必须补成 full");
+  assert.deepEqual(Object.keys(once), ["offset", "scale", "field", "residual", "count", "kind", "matrix"], "键序必须固定");
+
+  // 导出→导入→再导出在首轮就必须逐字节稳定，并且与显式 kind 的档案收敛到同一份配置
+  const run = { elapsedSec: 1, dataSource: "模拟", reference: "groundTruth", finishedAtIso: "2026-11-05T00:00:00.000Z", metrics: [{ id: "mahony", n: 1, mean: 1, rmse: 1, max: 1, convergedAt: 1 }] };
+  const implicit = archive();
+  implicit.config.magCalibration = { ...withoutKind } as unknown as typeof implicit.config.magCalibration;
+  implicit.config.magModel = "full";
+  const explicit = archive();
+  explicit.config.magCalibration = { ...withoutKind, kind: "full" } as unknown as typeof explicit.config.magCalibration;
+  explicit.config.magModel = "full";
+  const a = parseArchive(implicit), b = parseArchive(explicit);
+  assert.equal(a.ok && b.ok, true);
+  if (!a.ok || !b.ok) return;
+  assert.equal(JSON.stringify(buildArchive(a.config, run)), JSON.stringify(buildArchive(b.config, run)), "省略 kind 与显式 kind 必须收敛到同一规范形");
+  const one = JSON.stringify(buildArchive(a.config, run));
+  const again = parseArchive(JSON.parse(one));
+  assert.equal(again.ok, true);
+  if (again.ok) assert.equal(JSON.stringify(buildArchive(again.config, run)), one, "再导出必须逐字节一致");
+});
+
+test("SW-04 克隆是全函数：缺条目 / 多余键 / 空 params 都不抛异常且补齐默认", () => {
+  const base = defaultExperimentConfig();
+  const broken = { ...base, estimators: { comp: { ...base.estimators.comp, params: undefined as unknown as Record<string, number> }, extension: null } } as unknown as typeof base;
+  const tryClone = (c: typeof base): typeof base | null => { try { return cloneExperimentConfig(c); } catch { return null; } };
+  const cloned = tryClone(broken);
+  assert.ok(cloned, "克隆不得抛异常");
+  if (!cloned) return;
+  for (const id of ["pure", "comp", "mahony", "madg", "kalman"] as const) {
+    assert.ok(cloned.estimators[id], `克隆必须补齐 ${id}`);
+  }
+  assert.deepEqual(Object.keys(cloned.estimators), ["pure", "comp", "mahony", "madg", "kalman"], "克隆只保留已知算法 id");
+  // 空 params 也不能把克隆带崩，而且必须补回默认参数（否则内核读到 undefined）
+  assert.deepEqual(cloned.estimators.comp.params, defaultExperimentConfig().estimators.comp.params);
+});
+
 console.log(`schema-contract: ${passed} PASS / ${failed} FAIL`);
 if (failed) process.exitCode = 1;

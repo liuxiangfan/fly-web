@@ -8,9 +8,13 @@
  * 文档对话框焦点、A/B 图例、深链恢复、3D canvas 与帧率、控制台错误。
  */
 import puppeteer from "puppeteer-core";
-import { existsSync, mkdirSync, rmSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, rmSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
+import { readProvenance } from "./build-provenance.mjs";
+
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 // 注意：应用地址常量不要命名为 `URL`——模块顶层的 `const URL` 会遮蔽全局 URL 构造函数，
 // 在其声明之前调用 `new URL()` 会抛 "Cannot access 'URL' before initialization"。
@@ -30,6 +34,11 @@ const APP_URL = process.env.SMOKE_URL ?? "http://127.0.0.1:4173/";
  * 两片合起来恰好覆盖全部用例（CI 矩阵里两个 job 的 PASS 数之和必须等于 all 的 PASS 数）。
  */
 /**
+ * 超时额度（**统一**）：所有「等首帧 / 等导航 / 等进入真实模式」都用同一档宽松额度
+ * （导航与首帧 60 s、状态等待 30 s）。它们等的都是"慢 runner 上迟早会到"的状态，
+ * 与断言强度无关——2 vCPU 软件 WebGL 上首帧超过 15 s 是常态（Windows CI 实测 5/5 轮
+ * 都死在 15 s/20 s 这类零散额度上，而同一提交在 Ubuntu CI 与本机 Windows 上 5/5 全绿）。
+ *
  * 默认视口。可用 SMOKE_VIEWPORT=800x600 覆盖——只用于**容量很小的 runner**：
  * GitHub 的 windows-latest 只有 2 vCPU，软件 WebGL 下 1440×900 的填充率会把首帧拖到
  * 60 s 以上（实测 `Navigation timeout` / 首帧超时）。视口变小只影响「桌面布局用多大的窗口看」，
@@ -79,9 +88,34 @@ if (!existsSync(shots)) mkdirSync(shots);
 let failures = 0;
 let passes = 0;
 const errsEmpty = (errs) => errs.length === 0;
+/**
+ * 逐项结果（SW-07）：验收要比对的是**完整集合**，所以每个用例都要能报出"我叫什么、在哪个分片、
+ * 什么状态"。同名用例会让集合比对失真（少跑一项、多跑一项都可能看不出来），因此同一次运行里
+ * 出现重复用例名本身就是失败。
+ */
+const checkResults = [];
+const checkNameCounts = new Map();
+const skippedChecks = [];
+const duplicateIds = [];
 const check = (name, cond, detail) => {
+  const seen = checkNameCounts.get(name) ?? 0;
+  checkNameCounts.set(name, seen + 1);
+  if (seen > 0) {
+    duplicateIds.push(name);
+    console.error(`[FAIL] 用例名重复：${name} — 同名用例必须改名（否则"完整集合"比对会失真）`);
+    failures++;
+    checkResults.push({ id: name, shard: SHARD, status: "duplicate", detail: "同名用例重复执行" });
+    return;
+  }
+  checkResults.push({ id: name, shard: SHARD, status: cond ? "pass" : "fail", detail: String(detail ?? "").slice(0, 300) });
   console.log(`[${cond ? "PASS" : "FAIL"}] ${name} — ${detail}`);
   cond ? passes++ : failures++;
+};
+/** 明确的跳过登记口：跳过的用例必须留痕（"没跑"不许伪装成"通过"）。 */
+const skip = (name, reason) => {
+  skippedChecks.push({ id: name, reason: String(reason ?? "").slice(0, 200) });
+  console.error(`[FAIL] 用例被跳过：${name} — ${reason ?? ""}`);
+  failures++;
 };
 
 // 固定 user-data-dir：Windows 上 Puppeteer 的临时 profile 清理偶尔 EBUSY，
@@ -121,6 +155,9 @@ const launchBrowser = async () => {
       });
       profileDir = dir;
       console.log(`[INFO] 使用浏览器：${exe}`);
+      // 版本要能被驱动脚本解析出来写进稳定性摘要（证据要能回答"用哪个浏览器跑的"）
+      browserVersion = await browser.version();
+      console.log(`[INFO] 浏览器版本：${browserVersion}`);
       return;
     } catch (err) {
             // 候选浏览器启动慢/被占用时换下一个是可预期的回退，不该算「门禁 warning」
@@ -131,6 +168,8 @@ const launchBrowser = async () => {
   console.error("所有候选浏览器都无法启动；可用 CHROME_PATH 指定一个能跑 headless 的可执行文件");
   process.exit(2);
 };
+/** 实际用的浏览器版本（结构化结果要能回答"用哪个浏览器跑的"）：必须在启动前就声明好 */
+let browserVersion = null;
 await launchBrowser();
 
 /**
@@ -158,6 +197,9 @@ let page = null;
  * 最终结论必须把「发生过重启」判为基础设施失败（见文件末尾），不允许伪装成通过。
  */
 let browserRestarts = 0;
+/** 运行是否被异常打断：`completed` 标记必须诚实（被打断的那次不能自称"跑完了"）。 */
+let aborted = false;
+let abortReason = "";
 
 /**
  * 基础设施类故障的特征：渲染进程被回收（`Navigating frame was detached` / `Target closed`）。
@@ -174,7 +216,7 @@ const isInfraError = (err) =>
 const gotoSafe = async (pg, url = APP_URL) => {
   for (let attempt = 0; ; attempt++) {
     try {
-      await pg.goto(url, { waitUntil: "domcontentloaded", timeout: 20000 });
+      await pg.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
       return;
     } catch (err) {
       if (attempt >= 1 || !isInfraError(err)) throw err;
@@ -212,7 +254,7 @@ const newPage = async () => {
       // 重启后的共享页面必须**重新载入应用**：后面的用例直接读 DOM，
       // 空白页只会以「Cannot read properties of null」的形式误报成产品缺陷（实测踩到）。
       try {
-        await page.goto(APP_URL, { waitUntil: "domcontentloaded", timeout: 20000 });
+        await page.goto(APP_URL, { waitUntil: "domcontentloaded", timeout: 60000 });
         await page.waitForFunction(
           () => document.getElementById("fps")?.textContent !== "-- fps",
           { timeout: 60000 },
@@ -225,11 +267,28 @@ const newPage = async () => {
 page = await browser.newPage();
 await page.setViewport({ ...VIEWPORT, deviceScaleFactor: 1 });
 attachSharedListeners(page);
+/**
+ * 产物身份（SW-06）：本地产物自报的 buildId vs 被测页面自报的 buildId。
+ * `browser-smoke` 打的是本地 preview，两者不一致就说明"跑的不是刚构建的产物"。
+ */
+const identity = { available: false, reason: "", localBuildId: null, pageBuildId: null };
+(() => {
+  const provenance = readProvenance(join(root, "dist"));
+  if (!provenance?.buildId) { identity.reason = "本地 dist 缺少构建溯源（先 npm run build）"; return; }
+  identity.localBuildId = provenance.buildId;
+  identity.available = true;
+})();
 
 try {
   // 共享页面的导航与「仿真真的在跑」的等待两片都要做：devices 片里有一组用例
   // （加计采面 beginAccelCalFace/tickAccelCalibration）驱动的正是这个页面。
   await gotoSafe(page);
+  // 页面异步取回产物溯源（build-provenance.json）后才会有 buildId：给它一个有界等待，
+  // 取不到就按"缺失"判定，而不是让断言在竞态里随机红/绿。
+  try {
+    await page.waitForFunction(() => Boolean(window.attitudeDemo?.build?.()?.buildId), { timeout: 15000 });
+  } catch { /* 下面按缺失判定并给出可执行的失败原因 */ }
+  identity.pageBuildId = await page.evaluate(() => window.attitudeDemo?.build?.()?.buildId ?? null);
   // 等待真实仿真推进（rAF）——隐藏标签页会冻结，headless 新模式下正常运行
   await page.waitForFunction(
     () => parseFloat((document.getElementById("clock")?.textContent ?? "").replace("t = ", "")) > 2,
@@ -248,6 +307,14 @@ try {
     };
   });
   check("仿真在真实 rAF 下推进", parseFloat(boot.clock.replace("t = ", "")) > 2, boot.clock);
+  // 被服务产物身份（SW-06）：页面自报的 buildId 必须等于本地 dist 的溯源。
+  // 只比提交号做不到这件事——改了源码没提交、或重建了产物，两份不同的 dist 会顶同一个 commit。
+  // 写成**单一调用点**：同一用例分叉成两处调用，会让"完整集合"比对与清单漂移检查同时失真。
+  check(
+    "被服务产物与本地构建一致（buildId）",
+    identity.available && identity.pageBuildId === identity.localBuildId,
+    identity.available ? `页面 ${identity.pageBuildId ?? "（缺失）"} / 本地 ${identity.localBuildId}` : identity.reason,
+  );
   check("3D canvas 有 WebGL 上下文", Boolean(boot.canvas?.gl) && boot.canvas.w > 0, JSON.stringify(boot.canvas));
   check("帧率读数正常", /\d+\s*fps/.test(boot.fps), boot.fps);
   check("评测表已有统计", /[1-9]\d*\s*个样本/.test(boot.meta), boot.meta);
@@ -422,9 +489,142 @@ try {
     focus: document.activeElement?.id,
   }));
   check(
-    "文档对话框焦点与分页",
-    docOpen.role === "dialog" && docOpen.focus === "btn-docs-close" && docMath.page === "math" && docClosed.hidden,
-    `role=${docOpen.role} focus=${docOpen.focus} page=${docMath.page} esc=${docClosed.hidden} restore=${docClosed.focus}`,
+    "文档对话框焦点与分页：打开后焦点进入对话框，Esc 关闭并把焦点还给「文档」按钮",
+    docOpen.role === "dialog" && docOpen.focus === "btn-docs-close" && docMath.page === "math" &&
+      docClosed.hidden && docClosed.focus === "btn-docs",
+    `role=${docOpen.role} focus=${docOpen.focus} page=${docMath.page} esc=${docClosed.hidden} 焦点归还=${docClosed.focus}`,
+  );
+
+  /**
+   * SW-11：**只用键盘**能不能完成一次完整往返。
+   * 打开（Enter）→ 焦点进入对话框 → Tab 循环不得跑出对话框 → Shift+Tab 从首个可聚焦元素回卷到最后一个
+   * → Esc 关闭且焦点归还。这里用的是真实按键（page.keyboard），不是页面内派发事件。
+   */
+  const keyboardDocs = await (async () => {
+    await page.evaluate(() => document.getElementById("btn-docs").focus());
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(() => !document.getElementById("docs-overlay").hidden);
+    const entered = await page.evaluate(() => document.activeElement?.id ?? "");
+    const inDialog = () => page.evaluate(() => document.getElementById("docs-overlay").contains(document.activeElement));
+    let escaped = 0;
+    for (let i = 0; i < 30; i++) {
+      await page.keyboard.press("Tab");
+      if (!(await inDialog())) escaped++;
+    }
+    // Shift+Tab 从首个可聚焦元素应当回卷到对话框内最后一个可聚焦元素
+    await page.evaluate(() => {
+      const first = document.querySelector("#docs-overlay button:not([disabled]), #docs-overlay a[href]");
+      first?.focus();
+    });
+    await page.keyboard.down("Shift");
+    await page.keyboard.press("Tab");
+    await page.keyboard.up("Shift");
+    const wrapped = await page.evaluate(() => {
+      const overlay = document.getElementById("docs-overlay");
+      const focusables = [...overlay.querySelectorAll('button:not([disabled]), a[href], input:not([disabled])')].filter((el) => el.getClientRects().length > 0);
+      return { inside: overlay.contains(document.activeElement), isLast: document.activeElement === focusables[focusables.length - 1] };
+    });
+    await page.keyboard.press("Escape");
+    await page.waitForFunction(() => document.getElementById("docs-overlay").hidden);
+    const back = await page.evaluate(() => document.activeElement?.id ?? "");
+    return { entered, escaped, wrapped, back };
+  })();
+  /**
+   * Ctrl/⌘+K 全文搜索（SW-12 补覆盖）：这是文档层被写进"三个便利"里的头号功能，此前没有任何用例。
+   * 一次走完：快捷键唤起 → 焦点进输入框 → 输入出现结果（首项选中）→ 方向键移动 → Enter 跳转
+   * → Esc 只清搜索框（不关文档）→ 注入标签被转义（查询串来自用户输入）。
+   */
+  const docSearch = await (async () => {
+    await page.evaluate(() => document.getElementById("btn-docs").click());
+    await page.waitForFunction(() => !document.getElementById("docs-overlay").hidden);
+    await page.keyboard.down("Control");
+    await page.keyboard.press("k");
+    await page.keyboard.up("Control");
+    await new Promise((r) => setTimeout(r, 300));
+    const focused = await page.evaluate(() => document.activeElement?.id ?? "");
+    await page.evaluate(() => {
+      const input = document.getElementById("docs-search-input");
+      input.value = "万向节";
+      input.dispatchEvent(new Event("input"));
+    });
+    await new Promise((r) => setTimeout(r, 200));
+    const typed = await page.evaluate(() => {
+      const hits = [...document.querySelectorAll("#docs-search-hits .dsh-item")];
+      return {
+        count: hits.length,
+        firstSelected: hits[0]?.getAttribute("aria-selected") === "true",
+        firstTitle: hits[0]?.querySelector(".dsh-title")?.textContent ?? "",
+        hasSnippet: (hits[0]?.querySelector(".dsh-snip")?.textContent ?? "").length > 0,
+      };
+    });
+    await page.evaluate(() => document.getElementById("docs-search-input").focus());
+    await page.keyboard.press("ArrowDown");
+    const moved = await page.evaluate(() =>
+      [...document.querySelectorAll("#docs-search-hits .dsh-item")].findIndex((el) => el.getAttribute("aria-selected") === "true"));
+    // Enter 跳的是**当前选中项**那一页：先把它的页读出来，跳完对照（不能拿第一项去比）
+    const selectedPage = await page.evaluate(() =>
+      document.querySelector("#docs-search-hits .dsh-item[aria-selected='true']")?.dataset.page ?? "");
+    await page.keyboard.press("Enter");
+    await new Promise((r) => setTimeout(r, 300));
+    const jumped = await page.evaluate(() => ({
+      page: document.querySelector(".doc-page:not([hidden])")?.dataset.docPage ?? "",
+      hash: location.hash,
+      inputFocused: document.activeElement?.id === "docs-search-input",
+    }));
+    // Esc：光标在搜索框里时，第一次只清搜索框（结果隐藏、文档仍开着）——
+    // 注意 Enter 跳转会把焦点交还给正文，所以要先把焦点放回输入框再按（这才是真实用法的顺序）
+    await page.evaluate(() => document.getElementById("docs-search-input").focus());
+    await page.keyboard.press("Escape");
+    const escaped = await page.evaluate(() => ({
+      value: document.getElementById("docs-search-input").value,
+      hidden: document.getElementById("docs-search-hits").classList.contains("hidden"),
+      docsOpen: !document.getElementById("docs-overlay").hidden,
+    }));
+    // 注入反例：查询串会被插进结果容器，必须转义
+    await page.evaluate(() => {
+      const input = document.getElementById("docs-search-input");
+      input.value = '<img src=x onerror="window.__xss=1">';
+      input.dispatchEvent(new Event("input"));
+    });
+    await new Promise((r) => setTimeout(r, 200));
+    const injected = await page.evaluate(() => ({
+      tags: document.querySelectorAll("#docs-search-hits img, #docs-search-hits script").length,
+      text: document.getElementById("docs-search-hits")?.textContent ?? "",
+      flagged: Boolean(window.__xss),
+    }));
+    await page.evaluate(() => {
+      const input = document.getElementById("docs-search-input");
+      input.value = "";
+      input.dispatchEvent(new Event("input"));
+    });
+    await page.keyboard.press("Escape");
+    await page.waitForFunction(() => document.getElementById("docs-overlay").hidden);
+    return { focused, typed, moved, selectedPage, jumped, escaped, injected };
+  })();
+  check(
+    "Ctrl/⌘+K 全文搜索：唤起即聚焦、结果与片段正确、方向键移动、Enter 跳转、Esc 只清搜索框",
+    docSearch.focused === "docs-search-input" &&
+      docSearch.typed.count > 0 && docSearch.typed.firstSelected && docSearch.typed.hasSnippet &&
+      docSearch.typed.firstTitle.length > 0 &&
+      docSearch.moved >= 0 &&
+      docSearch.jumped.page === docSearch.selectedPage && docSearch.selectedPage.length > 0 &&
+      docSearch.escaped.value === "" && docSearch.escaped.hidden && docSearch.escaped.docsOpen,
+    `聚焦=${docSearch.focused}；结果 ${docSearch.typed.count} 条（首项选中=${docSearch.typed.firstSelected}、标题「${docSearch.typed.firstTitle}」）；` +
+      `方向键后选中第 ${docSearch.moved} 项（所在页 ${docSearch.selectedPage}）；Enter 跳到 ${docSearch.jumped.page}；` +
+      `Esc 后输入「${docSearch.escaped.value}」、结果隐藏=${docSearch.escaped.hidden}、文档仍开=${docSearch.escaped.docsOpen}`,
+  );
+  check(
+    "Ctrl/⌘+K 搜索结果转义：查询串里的标签不得注入结果容器",
+    docSearch.injected.tags === 0 && !docSearch.injected.flagged && docSearch.injected.text.includes("<img"),
+    `注入的标签节点 ${docSearch.injected.tags} 个、脚本执行=${docSearch.injected.flagged}；结果文案「${docSearch.injected.text.slice(0, 60)}」`,
+  );
+
+  check(
+    "SW-11 纯键盘往返：Enter 打开、Tab 被焦点陷阱留在对话框内、Shift+Tab 回卷、Esc 关闭并归还焦点",
+    keyboardDocs.entered === "btn-docs-close" && keyboardDocs.escaped === 0 &&
+      keyboardDocs.wrapped.inside && keyboardDocs.wrapped.isLast && keyboardDocs.back === "btn-docs",
+    `打开后焦点=${keyboardDocs.entered}；Tab 30 次跑出对话框 ${keyboardDocs.escaped} 次；` +
+      `Shift+Tab 回卷到最后一个可聚焦元素=${keyboardDocs.wrapped.isLast}；关闭后焦点=${keyboardDocs.back}`,
   );
 
   // 文档页小演示（ui/doc-demos.ts）：抽出为模块后必须仍然「看得见动静」。
@@ -1021,6 +1221,185 @@ try {
       `成功后 A/B 关闭=${archiveRoundTrip.afterImportSite.abOn === false}（提示 ${JSON.stringify(archiveRoundTrip.res.warnings ?? [])}）`,
   );
 
+  // 档案事务的**完整现场**零副作用（P0）：三类失败档案（越界 / 场景联动 / 渲染异常）
+  // 导入前后必须逐项深等价——包括旧 site() 快照没覆盖的那些：
+  //   loop 勾选与禁用、IMU 预设与说明文字、暂停态、提示计数、校准面板文字、曲线内容摘要、
+  //   估计器内部状态、A/B 克隆与冻结参数、加计挂起/窗口、磁采集状态。
+  // 为什么必须有这条：旧实现靠「真的把配置写进控件再读回」来探测可表达性，而写控件会触发
+  //   事件副作用——场景切到运动学一致剧本时 syncLoopAvailability() 会把闭环开关取消勾选，
+  //   回滚只把场景写回去，loop.checked 就此永久丢失（复核 P0 反例）。
+  const archiveAtomic = await page.evaluate(async () => {
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const pauseBtn = document.getElementById("btn-pause");
+    const isPaused = () => pauseBtn.textContent === "继续";
+    const site = () => window.attitudeDemo.experiment.site();
+    const set = (id, value) => {
+      const el = document.getElementById(id);
+      if (el.value !== value) { el.value = value; el.dispatchEvent(new Event("change")); }
+    };
+    if (isPaused()) pauseBtn.click();
+    // ① 制造"值得丢掉的现场"。顺序注意：开 A/B（same-start 会复位本轮）与切场景都会
+    //    重置现场，所以**先做会复位的动作，再等记录长出来**，否则会把清零后的空现场当成现场。
+    const ab = document.getElementById("ab-toggle");
+    if (!ab.checked) { ab.checked = true; ab.dispatchEvent(new Event("change")); }
+    set("scenario-select", "hover");
+    await sleep(40);
+    let waits = 0;
+    for (; waits < 80 && window.attitudeDemo.sizes().logRows < 4; waits++) await sleep(50);
+    document.getElementById("magcal-synthetic").click();
+    await sleep(80);
+    const loop = document.getElementById("loop-toggle");
+    if (!loop.checked) { loop.checked = true; loop.dispatchEvent(new Event("change")); }
+    // ② 冻结时钟：失败导入前后才能逐项比较
+    if (!isPaused()) pauseBtn.click();
+    for (let i = 0; i < 20 && !isPaused(); i++) await sleep(25);
+    await sleep(150);
+    const before = site();
+    const archive = window.attitudeDemo.experiment.archive();
+    // ③ 越界 + 场景联动：切到运动学一致剧本（会禁用并清空闭环开关）+ 一个最终被拒的越界值
+    const badRange = JSON.parse(JSON.stringify(archive));
+    badRange.config.scenario = "coordinatedTurn";
+    badRange.config.imu.gyroBiasDps = 999999;
+    const badRangeRes = window.attitudeDemo.experiment.importArchive(badRange);
+    const afterBadRange = site();
+    // ④ 界面无法表达（全局开关广播）：数值本身合法、解析也过，但 comp/mahony 的磁开关分叉
+    const badCast = JSON.parse(JSON.stringify(archive));
+    badCast.config.estimators.mahony.magEnabled = !badCast.config.estimators.comp.magEnabled;
+    const badCastRes = window.attitudeDemo.experiment.importArchive(badCast);
+    const afterBadCast = site();
+    // ⑤ 渲染异常：run 元数据坏了（旧实现会在配置**已经应用之后**才抛错——界面提示失败、状态却已变），
+    //    必须整份拒绝，且提示文字里不得出现 NaN/undefined
+    const badRun = JSON.parse(JSON.stringify(archive));
+    badRun.run.metrics = [{ id: "mahony", n: 5, mean: null, rmse: null, max: null, convergedAt: null }];
+    const badRunRes = window.attitudeDemo.experiment.importArchive(badRun);
+    const afterBadRun = site();
+    const errs = [badRangeRes, badCastRes, badRunRes].map((r) => r.error ?? "").join(" | ");
+    // ⑥ 复原：场景与闭环回到测试前状态，时钟继续
+    if (isPaused()) pauseBtn.click();
+    return {
+      before, afterBadRange, afterBadCast, afterBadRun,
+      ok: [badRangeRes.ok, badCastRes.ok, badRunRes.ok],
+      errs,
+      same:
+        JSON.stringify(afterBadRange) === JSON.stringify(before) &&
+        JSON.stringify(afterBadCast) === JSON.stringify(before) &&
+        JSON.stringify(afterBadRun) === JSON.stringify(before),
+      rich: before.loopOn === true && before.loopDisabled === false && before.abOn === true &&
+        before.magHistory > 0 && before.logRows > 0 && before.chartSizes[0].count > 0 && before.simTime > 0,
+      diag: { waits, logRows: before.logRows, chart: before.chartSizes[0].count, simTime: before.simTime, resets: window.attitudeDemo.plumbing().simResets },
+    };
+  });
+  check(
+    "档案事务零副作用：越界/场景联动/渲染异常三类失败导入后**完整现场**深等价（含 loop/preset/提示/曲线/估计器/A-B）",
+    archiveAtomic.same && archiveAtomic.rich &&
+      archiveAtomic.ok.every((v) => v === false) &&
+      /gyroBiasDps/.test(archiveAtomic.errs) &&
+      /mahony\.magEnabled/.test(archiveAtomic.errs) &&
+      /run\.metrics/.test(archiveAtomic.errs) &&
+      !/NaN|undefined/.test(archiveAtomic.errs),
+    `失败导入后现场不变=${archiveAtomic.same}（现场确有内容=${archiveAtomic.rich}：诊断=${JSON.stringify(archiveAtomic.diag)}、loop=${archiveAtomic.before.loopOn}/${archiveAtomic.before.loopDisabled}、` +
+      `A/B=${archiveAtomic.before.abOn}、曲线点=${archiveAtomic.before.chartSizes?.[0]?.count}、校准历史=${archiveAtomic.before.magHistory}）；` +
+      `三类都拒绝=${JSON.stringify(archiveAtomic.ok)}；提示=${archiveAtomic.errs.slice(0, 220)}`,
+  );
+
+  // 档案规范形（P1）：省略可选字段的合法档案与完整档案必须收敛到**同一份配置**，
+  // 并且导出 → 导入 → 再导出逐字节一致（旧实现里「少写一个键」会解析成另一份配置）。
+  const archiveCanonical = await page.evaluate(() => {
+    const exp = window.attitudeDemo.experiment;
+    const archive = exp.archive();
+    const minimal = JSON.parse(JSON.stringify(archive));
+    for (const k of ["magTargetUts", "autoCoarseAlign", "steadyFromSec", "manualTargetDeg", "ab"]) delete minimal.config[k];
+    const strip = (c) => { const { durationSec, ...rest } = c; return JSON.stringify(rest); };
+    const okMinimal = exp.importArchive(minimal);
+    const cfgMinimal = strip(exp.config(6));
+    const okFull = exp.importArchive(archive);
+    const cfgFull = strip(exp.config(6));
+    // 再导出必须与首次导出逐字节一致（规范形幂等；durationSec 是"本次已跑时长"，不参与）
+    const reexported = JSON.stringify({ ...exp.archive().config, durationSec: archive.config.durationSec }) ===
+      JSON.stringify(archive.config);
+    return { okMinimal, okFull, same: cfgMinimal === cfgFull, reexported };
+  });
+  check(
+    "档案规范形：省略可选字段导入后与完整档案逐字段一致，且导出→导入→再导出逐字节稳定",
+    archiveCanonical.okMinimal.ok && archiveCanonical.okFull.ok && archiveCanonical.same && archiveCanonical.reexported,
+    `省略可选字段导入=${JSON.stringify(archiveCanonical.okMinimal)}、完整导入=${JSON.stringify(archiveCanonical.okFull)}、` +
+      `两份配置逐字段一致=${archiveCanonical.same}、再导出逐字节一致=${archiveCanonical.reexported}`,
+  );
+
+  // 档案事务的**异常安全**（SW-03）：真正会失败的渲染步骤必须发生在写状态之前。
+  //   ① 把 Element.prototype.innerHTML 的 setter 换成抛异常：面板渲染计划在 prepare 阶段
+  //      解析 HTML，于是导入必须整体失败，且现场（含闭环勾选）一个字节都没动。
+  //   ② 自定义步距（把零偏滑块的步距改成 2，网格只剩 0/2/4）+ 运动学剧本联动：
+  //      网格外的取值必须被离线预检拒绝，而不是"先写场景（会清掉闭环勾选）再失败回滚"。
+  const archiveCommitSafety = await page.evaluate(async () => {
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const pauseBtn = document.getElementById("btn-pause");
+    const isPaused = () => pauseBtn.textContent === "继续";
+    const site = () => window.attitudeDemo.experiment.site();
+    const set = (id, value) => { const el = document.getElementById(id); if (el.value !== value) { el.value = value; el.dispatchEvent(new Event("change")); } };
+    if (isPaused()) pauseBtn.click();
+    set("scenario-select", "hover");
+    await sleep(40);
+    for (let i = 0; i < 80 && window.attitudeDemo.sizes().logRows < 4; i++) await sleep(50);
+    const loop = document.getElementById("loop-toggle");
+    if (!loop.checked) { loop.checked = true; loop.dispatchEvent(new Event("change")); }
+    if (!isPaused()) pauseBtn.click();
+    for (let i = 0; i < 20 && !isPaused(); i++) await sleep(25);
+    await sleep(120);
+    const before = site();
+    const archive = window.attitudeDemo.experiment.archive();
+
+    // ① 渲染路径注入失败
+    const descriptor = Object.getOwnPropertyDescriptor(Element.prototype, "innerHTML");
+    let renderRes = { ok: true, error: "（未执行）" };
+    try {
+      Object.defineProperty(Element.prototype, "innerHTML", {
+        configurable: true,
+        get() { return ""; },
+        set() { throw new Error("injected render failure"); },
+      });
+      const r = window.attitudeDemo.experiment.importArchive(archive);
+      renderRes = { ok: r.ok, error: r.error ?? "" };
+    } finally {
+      if (descriptor) Object.defineProperty(Element.prototype, "innerHTML", descriptor);
+    }
+    const afterRender = site();
+
+    // ② 自定义步距 + 场景联动
+    const stepBox = document.querySelector('[data-step="imu-gyro-bias"]');
+    const biasSlider = document.getElementById("imu-gyro-bias");
+    const origStep = biasSlider.step;
+    if (stepBox) { stepBox.value = "2"; stepBox.dispatchEvent(new Event("change")); }
+    const badStep = JSON.parse(JSON.stringify(archive));
+    badStep.config.scenario = "coordinatedTurn";
+    badStep.config.imu.gyroBiasDps = 5; // 0/2/4 网格之外
+    const badRes = window.attitudeDemo.experiment.importArchive(badStep);
+    const afterStep = site();
+    if (stepBox) { stepBox.value = origStep; stepBox.dispatchEvent(new Event("change")); }
+    if (isPaused()) pauseBtn.click();
+    return {
+      renderRes, badRes,
+      sameAfterRender: JSON.stringify(afterRender) === JSON.stringify(before),
+      sameAfterStep: JSON.stringify(afterStep) === JSON.stringify(before),
+      loopKept: afterStep.loopOn === true,
+      rich: before.loopOn === true && before.logRows > 0,
+    };
+  });
+  check(
+    "档案事务异常安全（SW-03）：渲染失败不写状态、网格外取值被预检拒绝，现场与闭环勾选不变",
+    archiveCommitSafety.renderRes.ok === false &&
+      /面板渲染失败/.test(archiveCommitSafety.renderRes.error) &&
+      archiveCommitSafety.badRes.ok === false &&
+      /gyroBiasDps/.test(archiveCommitSafety.badRes.error) &&
+      archiveCommitSafety.sameAfterRender &&
+      archiveCommitSafety.sameAfterStep &&
+      archiveCommitSafety.loopKept &&
+      archiveCommitSafety.rich,
+    `注入渲染失败 → ok=${archiveCommitSafety.renderRes.ok}、提示「${archiveCommitSafety.renderRes.error.slice(0, 40)}」、现场不变=${archiveCommitSafety.sameAfterRender}；` +
+      `自定义步距(2)+运动学剧本 → ok=${archiveCommitSafety.badRes.ok}、提示「${archiveCommitSafety.badRes.error.slice(0, 60)}」、` +
+      `现场不变=${archiveCommitSafety.sameAfterStep}、闭环勾选保留=${archiveCommitSafety.loopKept}`,
+  );
+
   // 导出 IMU 列语义：默认 raw 标注，勾选「校准后」写 calibrated（回放自动关闭校准）
   const imuMeta = await page.evaluate(async () => {
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -1397,6 +1776,59 @@ try {
     sel.dispatchEvent(new Event("change"));
   });
 
+  // 回放时间口径唯一（P1）：日志末帧时间回退时，时长/进度/实际积分/导入提示/调试出口
+  // 必须全部读同一条有效时间轴。旧实现按「末帧原始时刻 − 首帧原始时刻」算提示时长，
+  // 回退段被夹成 0 之后提示比实际积分短（实测 0.18 s vs 0.22 s），进度条、状态条、提示各说各话。
+  const replayClock = await page.evaluate(async () => {
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const NL = String.fromCharCode(10);
+    const head = "# imu=raw" + NL + "t_s,gx,gy,gz,ax,ay,az,mx,my,mz";
+    // 0.00 → 0.46 s（每 20 ms 一帧，26 帧）后**回退**到 0.40 s 再收尾：
+    // 原始跨度 0.40 s，有效（单调覆盖）跨度 0.46 s
+    const times = [];
+    for (let i = 0; i < 24; i++) times.push(Number((i * 0.02).toFixed(2)));
+    times.push(0.40, 0.40);
+    const rows = times.map((t, i) => `${t},${i + 1},0,0,0,0,9.8,30,0,40`);
+    const imported = window.attitudeDemo.replay.import([head, ...rows].join(NL), "fallback.csv");
+    const speed = document.getElementById("replay-speed");
+    speed.value = "0";
+    speed.dispatchEvent(new Event("change"));
+    const deadline = performance.now() + 20000;
+    let lastSim = -1, stable = 0;
+    while (performance.now() < deadline) {
+      const r = window.attitudeDemo.replay.info;
+      const sim = window.attitudeDemo.sizes().simTime;
+      if (r.idx >= r.frames && Math.abs(sim - lastSim) < 1e-9) stable++;
+      else stable = 0;
+      lastSim = sim;
+      if (stable >= 3) break; // 源帧消费完 + 积分数不再变化 = 本段回放真的跑完了
+      await sleep(60);
+    }
+    await sleep(200);
+    const info = window.attitudeDemo.replay.info;
+    const simTime = window.attitudeDemo.sizes().simTime;
+    const statusText = document.getElementById("replay-status")?.textContent ?? "";
+    const naive = (times[times.length - 1] - times[0]);
+    const rawSpan = (times[23] - times[0]);
+    window.attitudeDemo.replay.stop();
+    await sleep(120);
+    return { imported, info, simTime, statusText, naive, rawSpan };
+  });
+  const importedSec = Number(/\/\s*([\d.]+)\s*s$/.exec(replayClock.imported)?.[1] ?? NaN);
+  check(
+    "回放时间口径唯一：末帧时间回退时 duration/played/积分/提示/状态条完全一致",
+    replayClock.info.durationSec > replayClock.naive + 1e-6 &&
+      Math.abs(importedSec - replayClock.info.durationSec) < 0.01 &&
+      Math.abs(replayClock.info.playedSec - replayClock.info.durationSec) < 1e-6 &&
+      Math.abs(replayClock.simTime - replayClock.info.durationSec) < 0.02 &&
+      replayClock.imported.startsWith("ok:") &&
+      replayClock.statusText.includes(replayClock.info.durationSec.toFixed(1)) &&
+      !/NaN/.test(replayClock.statusText),
+    `导入=${replayClock.imported}、duration=${replayClock.info.durationSec}、played=${replayClock.info.playedSec}、` +
+      `实际积分(simTime)=${replayClock.simTime}；末帧原始跨度=${replayClock.naive}（旧口径会报这个数）、本段有效跨度=${replayClock.rawSpan}；` +
+      `状态条「${replayClock.statusText.replace(/\s+/g, " ").slice(0, 70)}」`,
+  );
+
   // 可复现实验：同配置同 seed 的 runner digest 必须逐位一致；实验档案结构完整
   const det = await page.evaluate(() => {
     const a = window.attitudeDemo.experiment.run(1);
@@ -1500,7 +1932,7 @@ try {
       Object.defineProperty(navigator, "serial", { configurable: true, value: { requestPort: async () => port } });
     });
     await gotoSafe(pg);
-    await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 15000 });
+    await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 60000 });
     await pg.evaluate(() => {
       const sec = document.getElementById("sec-imu");
       if (sec?.classList.contains("collapsed")) sec.querySelector(".panel-toggle").click();
@@ -1509,14 +1941,14 @@ try {
       sel.dispatchEvent(new Event("change", { bubbles: true }));
       document.getElementById("btn-serial").click();
     });
-    await pg.waitForFunction(() => window.attitudeDemo.plumbing().frames > 10, { timeout: 8000 });
+    await pg.waitForFunction(() => window.attitudeDemo.plumbing().frames > 10, { timeout: 30000 });
     // 等进入「重连等待」：此时数据源暂时没有数据，但本轮实验必须原封不动
     await pg.waitForFunction(
       () => {
         const t = document.getElementById("serial-status")?.textContent ?? "";
         return /自动重连|后自动重连|中断/.test(t);
       },
-      { timeout: 8000 },
+      { timeout: 30000 },
     );
     const before = await pg.evaluate(() => ({
       t: window.attitudeDemo.sizes().simTime,
@@ -1592,7 +2024,15 @@ try {
       `状态仍「${cancelStale.cancelledText.slice(0, 12)}…」；running/activeJob 归零=${cancelStale.notRunning}`,
   );
 
-  // 主线程回退路径也必须能取消：禁用 Worker → 批次仍在跑 → 点「取消」应立刻停
+  /**
+   * SW-10 验收：主线程降级路径必须是**协作取消**。
+   *
+   * 旧实现的缺陷（复核已复现）：降级分支用同步 `runExperiment` 跑整个种子，
+   * 只在种子之间 `setTimeout` 让出——一个 30 s 实验 ≈ 550 ms 期间事件循环被占满，
+   * 真实鼠标点击要排在同步计算后面才被处理（旧用例在注释里承认过这一点）。
+   * 现在的验收要求是：**真实 GUI 点击**取消、在**首个种子还没跑完**时生效、
+   * 下一计算片即停（时延 ≤200 ms），期间交互响应 p95 ≤200 ms，且半成品种子不计入完成。
+   */
   const mainCancel = await (async () => {
     const pg = await newPage();
     await pg.setViewport({ width: 1280, height: 800 });
@@ -1600,37 +2040,117 @@ try {
     pg.on("console", (m) => m.type() === "error" && errs.push(m.text()));
     pg.on("pageerror", (e) => errs.push(String(e)));
     await pg.evaluateOnNewDocument(() => {
-      // 没有 Worker 的浏览器环境：批量评测必须回退到主线程分片，且取消按钮仍然管用
+      // 没有 Worker 的浏览器环境：批量评测必须回退到主线程分片
       window.Worker = undefined;
     });
     await gotoSafe(pg);
-    await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 15000 });
+    await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 60000 });
     await pg.evaluate(() => {
       document.getElementById("sec-experiments").classList.remove("collapsed");
       const sel = document.getElementById("batch-runs");
+      sel.value = "30x30"; // 单种子 ≈550 ms：取消必须发生在首个种子**中途**
+      sel.dispatchEvent(new Event("change"));
+      // 显式强制降级（与「浏览器没有 Worker」同一条路径），保证本用例测的就是降级分支
+      window.attitudeDemo.experiment.disableWorker();
+    });
+    await pg.click("#btn-batch"); // 真实点击（走输入事件队列）
+    // 运行中测事件循环响应：连续 setTimeout(0) 的排队时延就是"点击要等多久"
+    const responsiveness = await pg.evaluate(async () => {
+      const samples = [];
+      for (let i = 0; i < 12; i++) {
+        const t0 = performance.now();
+        await new Promise((r) => setTimeout(r, 0));
+        samples.push(performance.now() - t0);
+      }
+      const sorted = [...samples].sort((a, b) => a - b);
+      return { samples, p95: sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * 0.95) - 1)] };
+    });
+    const during = await pg.evaluate(() => ({
+      state: window.attitudeDemo.experiment.batchState(),
+      status: document.getElementById("batch-status")?.textContent ?? "",
+    }));
+    await pg.click("#btn-batch"); // 真实点击 = 取消
+    let cancelledSeen = true;
+    try {
+      await pg.waitForFunction(() => (document.getElementById("batch-status")?.textContent ?? "").startsWith("已取消"), { timeout: 5000 });
+    } catch { cancelledSeen = false; }
+    // 「下一片即停」是可观察事实：等降级循环真的丢掉那个半成品种子并记下时延再取样，
+    // 否则读到的是"按钮文案已经变了、计算还在最后一片里"的中间态。
+    try {
+      await pg.waitForFunction(() => window.attitudeDemo.experiment.batchState().partialSeeds >= 1, { timeout: 3000 });
+    } catch { /* 下面按未记录判定并给出可读的失败原因 */ }
+    const after = await pg.evaluate(() => ({
+      state: window.attitudeDemo.experiment.batchState(),
+      status: document.getElementById("batch-status")?.textContent ?? "",
+      body: document.getElementById("batch-body")?.innerHTML ?? "",
+      result: window.attitudeDemo.experiment.batchResult(),
+      clock: parseFloat((document.getElementById("clock")?.textContent ?? "0").replace(/[^\d.]/g, "")) || 0,
+    }));
+    // 取消后状态是否真的干净、界面是否还活着（时钟继续推进 + 控件可点）
+    await new Promise((r) => setTimeout(r, 700));
+    const settled = await pg.evaluate(() => ({
+      clock: parseFloat((document.getElementById("clock")?.textContent ?? "0").replace(/[^\d.]/g, "")) || 0,
+      status: document.getElementById("batch-status")?.textContent ?? "",
+      running: window.attitudeDemo.experiment.batchState().running,
+    }));
+    // 快速「启动 → 取消 → 再启动」：新一批必须能正常跑完并写表
+    const restart = await pg.evaluate(async () => {
+      const sel = document.getElementById("batch-runs");
       sel.value = "10";
       sel.dispatchEvent(new Event("change"));
+      const startedAt = performance.now();
       document.getElementById("btn-batch").click();
+      // 降级路径的每片都要等一次 macrotask，而软件渲染下页面自己的一帧要 ~50 ms，
+      // 于是「10 个种子 × 10 s」在本机可以要几十秒（实测最慢一轮 >30 s）。
+      // 这条用例判的是"取消后能重启跑完且旧世代不回写"，不是延迟，所以额度按实测放宽并**记录耗时**。
+      const deadline = Date.now() + 90000;
+      let text = "";
+      while (Date.now() < deadline) {
+        text = document.getElementById("batch-status")?.textContent ?? "";
+        if (text.startsWith("完成") || text.startsWith("已取消")) break;
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      const state = window.attitudeDemo.experiment.batchState();
+      return { text, rows: document.querySelectorAll("#batch-body tr").length, state, result: window.attitudeDemo.experiment.batchResult(), elapsedMs: performance.now() - startedAt };
     });
-    await new Promise((r) => setTimeout(r, 600));
-    const during = await pg.evaluate(() => window.attitudeDemo.experiment.batchState());
-    // 主线程正被 runExperiment 的同步计算占着：真实鼠标点击会排在它后面，400 ms 内读不到。
-    // 这里直接同步派发按钮点击——与本用例要验证的「点击会触发取消」等价。
-    await pg.evaluate(() => document.getElementById("btn-batch").click());
-    await new Promise((r) => setTimeout(r, 400));
-    const after = await pg.evaluate(() => window.attitudeDemo.experiment.batchState());
-    const status = await pg.evaluate(() => document.getElementById("batch-status")?.textContent ?? "");
     await pg.close();
-    return { during, after, status, errs };
+    return { during, responsiveness, after, settled, restart, cancelledSeen, errs };
   })();
+  const cancelLatency = mainCancel.after.state.cancelLatencyMs;
   check(
-    "主线程回退路径也能取消（Worker 不存在时：批次在跑、取消生效、状态恢复）",
-    mainCancel.during.running && mainCancel.during.button.includes("取消") &&
-      !mainCancel.after.running && mainCancel.after.button.includes("运行批量评测") &&
-      mainCancel.status.includes("已取消") &&
+    "SW-10 主线程降级：真实点击取消在首个种子中途生效，下一片即停（≤200 ms）",
+    mainCancel.during.state.running &&
+      mainCancel.during.state.button.includes("取消") &&
+      mainCancel.during.state.workerDisabled === true &&
+      mainCancel.cancelledSeen &&
+      typeof cancelLatency === "number" && cancelLatency <= 200 &&
+      mainCancel.after.state.partialSeeds >= 1 &&
+      mainCancel.after.state.running === false,
+    `运行中 running=${mainCancel.during.state.running}、按钮「${mainCancel.during.state.button}」、` +
+      `强制降级=${mainCancel.during.state.workerDisabled}；取消时延 ${cancelLatency === null ? "未记录" : `${cancelLatency.toFixed(0)} ms`}；` +
+      `被丢弃的半成品种子 ${mainCancel.after.state.partialSeeds} 个；状态「${mainCancel.after.status.slice(0, 16)}」`,
+  );
+  check(
+    "SW-10 主线程降级：运行期间交互响应 p95 ≤200 ms，取消后界面继续可用",
+    mainCancel.responsiveness.p95 <= 200 &&
+      mainCancel.after.body.trim() === "" &&
+      mainCancel.after.result === null &&
+      mainCancel.settled.running === false &&
+      mainCancel.settled.status.startsWith("已取消") &&
+      mainCancel.settled.clock > mainCancel.after.clock &&
       errsEmpty(mainCancel.errs),
-    `运行中：running=${mainCancel.during.running} 按钮「${mainCancel.during.button}」；` +
-      `取消后：${mainCancel.status.slice(0, 24)}、按钮「${mainCancel.after.button}」`,
+    `响应样本 p95=${mainCancel.responsiveness.p95.toFixed(1)} ms（逐次 ${mainCancel.responsiveness.samples.map((n) => n.toFixed(0)).join("/")}）；` +
+      `取消后表格为空=${mainCancel.after.body.trim() === ""}、无半成品结果=${mainCancel.after.result === null}；` +
+      `时钟仍推进 ${mainCancel.after.clock.toFixed(1)}→${mainCancel.settled.clock.toFixed(1)} s`,
+  );
+  check(
+    "SW-10 主线程降级：取消后再启动能跑完，且旧世代不回写",
+    mainCancel.restart.text.startsWith("完成") &&
+      mainCancel.restart.rows === 5 &&
+      mainCancel.restart.state.running === false &&
+      mainCancel.restart.result?.generation === mainCancel.restart.state.generation,
+    `${mainCancel.restart.text.slice(0, 24)}（耗时 ${mainCancel.restart.elapsedMs.toFixed(0)} ms）；表格 ${mainCancel.restart.rows} 行；` +
+      `结果世代 ${mainCancel.restart.result?.generation} = 当前世代 ${mainCancel.restart.state.generation}`,
   );
 
   // Worker 的 jobId / 心跳 / 取消：30×30 档点第二次必须能取消，取消后还能再跑
@@ -2167,7 +2687,7 @@ try {
       };
     }, protocol);
     await gotoSafe(pg);
-    await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 15000 });
+    await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 60000 });
     await pg.evaluate((proto) => {
       const sec = document.getElementById("sec-imu");
       if (sec?.classList.contains("collapsed")) sec.querySelector(".panel-toggle").click();
@@ -2179,7 +2699,7 @@ try {
       m.dispatchEvent(new Event("change", { bubbles: true }));
     }, protocol);
     await pg.click("#btn-ble");
-    await pg.waitForFunction(() => document.body.dataset.imuMode === "real", { timeout: 6000 });
+    await pg.waitForFunction(() => document.body.dataset.imuMode === "real", { timeout: 30000 });
     // 每 10 ms 发一帧（分片后是两条通知）
     await pg.evaluate(() => {
       window.__bleTimer = setInterval(() => window.__bleEmit(), 10);
@@ -2359,10 +2879,15 @@ try {
     // `typeof navigator.bluetooth` 把 BLE 按钮永久置灰。Ubuntu 的 Chrome 默认不带 Web Bluetooth，
     // 于是运行时再装假设备也没用——按钮是 disabled 的，click() 什么都不做（CI 实测这一组 5 条全红）。
     if (opts.ble) {
-      await pg.evaluateOnNewDocument((wire, hang) => { (0, eval)(wire)(hang); }, installFakeBle, opts.ble === "hang");
+      await pg.evaluateOnNewDocument(
+        (wire, hangSubscribe, hangConnect) => { (0, eval)(wire)(hangSubscribe, hangConnect); },
+        installFakeBle,
+        opts.ble === "hang",
+        opts.ble === "hang-connect",
+      );
     }
     await gotoSafe(pg);
-    await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 15000 });
+    await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 60000 });
     await pg.evaluate(() => {
       const sec = document.getElementById("sec-imu");
       if (sec?.classList.contains("collapsed")) sec.querySelector(".panel-toggle").click();
@@ -2375,15 +2900,16 @@ try {
     });
     if (opts.connect !== false) {
       await pg.click("#btn-serial");
-      await pg.waitForFunction(() => document.body.dataset.imuMode === "real", { timeout: 8000 });
+      await pg.waitForFunction(() => document.body.dataset.imuMode === "real", { timeout: 30000 });
     }
     return { pg, errs, stop: () => pg.evaluate(() => clearInterval(window.__fs.emitTimer)) };
   };
 
   /** 在页面里装一个最小假 BLE（requestDevice/GATT/notify 三段走通即可） */
-  const installFakeBle = `(hangSubscribe) => {
+  const installFakeBle = `(hangSubscribe, hangConnect) => {
     const listeners = [];
     let releaseSubscribe = null;
+    let releaseConnect = null;
     const char = {
       uuid: "0000ffe1-0000-1000-8000-00805f9b34fb",
       properties: { notify: true },
@@ -2398,12 +2924,17 @@ try {
         if (i >= 0) listeners.splice(i, 1);
       },
     };
+    const server = { getPrimaryService: async () => ({ getCharacteristics: async () => [char] }) };
     const device = {
       name: "FAKE-BLE",
       id: "fake-ble",
       gatt: {
-        connected: true,
-        connect: async () => ({ getPrimaryService: async () => ({ getCharacteristics: async () => [char] }) }),
+        // hangConnect：connect() 永不落定（驱动/蓝牙栈挂起），直到用例显式放行——
+        // 用于验证"主动超时之后**迟到的** GATT 连接必须自己断开"（复核 SW-05）。
+        connected: !hangConnect,
+        connect: hangConnect
+          ? () => new Promise((res) => { releaseConnect = () => { device.gatt.connected = true; res(server); }; })
+          : async () => server,
         disconnect: () => (device.gatt.connected = false),
       },
       addEventListener: () => undefined,
@@ -2423,8 +2954,10 @@ try {
     });
     window.__ble = {
       device, listeners, releaseSubscribe: () => releaseSubscribe?.(),
+      releaseConnect: () => releaseConnect?.(),
       count: () => listeners.length,
       deviceListeners: () => deviceListeners.length,
+      gattConnected: () => device.gatt.connected,
       drop: () => { for (const cb of [...deviceListeners]) cb(); },
     };
   }`;
@@ -2669,6 +3202,87 @@ try {
       `自动重试后 待清理=${closeRetry.res.afterPending}、打开的端口=${closeRetry.res.afterOpenPorts}、` +
       `夹具端口 opened=${closeRetry.res.portOpened}、close 共调用 ${closeRetry.res.closes} 次（剩 ${closeRetry.res.failLeft} 次强制失败未用）｜` +
       `错误=${closeRetry.errs.slice(0, 2).join(" / ") || "无"}`,
+  );
+
+  // A-2c-2：主动连接动作**本身**必须超时，且「open 还在挂起时切到回放」也必须最终收口。
+  //      复核 P1：dispose 的有界等待只保护"释放"，不保护"连接"——`SerialPort.open()` /
+  //      `gatt.connect()` / 服务发现可以永不落定，旧实现下按钮永远停在"正在连接"、
+  //      句柄一直悬空；而切来源时 serialDisconnect 只在 running/port 为真时才跑，
+  //      「正在 open、尚未 running」这一窗口没有任何人清槽位。
+  const connectTimeout = await (async () => {
+    const { pg, errs, stop } = await makeFakeSerialPage({ connect: false });
+    const res = await pg.evaluate(async () => {
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const NL = String.fromCharCode(10);
+      const fs = window.__fs;
+      fs.hangNextOpen = true;
+      document.getElementById("btn-serial").click(); // 连接：open 永不落定
+      await sleep(400);
+      const whileOpening = window.attitudeDemo.plumbing();
+      const statusWhileOpening = document.getElementById("serial-status")?.textContent ?? "";
+      // ① 正在 open、尚未 running 时切到回放
+      const csv = ["# imu=raw", "t_s,gx,gy,gz,ax,ay,az,mx,my,mz"]
+        .concat(Array.from({ length: 30 }, (_, i) => `${(i * 0.01).toFixed(2)},1,0,0,0,0,9.8,30,0,40`)).join(NL);
+      window.attitudeDemo.replay.import(csv, "switch-open.csv");
+      // ② 只等主动超时（不手工 dispose）：超时后必须判死（connecting=false）。
+      //    **注意**：底层 open 仍挂起，所以此刻句柄**必须留在隔离队列**里（pendingPortCleanup>0）——
+      //    这正是 SW-05 修掉的行为：旧实现把"外层等待结束"当成"已释放"，于是计数归零、句柄失控。
+      const deadline = performance.now() + 25000;
+      while (performance.now() < deadline) {
+        if (window.attitudeDemo.plumbing().connecting === false) break;
+        await sleep(150);
+      }
+      const duringQuarantine = window.attitudeDemo.plumbing();
+      // ③ 迟到的 open 此刻才落定：必须自行 close，随后隔离队列收口到 0
+      const closesBefore = fs.closes;
+      fs.openResolvers.splice(0).forEach((r) => r());
+      const cleanDeadline = performance.now() + 10000;
+      let after = window.attitudeDemo.plumbing();
+      while (performance.now() < cleanDeadline) {
+        after = window.attitudeDemo.plumbing();
+        if (after.pendingPortCleanup === 0 && after.openPorts === 0 && fs.closes > closesBefore) break;
+        await sleep(150);
+      }
+      const statusAfter = document.getElementById("serial-status")?.textContent ?? "";
+      window.attitudeDemo.replay.stop();
+      return {
+        whileOpening,
+        statusWhileOpening,
+        duringQuarantine,
+        after,
+        statusAfter,
+        opens: fs.opens,
+        closesLate: fs.closes - closesBefore,
+      };
+    });
+    await stop();
+    await pg.close();
+    return { res, errs };
+  })();
+  check(
+    "连接动作主动超时：底层 open 未落定时句柄留在隔离队列，落定后自行关闭并收口到 0",
+    connectTimeout.res.whileOpening.connecting === true &&
+      connectTimeout.res.whileOpening.serial === false &&
+      /正在打开端口/.test(connectTimeout.res.statusWhileOpening) &&
+      connectTimeout.res.duringQuarantine.connecting === false &&
+      connectTimeout.res.duringQuarantine.pendingPortCleanup >= 1 &&
+      connectTimeout.res.duringQuarantine.openPorts === 0 &&
+      connectTimeout.res.after.serial === false &&
+      connectTimeout.res.after.replay === true &&
+      connectTimeout.res.after.openPorts === 0 &&
+      connectTimeout.res.after.pendingPortCleanup === 0 &&
+      connectTimeout.res.after.pendingBleCleanup === 0 &&
+      connectTimeout.res.opens === 1 &&
+      connectTimeout.res.closesLate >= 1 &&
+      /连接失败|超时/.test(connectTimeout.res.statusAfter) &&
+      !/正在打开端口/.test(connectTimeout.res.statusAfter) &&
+      errsEmpty(connectTimeout.errs),
+    `挂起 open 期间：connecting=${connectTimeout.res.whileOpening.connecting}、serial=${connectTimeout.res.whileOpening.serial}、状态「${connectTimeout.res.statusWhileOpening.slice(0, 30)}」；` +
+      `切回放后：serial=${connectTimeout.res.after.serial}、replay=${connectTimeout.res.after.replay}、打开的端口=${connectTimeout.res.after.openPorts}、` +
+      `超时后待清理=${connectTimeout.res.duringQuarantine.pendingPortCleanup}（底层未落定必须留在隔离队列）、` +
+      `迟到 open 落定后待清理=${connectTimeout.res.after.pendingPortCleanup}、BLE 待清理=${connectTimeout.res.after.pendingBleCleanup}；` +
+      `夹具 open ${connectTimeout.res.opens} 次、迟到的 open 自行 close ${connectTimeout.res.closesLate} 次；` +
+      `末态状态「${connectTimeout.res.statusAfter.slice(0, 40)}」｜错误=${connectTimeout.errs.slice(0, 2).join(" / ") || "无"}`,
   );
 
   // A-2d：掉线重连**已排程**期间切换来源 → 旧定时器不得把旧链路接回来。
@@ -3409,7 +4023,7 @@ try {
       });
     });
     await gotoSafe(pg);
-    await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 15000 });
+    await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 60000 });
     await pg.evaluate(() => {
       const sec = document.getElementById("sec-imu");
       if (sec.classList.contains("collapsed")) sec.querySelector(".panel-toggle").click();
@@ -3483,7 +4097,7 @@ try {
       extraWire ?? "",
     );
     await gotoSafe(pg);
-    await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 15000 });
+    await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 60000 });
     await pg.evaluate(() => {
       const sec = document.getElementById("sec-imu");
       if (sec.classList.contains("collapsed")) sec.querySelector(".panel-toggle").click();
@@ -3492,7 +4106,7 @@ try {
       sel.dispatchEvent(new Event("change", { bubbles: true }));
       document.getElementById("btn-ble").click();
     });
-    await pg.waitForFunction(() => window.attitudeDemo.plumbing().ble === true, { timeout: 6000 });
+    await pg.waitForFunction(() => window.attitudeDemo.plumbing().ble === true, { timeout: 30000 });
     return { pg, errs };
   };
 
@@ -3518,6 +4132,80 @@ try {
     "BLE 重复订阅不叠加监听：3 次重订阅后一条通知只产生 1 帧",
     bleDouble.res.listeners === 1 && bleDouble.res.delta === 1 && errsEmpty(bleDouble.errs),
     "监听器数 " + bleDouble.res.listeners + "（应恒为 1）；一条通知带来的帧数增量 " + bleDouble.res.delta + "（应 1）",
+  );
+
+  // ③a BLE 连接主动超时后，**迟到的** GATT 连接必须由本次尝试自己断开（SW-05）。
+  //     复核反例：旧的 setup 闭包在 stale 时只 `return`，物理上留下一条无人管理的 GATT 连接，
+  //     而应用认为"已断开"。这里让 gatt.connect() 永不落定，等主动超时后再放行，验证自清理。
+  const bleLateConnect = await (async () => {
+    const pg = await newPage();
+    await pg.setViewport({ width: 1100, height: 800 });
+    const errs = [];
+    pg.on("pageerror", (e) => errs.push(String(e)));
+    await pg.evaluateOnNewDocument(() => {
+      let releaseConnect = null;
+      const char = {
+        uuid: "0000ffe1-0000-1000-8000-00805f9b34fb",
+        properties: { notify: true },
+        value: null,
+        startNotifications: async () => char,
+        stopNotifications: async () => char,
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+      };
+      const server = { getPrimaryService: async () => ({ getCharacteristics: async () => [char] }) };
+      const device = {
+        name: "FAKE-BLE", id: "fake-hang",
+        gatt: {
+          connected: false,
+          connect: () => new Promise((res) => { releaseConnect = () => { device.gatt.connected = true; res(server); }; }),
+          disconnect: () => { device.gatt.connected = false; },
+        },
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+      };
+      Object.defineProperty(navigator, "bluetooth", { configurable: true, value: { requestDevice: async () => device } });
+      window.__late = { gattConnected: () => device.gatt.connected, releaseConnect: () => releaseConnect?.() };
+    });
+    await gotoSafe(pg);
+    await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 60000 });
+    const res = await pg.evaluate(async () => {
+      const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+      const sec = document.getElementById("sec-imu");
+      if (sec.classList.contains("collapsed")) sec.querySelector(".panel-toggle").click();
+      document.getElementById("btn-ble").click();
+      const deadline = performance.now() + 25000;
+      let timedOut = false;
+      while (performance.now() < deadline) {
+        if (/超时/.test(document.getElementById("ble-status")?.textContent ?? "")) { timedOut = true; break; }
+        await wait(200);
+      }
+      const during = { status: document.getElementById("ble-status")?.textContent ?? "", ...window.attitudeDemo.plumbing() };
+      // 迟到的 GATT 连接现在才落定
+      window.__late.releaseConnect();
+      const cleanDeadline = performance.now() + 8000;
+      let after = window.attitudeDemo.plumbing();
+      while (performance.now() < cleanDeadline) {
+        after = window.attitudeDemo.plumbing();
+        if (after.pendingBleCleanup === 0 && !window.__late.gattConnected()) break;
+        await wait(200);
+      }
+      return { timedOut, during, after, gattConnected: window.__late.gattConnected() };
+    });
+    await pg.close();
+    return { res, errs };
+  })();
+  check(
+    "BLE 连接超时：迟到的 GATT 连接必须自己断开（不留无人管理的连接）",
+    bleLateConnect.res.timedOut &&
+      bleLateConnect.res.during.connecting === false &&
+      bleLateConnect.res.after.ble === false &&
+      bleLateConnect.res.after.pendingBleCleanup === 0 &&
+      bleLateConnect.res.gattConnected === false &&
+      errsEmpty(bleLateConnect.errs),
+    `观测到主动超时=${bleLateConnect.res.timedOut}（状态「${bleLateConnect.res.during.status.slice(0, 40)}」）；` +
+      `超时后 connecting=${bleLateConnect.res.during.connecting}、ble=${bleLateConnect.res.during.ble}；` +
+      `迟到 connect 落定后 gatt.connected=${bleLateConnect.res.gattConnected}（应 false）、ble=${bleLateConnect.res.after.ble}、待清理=${bleLateConnect.res.after.pendingBleCleanup || 0}`,
   );
 
   // ②b BLE 断线自动重连：GATT 掉线 → 退避重连并订回**同一个**服务/特征；主动断开不重连
@@ -3572,7 +4260,7 @@ try {
       window.__bleDrop = () => { for (const cb of [...window.__ble.deviceListeners]) cb(); };
     });
     await gotoSafe(pg);
-    await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 15000 });
+    await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 60000 });
     await pg.evaluate(() => {
       const sec = document.getElementById("sec-imu");
       if (sec?.classList.contains("collapsed")) sec.querySelector(".panel-toggle").click();
@@ -3581,7 +4269,7 @@ try {
       sel.dispatchEvent(new Event("change", { bubbles: true }));
       document.getElementById("btn-ble").click();
     });
-    await pg.waitForFunction(() => window.attitudeDemo.plumbing().ble === true, { timeout: 6000 });
+    await pg.waitForFunction(() => window.attitudeDemo.plumbing().ble === true, { timeout: 30000 });
     const first = await pg.evaluate(() => ({
       connects: window.__ble.connects,
       charRow: !document.getElementById("ble-char-row")?.classList.contains("hidden"),
@@ -3756,7 +4444,7 @@ try {
     pg.on("console", (m) => m.type() === "warning" && srcWarn.push(m.text().slice(0, 80)));
     pg.on("pageerror", (e) => srcWarn.push("pageerror: " + String(e).slice(0, 80)));
     await gotoSafe(pg);
-    await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 15000 });
+    await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 60000 });
     // 在每个控件上设一个「与默认明显不同」的值（滑杆取量程端、开关取反、下拉取非首项）
     const source = await pg.evaluate(() => {
       const dl = window.attitudeDemo.deepLink();
@@ -3826,7 +4514,7 @@ try {
     pg2.on("console", (m) => m.type() === "warning" && dstWarn.push(m.text().slice(0, 80)));
     pg2.on("pageerror", (e) => dstWarn.push("pageerror: " + String(e).slice(0, 80)));
     await gotoSafe(pg2, APP_URL + hash);
-    await pg2.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 15000 });
+    await pg2.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 60000 });
     await new Promise((r) => setTimeout(r, 500));
     const dstValues = await pg2.evaluate((lists) => {
       const read = (id) => {
@@ -3875,7 +4563,7 @@ try {
     pg.on("pageerror", (e) => errs.push(String(e)));
     await pg.evaluateOnNewDocument(makeWire, protocol);
     await gotoSafe(pg);
-    await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 15000 });
+    await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 60000 });
     await pg.evaluate(() => {
       const sec = document.getElementById("sec-imu");
       if (sec?.classList.contains("collapsed")) sec.querySelector(".panel-toggle").click();
@@ -3888,7 +4576,7 @@ try {
       mnt.dispatchEvent(new Event("change", { bubbles: true }));
     });
     await pg.click("#btn-serial");
-    await pg.waitForFunction(() => document.body.dataset.imuMode === "real", { timeout: 6000 });
+    await pg.waitForFunction(() => document.body.dataset.imuMode === "real", { timeout: 30000 });
     await pg.waitForFunction(
       () => parseFloat((document.getElementById("clock")?.textContent ?? "").replace("t = ", "")) > 0.8,
       { timeout: 10000 },
@@ -4020,7 +4708,7 @@ try {
       Object.defineProperty(navigator, "serial", { configurable: true, value: { requestPort: async () => port } });
     });
     await gotoSafe(pg);
-    await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 15000 });
+    await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 60000 });
     await pg.evaluate(() => {
       const sec = document.getElementById("sec-imu");
       if (sec?.classList.contains("collapsed")) sec.querySelector(".panel-toggle").click();
@@ -4029,7 +4717,7 @@ try {
       sel.dispatchEvent(new Event("change", { bubbles: true }));
     });
     await pg.click("#btn-serial");
-    await pg.waitForFunction(() => document.body.dataset.imuMode === "real", { timeout: 6000 });
+    await pg.waitForFunction(() => document.body.dataset.imuMode === "real", { timeout: 30000 });
     // 断线前先攒一点本轮实验记录（用来验证「重连不会清空本轮结果」）
     await new Promise((r) => setTimeout(r, 800));
     const beforeDrop = await pg.evaluate(() => ({
@@ -4041,7 +4729,16 @@ try {
     const framesAfterReconnect = await pg.evaluate(async () => {
       const wait = (ms) => new Promise((r) => setTimeout(r, ms));
       const f0 = window.attitudeDemo.plumbing().frames;
-      await wait(600);
+      // **状态等待**而不是固定窗口：机器忙时（软件 WebGL + 后台任务抢 CPU）600 ms 里可能只到 3 帧，
+      // 但"重连后数据流已经恢复"这件事本身是确定的——等到真的超过 5 帧，最多 8 s。
+      // 固定窗口会把"这台机器慢"误报成"重连没恢复"（复核：稳定性轮里 5 轮中就出现过 1 次）。
+      const deadline = performance.now() + 8000;
+      let delta = 0;
+      while (performance.now() < deadline) {
+        delta = window.attitudeDemo.plumbing().frames - f0;
+        if (delta > 5) break;
+        await wait(50);
+      }
       return {
         delta: window.attitudeDemo.plumbing().frames - f0,
         status: document.getElementById("serial-status")?.textContent ?? "",
@@ -4067,7 +4764,7 @@ try {
       reconnectCase.framesAfterReconnect.logRows > 0 &&
       errsEmpty(reconnectCase.errs),
     `自动重连成功 ${reconnectCase.framesAfterReconnect.reconnects} 次（端口 open ${reconnectCase.framesAfterReconnect.opens} 次）、` +
-      `重连后 0.6 s 新增 ${reconnectCase.framesAfterReconnect.delta} 帧、` +
+      `重连后新增 ${reconnectCase.framesAfterReconnect.delta} 帧（状态等待，最多 8 s）、` +
       `时钟 ${reconnectCase.beforeDrop.t.toFixed(2)} → ${reconnectCase.framesAfterReconnect.t.toFixed(2)} s、` +
       `记录行 ${reconnectCase.beforeDrop.logRows} → ${reconnectCase.framesAfterReconnect.logRows}；` +
       `状态「${reconnectCase.framesAfterReconnect.status.slice(0, 40)}」`,
@@ -4279,7 +4976,7 @@ try {
   mobilePage.on("pageerror", (e) => mobileErrors.push(String(e)));
   await mobilePage.setViewport({ width: 390, height: 844, deviceScaleFactor: 1 });
   await gotoSafe(mobilePage);
-  await mobilePage.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 15000 });
+  await mobilePage.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 60000 });
   const mobile = await mobilePage.evaluate(() => ({
     scrollW: document.documentElement.scrollWidth,
     innerW: window.innerWidth,
@@ -4290,6 +4987,139 @@ try {
     "窄屏布局无横向溢出",
     mobile.scrollW === mobile.innerW && mobile.panelW === mobile.innerW && Math.abs(mobile.canvasW - mobile.innerW) < 1,
     `scroll=${mobile.scrollW}/${mobile.innerW} panel=${mobile.panelW} canvas=${mobile.canvasW}`,
+  );
+
+  // 200% 文字缩放：CSS 视口 = 1440×900 的一半（720×450 @DPR2），与浏览器"文字缩放 200%"等效。
+  // 复核反例（视觉证据 zoom200 实测）：左侧读数条按 CSS 像素堆下来会压住右下角的
+  // 「拖拽旋转视角」提示——陀螺仪/加速度计两行读数被盖住。提示是非关键说明，矮视口下隐藏。
+  await mobilePage.setViewport({ width: 720, height: 450, deviceScaleFactor: 2 });
+  await gotoSafe(mobilePage);
+  await mobilePage.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 60000 });
+  await new Promise((r) => setTimeout(r, 800));
+  const zoomed = await mobilePage.evaluate(() => {
+    const hint = document.getElementById("viewport-hint");
+    const hintVisible = Boolean(hint) && getComputedStyle(hint).display !== "none";
+    const a = hintVisible ? hint.getBoundingClientRect() : null;
+    const hits = a
+      ? [...document.querySelectorAll("#readout-overlay .ov-chip")]
+          .map((c) => c.getBoundingClientRect())
+          .filter((r) => !(r.right < a.left || r.left > a.right || r.bottom < a.top || r.top > a.bottom))
+          .map((r) => `${Math.round(r.width)}×${Math.round(r.height)}`)
+      : [];
+    return {
+      hintVisible,
+      hits,
+      scrollW: document.documentElement.scrollWidth,
+      innerW: window.innerWidth,
+      readouts: document.querySelectorAll("#readout-overlay .ov-chip").length,
+    };
+  });
+  check(
+    "200% 文字缩放（CSS 视口 720×450）：提示条不遮挡读数（或已隐藏）且无横向溢出",
+    (!zoomed.hintVisible || zoomed.hits.length === 0) && zoomed.scrollW === zoomed.innerW && zoomed.readouts > 0,
+    `提示可见=${zoomed.hintVisible}、被遮挡的读数条=${JSON.stringify(zoomed.hits)}、` +
+      `读数条共 ${zoomed.readouts} 条、横向溢出=${zoomed.scrollW > zoomed.innerW}（${zoomed.scrollW}/${zoomed.innerW}）`,
+  );
+  /**
+   * SW-11：**纯文字放大**（不改视口、不改 DPR）与**页面缩放**是两条不同的路径。
+   *
+   * 机制说明（不许把 DPR 当字号变化）：headless 无法驱动浏览器"字体大小"设置，这里改**根字号**
+   * （`html { font-size: 200% }`）来观察版式反应。实测结论：本装置版式以 **px** 计量，
+   * 因此浏览器"字体大小"设置**不会**改变排版；用户可用的放大路径是**页面缩放**——那条路径
+   * 由上面的「页面缩放 200%（720×450 @DPR2）」用例覆盖，并保证不遮挡、不溢出。
+   * 这条用例断言的是"实测事实 + 放大后布局不破"，不是"纯文字放大已验证可用"；
+   * 真实浏览器字体设置与读屏抽查**未测**，已记入验收记录（docs/ACCESSIBILITY-ACCEPTANCE.md）。
+   */
+  const textZoom = await mobilePage.evaluate(async () => {
+    const root = document.documentElement;
+    const chip = document.querySelector("#readout-overlay .ov-chip.mono") ?? document.querySelector("#readout-overlay .ov-chip");
+    const read = () => {
+      const rect = chip?.getBoundingClientRect();
+      return {
+        fontSize: chip ? parseFloat(getComputedStyle(chip).fontSize) : null,
+        rect: rect ? `${Math.round(rect.width)}×${Math.round(rect.height)}` : null,
+        scrollW: root.scrollWidth,
+        innerW: window.innerWidth,
+        clipped: chip ? chip.scrollWidth > chip.clientWidth + 1 : false,
+      };
+    };
+    const before = read();
+    root.style.fontSize = "200%";
+    await new Promise((r) => setTimeout(r, 400));
+    const after = read();
+    root.style.fontSize = "";
+    return { before, after };
+  });
+  const textZoomScales = textZoom.after.fontSize > textZoom.before.fontSize * 1.5;
+  check(
+    "SW-11 纯文字放大（根字号 200%）：实测 px 计量下排版不随字体设置变化（页面缩放才是覆盖路径），且放大后不溢出/不截断",
+    textZoom.after.scrollW <= textZoom.after.innerW && !textZoom.after.clipped,
+    `读数条字号 ${textZoom.before.fontSize}→${textZoom.after.fontSize} px（随字体设置变化=${textZoomScales}）；` +
+      `横向 ${textZoom.after.scrollW}/${textZoom.after.innerW}；文字被截断=${textZoom.after.clipped}；` +
+      `机制：浏览器页面缩放 200% 已由「720×450 @DPR2」用例覆盖；字体大小设置/读屏未测`,
+  );
+
+  /**
+   * SW-11 第 1 条：窄屏下文档目录**不再长期占满首屏**。
+   * 判据是"正文出现在首屏内"，而不是"没有横向滚动条"——后者不能说明首屏有没有内容。
+   */
+  const narrowDocs = await (async () => {
+    const saved = mobilePage.viewport();
+    await mobilePage.setViewport({ width: 390, height: 844, deviceScaleFactor: 1 });
+    await gotoSafe(mobilePage);
+    await mobilePage.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 60000 });
+    await mobilePage.evaluate(() => document.getElementById("btn-docs").click());
+    await mobilePage.waitForFunction(() => !document.getElementById("docs-overlay").hidden);
+    /**
+     * 判"目录是不是真的画出来了"必须用 `checkVisibility()`：
+     * 收起的 <details> 里子元素仍保留布局盒（`getClientRects()` 照样非空），只看矩形会被假象骗过。
+     */
+    const probe = () => mobilePage.evaluate(() => {
+      const details = document.getElementById("toc-disclosure");
+      const article = document.querySelector(".doc-page:not([hidden])");
+      const links = [...document.querySelectorAll(".module-link")];
+      const visible = (el) => (typeof el.checkVisibility === "function" ? el.checkVisibility() : el.getClientRects().length > 0);
+      return {
+        open: details?.open ?? null,
+        current: document.getElementById("toc-current")?.textContent?.trim() ?? "",
+        activeLabel: links.find((b) => b.classList.contains("active"))?.querySelector(".mod-name")?.textContent?.trim() ?? "",
+        articleTop: Math.round(article?.getBoundingClientRect().top ?? -1),
+        viewportH: window.innerHeight,
+        listRendered: links.some(visible),
+        listH: Math.round(document.querySelector(".toc-list")?.getBoundingClientRect().height ?? -1),
+        navH: Math.round(document.querySelector(".docs-toc")?.getBoundingClientRect().height ?? -1),
+      };
+    });
+    const collapsed = await probe();
+    // 键盘开合（<summary> 原生支持 Enter/Space）→ 目录出现且有高度上限；再选一个模块自动收起
+    await mobilePage.evaluate(() => document.querySelector("#toc-disclosure > summary")?.focus());
+    await mobilePage.keyboard.press("Enter");
+    await new Promise((r) => setTimeout(r, 300));
+    // 先量"展开后的列表"，再点模块（点击会触发自动收起，两个状态不能混在同一个读取里）
+    const expanded = await probe();
+    await mobilePage.evaluate(() => document.querySelector('.module-link[data-doc="glossary"]')?.click());
+    await new Promise((r) => setTimeout(r, 300));
+    const afterPick = await probe();
+    await mobilePage.evaluate(() => document.getElementById("btn-docs").click());
+    await mobilePage.setViewport(saved);
+    return { collapsed, expanded, afterPick };
+  })();
+  check(
+    "SW-11 窄屏（390）：文档目录默认收起、首屏即见正文、可键盘展开；选中模块后自动收起",
+    narrowDocs.collapsed.open === false &&
+      narrowDocs.collapsed.listRendered === false &&
+      narrowDocs.collapsed.articleTop < narrowDocs.collapsed.viewportH &&
+      narrowDocs.collapsed.current.length > 0 && narrowDocs.collapsed.current === narrowDocs.collapsed.activeLabel &&
+      narrowDocs.expanded.open === true && narrowDocs.expanded.listRendered === true &&
+      narrowDocs.expanded.listH <= narrowDocs.expanded.viewportH * 0.5 &&
+      narrowDocs.afterPick.open === false &&
+      narrowDocs.afterPick.current === narrowDocs.afterPick.activeLabel &&
+      narrowDocs.afterPick.articleTop < narrowDocs.afterPick.viewportH,
+    `收起时：目录 open=${narrowDocs.collapsed.open}、目录条目已渲染=${narrowDocs.collapsed.listRendered}、` +
+      `正文 top=${narrowDocs.collapsed.articleTop}/${narrowDocs.collapsed.viewportH} px、` +
+      `当前模块「${narrowDocs.collapsed.current}」= 高亮项「${narrowDocs.collapsed.activeLabel}」、导航高 ${narrowDocs.collapsed.navH} px；` +
+      `键盘展开后：渲染=${narrowDocs.expanded.listRendered}、列表高 ${narrowDocs.expanded.listH}/${narrowDocs.expanded.viewportH} px；` +
+      `选中后：open=${narrowDocs.afterPick.open}、标签「${narrowDocs.afterPick.current}」、正文 top=${narrowDocs.afterPick.articleTop}`,
   );
   await mobilePage.close();
 
@@ -4637,17 +5467,23 @@ try {
     });
   });
   await gotoSafe(serialPage);
-  await serialPage.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 15000 });
+  await serialPage.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 60000 });
   await serialPage.evaluate(() => {
     const sec = document.getElementById("sec-imu");
     if (sec?.classList.contains("collapsed")) sec.querySelector(".panel-toggle").click();
   });
   await serialPage.click("#btn-serial");
-  await serialPage.waitForFunction(() => document.body.dataset.imuMode === "real", { timeout: 5000 });
+  await serialPage.waitForFunction(() => document.body.dataset.imuMode === "real", { timeout: 30000 });
   await serialPage.waitForFunction(
     () => parseFloat((document.getElementById("clock")?.textContent ?? "").replace("t = ", "")) > 1,
-    { timeout: 8000 },
+    { timeout: 30000 },
   );
+  // 等**目标状态**（帧率读数出现 = 假串口的数据真的在流），而不是等一个固定时刻就断言。
+  // 实测第 2 轮出现过「时钟已过 1 s 但状态还停在『等待数据帧…』」——那是数据流启动稍慢，
+  // 不是产品缺陷；瞄准状态等待既能容忍慢，也能在真卡死时（15 s 内一直没有帧）如实判失败。
+  try {
+    await serialPage.waitForFunction(() => /帧\/s/.test(document.getElementById("serial-status")?.textContent ?? ""), { timeout: 15000 });
+  } catch { /* 下面按实际读数判定并给出可读原因 */ }
   const serial = await serialPage.evaluate(() => ({
     mode: document.body.dataset.imuMode,
     clock: document.getElementById("clock")?.textContent,
@@ -4687,6 +5523,8 @@ try {
   } // devices 段结束
 } catch (err) {
   failures++;
+  aborted = true;
+  abortReason = err instanceof Error ? err.message : String(err);
   if (isInfraError(err)) {
     // 别把「浏览器把页面回收了」说成产品缺陷，也别让它看起来像普通失败项
     browserRestarts++;
@@ -4719,4 +5557,39 @@ if (browserRestarts > 0) {
 }
 console.log(failures === 0 ? `\n浏览器冒烟通过 ✅（${passes} 项）` : `\n${failures} 项失败 ❌`);
 if (SHARD !== "all") console.log(`（分片 SMOKE_SHARD=${SHARD}）`);
+/**
+ * 结构化结果（SW-07）：驱动器拿它比对**完整集合**——逐项状态、跳过项、重复项，
+ * 以及"这次到底跑完了没有"。数 `[PASS]` 行做不到这一点：少跑几项时行数照样"看着不少"，
+ * 而一个被异常打断的进程也能攒出几十行 PASS。
+ */
+const structured = {
+  schemaVersion: 1,
+  shard: SHARD,
+  url: APP_URL,
+  browserVersion,
+  viewport: VIEWPORT,
+  viewportEnv: process.env.SMOKE_VIEWPORT ?? null,
+  completed: !aborted && browserRestarts === 0,
+  aborted,
+  abortReason: abortReason || null,
+  infraRestarts: browserRestarts,
+  executed: checkResults.length,
+  passed: passes,
+  failed: failures,
+  skipped: skippedChecks,
+  duplicateIds,
+  identity: { localBuildId: identity.localBuildId, pageBuildId: identity.pageBuildId, available: identity.available, reason: identity.reason },
+  results: checkResults,
+};
+const resultPath = process.env.SMOKE_RESULT ? resolve(process.env.SMOKE_RESULT) : null;
+if (resultPath) {
+  try { writeFileSync(resultPath, `${JSON.stringify(structured, null, 2)}\n`, "utf8"); }
+  catch (err) {
+    console.error(`[FAIL] 结构化结果写盘失败（${resultPath}）：${err instanceof Error ? err.message : String(err)}`);
+    failures++;
+    structured.failed = failures;
+  }
+}
+// 单行标记：驱动器没拿到结果文件时，也能从日志里取到同一份事实（不靠解析 PASS 行数）
+console.log(`[SMOKE-RESULT] ${JSON.stringify({ shard: SHARD, completed: structured.completed, executed: structured.executed, passed: passes, failed: failures, skipped: skippedChecks.length, duplicates: duplicateIds.length, result: resultPath })}`);
 process.exit(failures === 0 ? 0 : 1);

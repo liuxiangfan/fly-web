@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { extractCurrentRegion, validateGateManifest, validateStatusClaims } from './status-contract.mjs';
+import { extractCurrentRegion, validateGateManifest, validateStatusClaims, validateDocFacts } from './status-contract.mjs';
 const actual={experiments:19,demos:8,selftest:124,smoke:88,docpages:15,scene:10,html:15,doc:4,budget:13};
 const pkg={check:'npm run selftest && npm run scenecheck && npm run htmlcheck && npm run doccheck && npm run contracts && npm run statuscheck'};
 const manifest='<!-- verify: check=153 contracts=yes status=yes smoke=88 budget=13 -->\n';
@@ -34,6 +34,34 @@ test('current region may not smuggle unverifiable pass counts',()=>{
   assert.ok(validateGateManifest(doc(current+'冒烟 88 PASS / 0 FAIL\n'),actual,pkg).length===0,'冒烟实测数允许出现');
   assert.ok(validateGateManifest(doc(current+'契约 119 PASS\n'),actual,pkg).length>0);
 });
+const factsBody = (body = '数值自检 124 + 场景几何 10 + HTML 契约 15 + 文档基准 4 → 13 项产物预算 → 88 项浏览器冒烟（app / devices 两片）\n' + manifest) =>
+  `head\n<!-- facts:begin -->\n${body}<!-- facts:end -->\ntail\n`;
+
+test('README / in-app facts region is machine-checked, and prose numbers must match the same measurements', () => {
+  assert.deepEqual(validateDocFacts(factsBody(), actual, pkg, 'README'), []);
+  // 历史表格里的旧数字不算漂移（只在 facts 区域内校验）
+  assert.deepEqual(validateDocFacts(`历史：80 项自检、9 项上限、51 项冒烟\n${factsBody()}`, actual, pkg, 'README'), []);
+  for (const text of [
+    factsBody().replace('数值自检 124','数值自检 125'),            // README 语序：数值自检 N
+    factsBody().replace('数值自检 124','125 项数值自检'),           // 应用内语序：N 项数值自检
+    factsBody().replace('13 项产物预算','9 项产物预算'),
+    factsBody().replace('88 项浏览器冒烟','91 项浏览器冒烟'),
+    factsBody().replace('场景几何 10','场景几何 9'),
+    factsBody().replace('<!-- facts:begin -->',''),                 // 缺 facts 区域
+    factsBody() + '<!-- facts:begin -->x<!-- facts:end -->',        // 区域必须唯一
+    factsBody().replace(manifest,''),                               // 缺清单
+    factsBody().replace('check=153','check=154'),                   // 清单与实测不一致
+    factsBody().replace('budget=13','budget=12'),
+  ]) assert.ok(validateDocFacts(text, actual, pkg, 'README').length > 0, text.slice(0, 60));
+  // 英文 README 的同义写法同样受管
+  const en = `head\n<!-- facts:begin -->\n124 numeric + 10 scene-geometry + 15 HTML-contract + 4 doc-benchmark checks → 13 bundle budgets → 88 browser checks (two shards)\n${manifest}<!-- facts:end -->\n`;
+  assert.deepEqual(validateDocFacts(en, actual, pkg, 'README.en'), []);
+  assert.ok(validateDocFacts(en.replace('88 browser checks','91 browser checks'), actual, pkg, 'README.en').length > 0);
+  assert.ok(validateDocFacts(en.replace('13 bundle budgets','9 ceilings'), actual, pkg, 'README.en').length > 0);
+  // 「N 项上限」这类散落数字：直接抓 README 里那两处真实漂移
+  assert.ok(validateDocFacts(factsBody('产物预算（8 项上限）\n'), actual, pkg, 'README').length > 0);
+});
+
 test('boundaries are strict, unique, correctly ordered and non-nested',()=>{
   for(const text of [doc().replace('<!-- current:begin -->',''),doc().replace('<!-- current:end -->',''),doc()+'<!-- current:begin -->x<!-- current:end -->',doc().replace('<!-- current:begin -->','<!-- current:end -->'),doc().replace('<!-- history:end -->',''),doc().replace('<!-- current:end -->','<!-- history:end --><!-- current:end -->'),doc().replace(current,'<!-- history:begin -->x<!-- history:end -->'+current),doc().replace('<!-- current:begin -->','<!-- current:beginX -->')]) assert.throws(()=>extractCurrentRegion(text));
 });

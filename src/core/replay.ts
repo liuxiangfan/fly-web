@@ -74,6 +74,14 @@ interface ColSpec {
   axis?: "x" | "y" | "z";
   /** 该列数值需要乘以的系数，换算到 °/s、m/s²、μT、秒 */
   scale: number;
+  /**
+   * 时间列的单位**来源**：显式（列名声明 s/ms/us）还是未知（裸 t/time/timestamp）。
+   *
+   * 为什么必须把"来源"和"换算系数"分开存：只留系数的话，后面就无法区分
+   * 「列名已经声明毫秒」与「裸列名按秒解释」——两者都会得到同一个 scale，
+   * 于是一个 19 秒的低频日志会被"毫秒被当成秒"的启发式再除 1000（复核 SW-01）。
+   */
+  timeUnit?: "s" | "ms" | "us" | "unknown";
 }
 
 function classify(header: string): ColSpec | null {
@@ -83,8 +91,15 @@ function classify(header: string): ColSpec | null {
   // 时间列：必须**整体**是时间名的有限形式。早期版本用「列名里含 _ms」判时间，
   // 结果把 accel_x_ms2 也当成了时间列（陀螺/加计映射随之丢失）——这类宽匹配是陷阱。
   if (/^(t|time|timestamp|tick|t_sec|t_s|t_ms|t_us|tsec|tms|time_s|time_ms|time_us|tick_ms)$/.test(k)) {
-    const ms = /_?ms$/.test(k) || k === "tick" || k === "tms" || k === "tickms";
-    return { role: "t", scale: ms ? 0.001 : 1 };
+    // 显式单位优先：声明了 s/ms/us 就严格按它换算，**禁止**后续启发式再改一次。
+    // 裸 t / time / timestamp 单位未知，允许按中位间隔推断（推断结果写进 notes）。
+    const timeUnit: "s" | "ms" | "us" | "unknown" =
+      /_?us$/.test(k) ? "us"
+        : /_?ms$/.test(k) || k === "tick" || k === "tms" || k === "tickms" ? "ms"
+          : k === "t" || k === "time" || k === "timestamp" ? "unknown"
+            : "s";
+    const scale = timeUnit === "ms" ? 0.001 : timeUnit === "us" ? 1e-6 : 1;
+    return { role: "t", scale, timeUnit };
   }
   // 轴
   const axis: "x" | "y" | "z" | undefined = /(^|[^a-z])x($|[^a-z])|_x$|^gx$|^ax$|^mx$/.test(k)
@@ -115,6 +130,37 @@ function medianDelta(times: number[]): number {
   for (let i = 1; i < times.length; i++) d.push(times[i] - times[i - 1]);
   d.sort((a, b) => a - b);
   return d[Math.floor(d.length / 2)];
+}
+
+/**
+ * 时间列单位的可读名（写进 notes，让"猜了什么单位"在界面上可见）。
+ * 参数写成完整联合类型：调用点因为初始值被 TS 收窄成字面量，直接比较会报"无重叠"。
+ */
+export function labelOfTimeUnit(unit: "s" | "ms" | "us" | "unknown"): string {
+  switch (unit) {
+    case "s": return "秒";
+    case "ms": return "毫秒";
+    case "us": return "微秒";
+    default: return "未知";
+  }
+}
+
+/**
+ * 有效时间轴 = 逐帧**运行最大值**（单调不降）。
+ * 时间列允许少量回退（见 `parseImuCsv` 的容忍策略），但回退段不能再被积一次：
+ * 长度、进度与每帧 dt 必须共用这一条轴，否则「时长」与「实际积分」会各说各话。
+ * 这里导出为纯函数，让解析器的时长提示与 `ReplayPlayer` 用**同一份实现**，
+ * 而不是各自再写一遍"末帧减首帧"。
+ */
+export function monotonicTimelineMs(tMs: readonly number[]): number[] {
+  const out = new Array<number>(tMs.length);
+  let prev = tMs.length > 0 ? tMs[0]! : 0;
+  for (let i = 0; i < tMs.length; i++) {
+    const t = Math.max(prev, tMs[i]!);
+    out[i] = t;
+    prev = t;
+  }
+  return out;
 }
 
 /**
@@ -245,11 +291,15 @@ export function parseImuCsv(text: string, maxRows = 200000): ReplayParseResult {
   // 索引：角色 → 轴 → 列号
   const idx: Record<string, Partial<Axis>> = { t: {}, gyro: {}, accel: {}, mag: {} };
   const scaleOf: Record<string, Partial<Axis>> = { t: {}, gyro: {}, accel: {}, mag: {} };
+  /** 时间列的单位来源（显式 s/ms/us 或未知）；决定是否允许"毫秒被当成秒"的启发式 */
+  let timeUnit: "s" | "ms" | "us" | "unknown" = "unknown";
   colRoles.forEach((spec, i) => {
     if (!spec) return;
     if (spec.role === "t") {
       idx.t.x = i;
       scaleOf.t.x = spec.scale;
+      // 无表头路径的 ColSpec 不带 timeUnit → 视为"未知"，与裸 t/time 同样允许启发式
+      timeUnit = spec.timeUnit ?? "unknown";
     } else if (spec.axis) {
       idx[spec.role][spec.axis] = i;
       scaleOf[spec.role][spec.axis] = spec.scale;
@@ -326,8 +376,12 @@ export function parseImuCsv(text: string, maxRows = 200000): ReplayParseResult {
     return { frames, mapping, skipped, invalidRows, hasTruth, imuCalibrated, notes, error: `只解析到 ${frames.length} 帧，太少（至少 20 帧才能看出算法行为）` };
   }
 
-  // 时间轴：先按列名给的单位解释；若中位采样间隔 > 0.5 s（几乎不可能是真实采样间隔，
-  // 更可能是毫秒被当成秒），就按毫秒重解释一次。两种情况的假设都写进 notes。
+  // 时间轴：**声明了单位就严格按它解释**，只有单位未知的裸列名（t / time / timestamp）
+  // 和无表头文件才允许"中位间隔 >0.5 s 说明其实是毫秒"的启发式。
+  //
+  // 为什么必须这样分开（复核 SW-01）：表头写 `t_s`、时间 0…19（1 Hz）的日志曾被启发式
+  // 再除 1000，19 秒变成 0.019 秒——时长、积分与收敛判断一起失真。
+  // 单位来源与推断结果都写进 notes，"猜错单位不会报错但看起来不对"这条约定仍然成立。
   const checkMonotonic = (): boolean => {
     let bad = 0;
     for (let i = 1; i < frames.length; i++) if (frames[i].tMs <= frames[i - 1].tMs) bad++;
@@ -341,16 +395,33 @@ export function parseImuCsv(text: string, maxRows = 200000): ReplayParseResult {
     }
     notes.push(`时间列有 ${bad} 处回退（已容忍，回放时按 frameDtSec 夹紧）`);
   }
-  let dtMed = medianDelta(frames.map((f) => f.tMs)) / 1000;
-  if (dtMed > 0.5) {
-    for (const f of frames) f.tMs = f.tMs / 1000;
-    dtMed = medianDelta(frames.map((f) => f.tMs)) / 1000;
-    notes.push("时间列按**毫秒**重新解释（按秒算出的中位采样间隔超过 0.5 s，不合理）");
+  const timeUnitLabel = labelOfTimeUnit(timeUnit);
+  const dtMed = medianDelta(frames.map((f) => f.tMs)) / 1000;
+  if (timeUnit === "unknown") {
+    // 单位未知的裸列名（t / time / timestamp）与无表头文件：**按约定当秒解释，不静默改写**。
+    //
+    // 为什么不再"中位间隔 >0.5 s 就除以 1000"：那种启发式无法区分"1 Hz 的秒"与"每点 1000 ms 的毫秒"，
+    // 只要猜错就把 19 秒变成 0.019 秒（或反过来），而猜错时用户看不出哪里不对。
+    // 现在改为：按秒解释 + 给出可操作提示（要毫秒就写 t_ms / time_ms），把选择权交回用户。
+    if (dtMed > 0.5) {
+      notes.push(
+        `时间列未声明单位：按**秒**解释（中位间隔 ${dtMed.toFixed(2)} s）。` +
+          `如果这份日志的时间其实是毫秒，请把时间列表头写成 t_ms / time_ms（本装置不替用户猜单位）`,
+      );
+    } else {
+      notes.push(`时间列未声明单位：按**秒**解释（中位间隔 ${(dtMed * 1000).toFixed(2)} ms）`);
+    }
+  } else if (dtMed > 0.5) {
+    notes.push(`时间列已声明为${timeUnitLabel}：即使中位间隔 ${dtMed.toFixed(2)} s（低频日志）也按声明解释，不再按毫秒重算`);
   }
-  const span = (frames[frames.length - 1].tMs - frames[0].tMs) / 1000;
+  // 时长口径与 ReplayPlayer 共用同一条有效时间轴（回退段不被重复计入），不在这里另算"末帧减首帧"
+  const timeline = monotonicTimelineMs(frames.map((f) => f.tMs));
+  const span = (timeline[timeline.length - 1]! - timeline[0]!) / 1000;
+  const rawSpan = (frames[frames.length - 1]!.tMs - frames[0]!.tMs) / 1000;
   notes.push(
-    `时间轴：${frames.length} 帧 / ${span.toFixed(2)} s，中位采样间隔 ${(dtMed * 1000).toFixed(2)} ms（约 ${(1 / dtMed).toFixed(0)} Hz）`,
+    `时间轴：${frames.length} 帧 / ${span.toFixed(2)} s，中位采样间隔 ${(dtMed * 1000).toFixed(2)} ms（约 ${dtMed > 0 ? (1 / dtMed).toFixed(0) : "?"} Hz）`,
   );
+  if (rawSpan !== span) notes.push(`时间列有回退：有效时长按单调覆盖计（原始首末差 ${rawSpan.toFixed(2)} s）`);
   if (!frames[0].hasMag && !frames.some((f) => f.hasMag)) {
     notes.push("没有磁力计列：MARG 对这组数据无效（偏航将只能靠陀螺积分）");
   }
