@@ -157,6 +157,21 @@ for (const e of entries) {
     }
     const git = gitRef.exec(ref);
     if (git) {
+      // 先分清楚是"本地没有这个提交对象"还是"该提交里没有这个文件"：
+      // 浅克隆（CI 的 checkout 默认 depth=1）会缺历史对象，那是环境问题，不该被当成"引用造假"，
+      // 也不能悄悄跳过——给出一条能直接照做的修复指令。
+      const hasCommit = (() => {
+        try {
+          execFileSync("git", ["cat-file", "-e", `${git[2]}^{commit}`], { cwd: root, stdio: "ignore" });
+          return true;
+        } catch {
+          return false;
+        }
+      })();
+      if (!hasCommit) {
+        fail(`${e.id} 的 supersedes ${ref} 无法核对：本地仓库里没有提交 ${git[2].slice(0, 12)}（多为浅克隆；把 checkout 的 fetch-depth 设为 0，或改用完整克隆后再跑）`);
+        continue;
+      }
       try {
         execFileSync("git", ["cat-file", "-e", `${git[2]}:${git[1]}`], { cwd: root, stdio: "ignore" });
       } catch {

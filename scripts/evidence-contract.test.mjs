@@ -207,7 +207,15 @@ test('结构层：空 entries、重复 current、断裂 supersedes 都要给出�
   s.commit([entry(s, 'software-soak-batch', f, { supersedes: ['git:docs/generated/nope.json@a1b2c3d'] })]);
   const ghost = s.run();
   assert.equal(ghost.code, 1, ghost.out);
-  assert.ok(ghost.out.includes('找不到'), ghost.out);
+  // 夹具仓库里没有这个提交 → 报"无法核对（多为浅克隆）"并要求 fetch-depth: 0
+  assert.ok(ghost.out.includes('fetch-depth'), ghost.out);
+
+  // 提交存在、但该提交里没有这个文件 → 才是"历史引用造假"
+  const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: s.root, encoding: 'utf8' }).trim();
+  s.commit([entry(s, 'software-soak-batch', f, { supersedes: [`git:docs/generated/nope.json@${head}`] })]);
+  const missingPath = s.run();
+  assert.equal(missingPath.code, 1, missingPath.out);
+  assert.ok(missingPath.out.includes('在该提交里找不到'), missingPath.out);
 });
 
 test('视觉证据：像素哈希错、current 缺图都必须拒；历史条目缺图只提示', () => {

@@ -30,7 +30,11 @@ jobs:
   gate:
     runs-on: windows-latest
     steps:
+      # fetch-depth: 0：证据索引里的 supersedes 用 `git:<path>@<sha>` 指向历史提交，
+      # 浅克隆（默认 depth=1）里没有那些对象，校验器会明确拒绝而不是假装通过。
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
