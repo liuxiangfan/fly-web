@@ -7,13 +7,24 @@ import { writeProvenance } from "./scripts/build-provenance.mjs";
 /**
  * 构建标识：线上页面要能回答「我现在看的是哪个提交」。
  * CI 里优先用 GITHUB_SHA；本地用 git 的短 SHA；再退化成时间戳（例如无 .git 的打包环境）。
+ *
+ * `builtAt` 必须**可复现**（SW-06 的产物绑定靠它）：它会被注入 index.html 与页脚，
+ * 用 `new Date()` 的话同一份源码每构建一次 `distHash` 就变一次，于是"证据对应的那份产物"
+ * 永远只能存活到下一次构建——重建一次就把 600 s 长稳的结论判成失效，这是把"可复现"当成运气。
+ * 优先级：显式 `BUILD_TIME`（重放/对齐用）→ git 提交时间（同一提交恒定）→ 当前时间（无 git 时）。
  */
 function buildStamp(): { commit: string; builtAt: string } {
   let commit = process.env.GITHUB_SHA?.slice(0, 12) ?? "";
   if (!commit) {
     try { commit = execFileSync("git", ["rev-parse", "--short=12", "HEAD"], { encoding: "utf8" }).trim(); } catch { /* 无 git */ }
   }
-  return { commit: commit || "unknown", builtAt: new Date().toISOString() };
+  const fromEnv = process.env.BUILD_TIME?.trim();
+  let builtAt = fromEnv && !Number.isNaN(Date.parse(fromEnv)) ? new Date(fromEnv).toISOString() : "";
+  if (!builtAt) {
+    // 提交时间：`%cI` 是 ISO 8601（带时区），同一提交永远相同 → 构建可复现
+    try { builtAt = new Date(execFileSync("git", ["log", "-1", "--format=%cI"], { encoding: "utf8" }).trim()).toISOString(); } catch { /* 无 git */ }
+  }
+  return { commit: commit || "unknown", builtAt: builtAt || new Date().toISOString() };
 }
 const stamp = buildStamp();
 

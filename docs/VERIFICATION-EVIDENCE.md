@@ -27,7 +27,7 @@ commit SHA 只能指向"某个提交"：**改了没提交时它会指向上一�
 | 层 | 字段／机制 | 作用 |
 |---|---|---|
 | 源码 | `sourceDigest`（`scripts/source-digest.mjs`） | 只覆盖**参与构建的产品输入**：`src/`、`public/`、`index.html`、`package.json`/lock、`tsconfig.json`、`vite.config.ts`、`wrangler.jsonc`。文档与量具（`scripts/`）不在内——补一句说明、修一个用例不该让 600 s 结论失效 |
-| 产物 | `distHash` + `buildId`（`scripts/build-provenance.mjs`） | 构建结束时写 `dist/build-provenance.json`：源码摘要 + 产物摘要 + 工具版本；`distHash` 只有一个算法（相对路径 + 内容，排除溯源文件自身） |
+| 产物 | `distHash` + `buildId`（`scripts/build-provenance.mjs`） | 构建结束时写 `dist/build-provenance.json`：源码摘要 + 产物摘要 + 工具版本；`distHash` 只有一个算法（相对路径 + 内容，排除溯源文件自身）。**构建是可复现的**：注入页面的 `builtAt` 取 git 提交时间（可用 `BUILD_TIME` 重放），同一份源码两次构建 `distHash` 相同——否则"重建一次"就会把 600 s 长稳的结论误判成失效 |
 | 被测服务 | 页面自报 `buildId` + 采集前后核对（`scripts/served-build.mjs`） | 采集前取回被测服务自报的 `build-provenance.json` 并与本地比对（页面页脚也显示 `buildId`）；采集结束后重算源码与产物摘要，变了就**整次作废**，不给旧结果贴新摘要 |
 
 验收模式：
