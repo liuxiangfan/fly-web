@@ -121,13 +121,20 @@ jobs:
           echo "部署后 smoke 连续 3 次失败——线上产物与本次提交不一致，或核心功能已损坏"
           exit 1
 
+      - name: List post-deploy evidence
+        if: always()
+        shell: bash
+        run: ls -la .audit-smoke || true
+
       - name: Upload post-deploy evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: postdeploy-evidence
           path: .audit-smoke/postdeploy-*.json
-          if-no-files-found: ignore
+          # .audit-smoke 是点开头目录：不显式允许隐藏文件时，上传动作会"找不到文件"
+          include-hidden-files: true
+          if-no-files-found: warn
 
   # 完整浏览器套件（107 项）：**部署后**跑，结果如实记录，但**不阻断部署**。
   # 判定口径由 scripts/smoke-verdict.mjs 给出（assert / incomplete / env / unknown）；

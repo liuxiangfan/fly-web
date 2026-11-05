@@ -13,6 +13,7 @@
  */
 import puppeteer from "puppeteer-core";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { sameCommit } from "./served-build.mjs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -88,7 +89,8 @@ try {
 
   const commit = String(before.build?.commit ?? "").toLowerCase();
   const commitOk = commit.length > 0 && commit !== "unknown";
-  const expectOk = expect ? commit.startsWith(expect) : true;
+  // 页脚只有 12 位、--expect 是完整 40 位：必须双向前缀比较（旧实现因此每次部署都误判失败）
+  const expectOk = expect ? sameCommit(commit, expect) : true;
   const clockOk = after.clock > before.clock + 1;
   const rowsOk = after.rows >= 5;
   const stampOk = /[0-9a-f]{7,}/i.test(before.stamp);

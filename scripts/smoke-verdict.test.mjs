@@ -13,6 +13,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { attributionOf, entryFor, pickStabilityJobs, roundResultProblems, smokeStepProblems, summaryProblems } from "./ci-registration.mjs";
 import { roundVerdict } from "./smoke-verdict.mjs";
+import { sameCommit } from "./served-build.mjs";
 import { coverageProblems, manifestDriftProblems, manifestShapeProblems, parseDeclaredChecks, runProblems } from "./smoke-manifest.mjs";
 
 const SHA = "a".repeat(40);
@@ -162,6 +163,20 @@ test("登记条目：current 与内容校验绑定；legacy 登记必须显式�
   assert.equal(legacy.provenanceComplete, false, "拿不到产物的旧 run 不许声称溯源完整");
   assert.equal(legacy.result, "FAIL", "内容校验不过就只能是失败观测");
   assert.equal(legacy.buildId, null);
+});
+
+test("部署后 smoke 的提交比较：12 位页脚 vs 40 位 SHA 必须判等（旧实现 startsWith 方向反了）", () => {
+  const full = "00283f8208be70a445e856323ee32017bfc26574";
+  assert.equal(sameCommit("00283f8208be", full), true, "页脚 12 位与完整 40 位是同一个提交");
+  assert.equal(sameCommit(full, "00283f8208be"), true, "反方向同样成立");
+  // 只有 12 位可比时，天然只能核前 12 位（这是页脚标识的精度上限，写清而不是假装更强）
+  assert.equal(sameCommit("00283f8208be", "00283f8208be70a445e856323ee32017bfc26575"), true, "12 位前缀相同只能判等");
+  assert.equal(sameCommit("00283f8208bf", "00283f8208be70a445e856323ee32017bfc26574"), false, "前 12 位不同则不是同一提交");
+  assert.equal(sameCommit("830e4e3786bc", full), false);
+  assert.equal(sameCommit("", full), false);
+  assert.equal(sameCommit("00283f8", full), true, "7 位短 SHA 也接受");
+  assert.equal(sameCommit("00283f", full), false, "不足 7 位不判等（太容易撞）");
+  assert.equal(sameCommit("unknown", full), false);
 });
 
 test("清单比对：缺项、多出、跳过、重复都要点名；两片合起来必须恰好覆盖清单", () => {

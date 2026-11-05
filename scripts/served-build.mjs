@@ -71,11 +71,26 @@ export function identityProblems({ localProvenance, served, pageBuild, distDir }
     }
     const pageCommit = String(pageBuild.commit ?? "").toLowerCase();
     const commit = String(localProvenance.commit ?? "").toLowerCase();
-    if (commit && pageCommit && !pageCommit.startsWith(commit.slice(0, 7))) {
+    if (commit && pageCommit && !sameCommit(pageCommit, commit)) {
       problems.push(`页面页脚提交号与产物溯源不一致（页面 ${short(pageCommit, 12)} / 溯源 ${short(commit, 12)}）`);
     }
   }
   return problems;
+}
+
+/**
+ * 两个提交标识是否指向同一个提交（**双向**前缀比较）。
+ *
+ * 为什么必须有这条：页面页脚/`attitudeDemo.build()` 里的 commit 是 `GITHUB_SHA.slice(0, 12)`，
+ * 而部署 workflow 传的是完整 40 位 SHA。旧实现写的是 `commit.startsWith(expect)`——
+ * 12 位永远不可能以 40 位开头，于是**每次部署后 smoke 都判失败**（线上其实完全正常）。
+ * 规则：两边都必须是 ≥7 位的十六进制，且一方是另一方的前缀。
+ */
+export function sameCommit(a, b) {
+  const norm = (v) => String(v ?? "").trim().toLowerCase();
+  const x = norm(a), y = norm(b);
+  if (!/^[0-9a-f]{7,40}$/.test(x) || !/^[0-9a-f]{7,40}$/.test(y)) return false;
+  return x.startsWith(y) || y.startsWith(x);
 }
 
 /** 采集开始时记下的身份快照；结束时重算，变了就把整次验收作废。 */
