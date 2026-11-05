@@ -82,11 +82,12 @@
       "result": "PASS",
       "provenanceComplete": true,
       "localOnly": false,
-      "current": true,
+      "current": false,
       "supersedes": [
         "postdeploy-830e4e3-early-report"
       ],
-      "notes": "HTTP 200; page-reported build commit equals the deployed 830e4e3; clock advanced; five estimator rows; canvas present; console clean. Records the browser version since this re-run."
+      "notes": "HTTP 200; page-reported build commit equals the deployed 830e4e3; clock advanced; five estimator rows; canvas present; console clean. Records the browser version since this re-run. 已由 postdeploy-95a8041 取代（线上构建 95a8041）。",
+      "supersededBy": "postdeploy-95a8041"
     },
     {
       "id": "ci-deploy-830e4e3",
@@ -439,6 +440,21 @@
       "supersedes": [],
       "runs": null,
       "notes": "本机采集（2026-11-05）：由 scripts/register-local-evidence.mjs 从报告正文读取事实后登记；同类型同平台的旧 current 已自动让位为历史观测。完整集合/判据由 visual-screenshot 的解析器复核。 PNG 位于被 gitignore 的 screenshots/（不随仓库分发），故标 localOnly: true；报告 JSON 随仓库版本化，像素哈希需在采集机复核。 取代 visual-current-a958b348（其报告路径已被本轮覆盖，无法保留为可核条目）。"
+    },
+    {
+      "id": "postdeploy-95a8041",
+      "kind": "postdeploy-smoke",
+      "path": "docs/generated/postdeploy-2026-11-05-95a8041-live.json",
+      "sha256": "82ff5f51a6b50760f48907a6f78c3c9fe13edd4e851c0a9f557954f3e892ac18",
+      "sourceCommit": "95a804131d78591d2b0f319e2e20b1c5affc40f8",
+      "externalRunId": "42040828875",
+      "browserVersion": "Chrome/156.0.8078.80",
+      "result": "PASS",
+      "provenanceComplete": true,
+      "localOnly": false,
+      "current": true,
+      "supersedes": [],
+      "notes": "线上部署后 smoke（GitHub Actions run 42040828875 的 deploy 作业，Windows runner）：HTTP 200、页脚构建标识 95a804131d78 = 本次提交、产物 buildId a7077ce19adc-9cc94cd591b719b1、时钟推进、评测表 5 行、canvas 有 WebGL、控制台零错误。本轮修掉了部署后 smoke 的提交比较缺陷（页脚 12 位 vs workflow 40 位，旧实现 startsWith 方向反了，导致每次部署都被误判失败）。"
     }
   ]
 }

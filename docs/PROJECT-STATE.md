@@ -10,7 +10,7 @@
 
 纯前端四元数姿态解算教学软件：多数据源与离线回放、五算法数字对照、Three.js 姿态／万向节／四元数视图、校准数学、INS、批量评测与应用内教材。
 
-- 在线入口：<https://fly_web.070616.xyz>；上次报告记录线上构建 `830e4e3786bc`，本轮没有推送，线上仍是旧构建。
+- 在线入口：<https://fly_web.070616.xyz>；本轮已部署，线上构建 `95a804131d78`（部署后 smoke 实测通过）。
 - 坐标：世界 NED、机体 FRD，四元数 `q` 为机体系→世界系；显示 X=北、Y=上、Z=东。
 - 技术栈：Vite + TypeScript（无框架）+ Three.js；KaTeX 字体；手写 Canvas 图表。
 - **本阶段范围**：只支持 Windows 本机运行（不追求跨平台），硬件部分不在范围内。
@@ -36,6 +36,8 @@
 - 稳定性 **5×(app+devices)**：每轮 **107 项完整集合**、零失败零 warning 零重启——`generated/stability-local-windows-777bf037.json`。
 - 视觉 11 张（含 200% 页面缩放与打印）——`generated/visual-evidence.json`；性能与体积归因——`generated/perf-report.json`、`generated/size-report.json`。
 - 严格验收通过：`npm run evidence:verify`（源码摘要 + 产物摘要 + buildId 三层绑定）。
+- **线上部署已通过**（run 42040828875 / 提交 95a80413）：部署后 smoke 第 1 次即过——页脚构建标识与提交一致、
+  产物 buildId `a7077ce19adc-…`、时钟推进、评测表 5 行、canvas、控制台零错误（证据 `generated/postdeploy-2026-11-05-95a8041-live.json`）。
 - CI 口径（本轮实测后定）：**部署闸门 = 静态门禁 + 部署后对线上产物的 smoke**；完整的 107 项浏览器套件在
   `ci.yml`（PR/分支）与部署后的 `smoke-suite` 作业里跑，结果如实记录。原因：windows-latest 只有 2 vCPU，
   软件 WebGL 下"同一浏览器进程开第二个 WebGL 页面"可超过 180 s，属**容量**而非产品缺陷——把容量红灯

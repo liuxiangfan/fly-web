@@ -133,10 +133,23 @@ node scripts/evidencecheck.mjs --require-source --require-build   # npm run evid
    完整套件作为部署后的 `smoke-suite` 作业照跑并上传结构化结果（`continue-on-error`），红/绿都如实记录。
    本机 Windows 上的 **5×107 全绿**仍是这项验收的实际证据。
 
+## 7.2 线上部署（本轮实际完成）
+
+| 项 | 结果 |
+|---|---|
+| 部署 | GitHub Actions run `42040828875` 的 `deploy` 作业 **success**（Cloudflare Workers，windows-latest） |
+| 部署后 smoke | **PASS（第 1 次即通过）**：HTTP 200、页脚构建标识 `95a804131d78` = 本次提交、产物 `a7077ce19adc-9cc94cd591b719b1`、时钟推进、评测表 5 行、canvas、控制台零错误 |
+| 证据 | [`generated/postdeploy-2026-11-05-95a8041-live.json`](generated/postdeploy-2026-11-05-95a8041-live.json)（索引 id `postdeploy-95a8041`） |
+
+这次还修掉了"部署看起来一直失败"的真正原因：`postdeploy-smoke.mjs` 用
+`commit.startsWith(expect)` 比较**页脚 12 位**与 **workflow 传入的 40 位 SHA**——
+12 位永远不可能以 40 位开头，所以线上明明是对的也一直判红。现在改成双向前缀比较的纯函数
+`sameCommit()`，并有契约测试覆盖 12/40 位互比、前 12 位不同、7 位与 6 位等边界。
+
 ## 8. 本轮仍未完成的事（不许被上面的表格掩盖）
 
 1. **CI 上的五轮完整集合**：本机已 5/5 全绿；CI 端受 2 vCPU 容量限制（见 §7.1），
-   要"CI 也五轮全绿"需要更大 runner 或把套件再拆片——这是环境/预算决策，未做。
+   要「CI 也五轮全绿」需要更大 runner 或把套件再拆片——这是环境/预算决策，未做。
 2. **实质减重**：冻结基线的聚合预算目标（10% 余量 ≈ 244.8 KiB gzip）未达成（当前 266 KiB）；
    主包名义上限内仅剩 1.1 KB。下一步是把校准栈与其余装配层流程改成按需加载（SW-12 范围），
    并按 SW-09 第 6 条做 before/after 对照。
