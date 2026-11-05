@@ -14,8 +14,8 @@
 **Live demo**: [fly_web.070616.xyz](https://fly_web.070616.xyz)　(backup: [workers.dev](https://quaternion-attitude-demo.liu06167492.workers.dev))
 
 <!-- facts:begin -->
-Every push to `master` verifies and deploys automatically: type-check → 126 numeric + 10 scene-geometry + 15 HTML-contract + 4 doc-benchmark checks + independent contracts/status/evidence checks → 14 bundle budgets → 106 browser checks (two shards: app / devices) → Cloudflare Workers. Pull requests run the same gate and both smoke shards without deploying.
-<!-- verify: check=155 contracts=yes status=yes smoke=106 budget=14 evidence=yes -->
+Every push to `master` verifies and deploys automatically: type-check → 126 numeric + 10 scene-geometry + 15 HTML-contract + 4 doc-benchmark checks + independent contracts/status/evidence checks → 14 bundle budgets → 107 browser checks (two shards: app / devices) → Cloudflare Workers. Pull requests run the same gate and both smoke shards without deploying.
+<!-- verify: check=155 contracts=yes status=yes smoke=107 budget=14 evidence=yes -->
 <!-- facts:end -->
 
 ---
@@ -321,7 +321,7 @@ npm run preview   # preview the built output
 npx tsc --noEmit  # type check
 npm run check     # 154 assertions: 125 numeric + 10 scene geometry + 15 HTML contracts + 4 doc benchmarks
 npm run budget    # bundle-size budget (14 ceilings: total / fonts / font count / HTML / app shell / docs / gzip / main JS / main JS gzip / on-demand chunks)
-npm run smoke     # 106 real-browser end-to-end checks (export→import round trip, fake text/MAVLink serial
+npm run smoke     # 107 real-browser end-to-end checks (export→import round trip, fake text/MAVLink serial
                   # ports, a fake BLE device, print media, accessibility, long-run stability, every slider's
                   # number box being typeable, connect re-entrancy, deep-link round trip; needs build+preview)
 ```

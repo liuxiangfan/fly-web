@@ -11,7 +11,7 @@
 | 平台 | Windows（本机工作站；本阶段只支持 Windows） |
 | 浏览器 | Edge / Chrome 真实进程，headless `new` + swiftshader 软件渲染 |
 | 视口 | 320×568 / 390×844 / 768×1024 / 1440×900（另加 720×450 @DPR2 的页面缩放用例） |
-| 代码 | `npm run smoke`（106 项，含 4 条 SW-11 用例）与 `npm run perf` 的报告都在本机跑出并随仓库版本化 |
+| 代码 | `npm run smoke`（107 项，含 4 条 SW-11 用例）与 `npm run perf` 的报告都在本机跑出并随仓库版本化 |
 
 ## 1. 验收矩阵
 
@@ -47,7 +47,7 @@
 
 ```bash
 npm run build && npm run preview     # 另开一个终端
-npm run smoke                        # 106 项：含窄屏、页面缩放、纯文字放大、键盘往返、对比度、可访问名
+npm run smoke                        # 107 项：含窄屏、页面缩放、纯文字放大、键盘往返、对比度、可访问名
 npm run perf                         # 页面性能：输入延迟 p95、墙钟帧率、长任务、内存峰值
 npm run evidence:visual              # 11 张截图 + 版本化报告（PNG 在 screenshots/，被 gitignore）
 ```

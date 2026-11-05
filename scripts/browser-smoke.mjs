@@ -44,6 +44,18 @@ const APP_URL = process.env.SMOKE_URL ?? "http://127.0.0.1:4173/";
  * 60 s 以上（实测 `Navigation timeout` / 首帧超时）。视口变小只影响「桌面布局用多大的窗口看」，
  * 用例本身的断言不变（窄屏用例仍自己设 390×844，设备用例仍自己设 1280×800）。
  */
+/**
+ * 超时额度（**统一**，可按环境整体放大）：
+ *   · 默认：导航/首帧 60 s、状态等待 30 s、慢操作（长跑/批量）各自的既有额度；
+ *   · `SMOKE_SLOW=1`（CI 的 2 vCPU runner + 软件 WebGL）：整体放大 3 倍。
+ * 放大的是"等多久算卡死"，**不是断言强度**——真卡死仍会在放大后的额度内失败，
+ * 而且超时信息里会带上当时的现场（见 `waitForState`）。
+ */
+const SLOW = process.env.SMOKE_SLOW === "1";
+const SLOW_MS = (ms) => (SLOW ? ms * 3 : ms);
+const BOOT_MS = SLOW ? 180000 : 60000;
+const STATE_MS = SLOW ? 60000 : 30000;
+
 const VIEWPORT = (() => {
   const m = /^(\d{3,4})x(\d{3,4})$/.exec(process.env.SMOKE_VIEWPORT ?? "");
   return m ? { width: Number(m[1]), height: Number(m[2]) } : { width: 1440, height: 900 };
@@ -134,7 +146,7 @@ const launchBrowser = async () => {
         executablePath: exe,
         headless: "new",
         // CI 冷启动（新建 profile、磁盘慢）可能超过 puppeteer 默认的 30 s WS 超时
-        timeout: 60000,
+        timeout: BOOT_MS,
         // 2 vCPU runner 上开新标签页偶发超过 puppeteer 默认的 180 s 协议超时
         // （Windows CI 实测 `Target.createTarget timed out` → 被门禁判为基础设施失败）
         protocolTimeout: 300000,
@@ -216,7 +228,7 @@ const isInfraError = (err) =>
 const gotoSafe = async (pg, url = APP_URL) => {
   for (let attempt = 0; ; attempt++) {
     try {
-      await pg.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
+      await pg.goto(url, { waitUntil: "domcontentloaded", timeout: BOOT_MS });
       return;
     } catch (err) {
       if (attempt >= 1 || !isInfraError(err)) throw err;
@@ -254,10 +266,10 @@ const newPage = async () => {
       // 重启后的共享页面必须**重新载入应用**：后面的用例直接读 DOM，
       // 空白页只会以「Cannot read properties of null」的形式误报成产品缺陷（实测踩到）。
       try {
-        await page.goto(APP_URL, { waitUntil: "domcontentloaded", timeout: 60000 });
+        await page.goto(APP_URL, { waitUntil: "domcontentloaded", timeout: BOOT_MS });
         await page.waitForFunction(
           () => document.getElementById("fps")?.textContent !== "-- fps",
-          { timeout: 60000 },
+          { timeout: BOOT_MS },
         );
       } catch { /* 让具体用例自己的 waitFor 报更准确的失败 */ }
     }
@@ -286,13 +298,13 @@ try {
   // 页面异步取回产物溯源（build-provenance.json）后才会有 buildId：给它一个有界等待，
   // 取不到就按"缺失"判定，而不是让断言在竞态里随机红/绿。
   try {
-    await page.waitForFunction(() => Boolean(window.attitudeDemo?.build?.()?.buildId), { timeout: 15000 });
+    await page.waitForFunction(() => Boolean(window.attitudeDemo?.build?.()?.buildId), { timeout: SLOW_MS(15000) });
   } catch { /* 下面按缺失判定并给出可执行的失败原因 */ }
   identity.pageBuildId = await page.evaluate(() => window.attitudeDemo?.build?.()?.buildId ?? null);
   // 等待真实仿真推进（rAF）——隐藏标签页会冻结，headless 新模式下正常运行
   await page.waitForFunction(
     () => parseFloat((document.getElementById("clock")?.textContent ?? "").replace("t = ", "")) > 2,
-    { timeout: 60000 }, // 软件渲染（swiftshader）下 CI 的首帧可能很慢，给足余量
+    { timeout: BOOT_MS }, // 软件渲染（swiftshader）下 CI 的首帧可能很慢，给足余量
   );
   if (runApp) {
   const boot = await page.evaluate(() => {
@@ -1853,6 +1865,12 @@ try {
   );
 
   // 批量评测：跑 10 个种子 × 10 s，输出 5 行 P50/P95 表
+  const batchBefore = await page.evaluate(() => window.attitudeDemo.experiment.batchState());
+  check(
+    "批量评测开始前不在运行中（上一轮用例必须自己收尾干净）",
+    batchBefore.running === false,
+    `running=${batchBefore.running}、按钮「${batchBefore.button}」、世代 ${batchBefore.generation}`,
+  );
   await page.evaluate(() => {
     document.getElementById("sec-experiments").classList.remove("collapsed");
     const sel = document.getElementById("batch-runs");
@@ -1860,10 +1878,27 @@ try {
     sel.dispatchEvent(new Event("change"));
     document.getElementById("btn-batch").click();
   });
-  await page.waitForFunction(
-    () => (document.getElementById("batch-status")?.textContent ?? "").startsWith("完成"),
-    { timeout: 240000 }, // 慢 runner 上 10 种子 × 10 s 会跑上几分钟
-  );
+  // 等"批量评测真的结束"（完成/已取消），并把**等待期间的现场**带进失败信息：
+  // 慢 runner 上这条曾经只报 "Waiting failed: 240000ms exceeded"，看不出是没启动、还是跑得慢。
+  const batchWaitDeadline = Date.now() + SLOW_MS(240000);
+  const batchWaitSamples = [];
+  for (;;) {
+    const snap = await page.evaluate(() => ({
+      status: document.getElementById("batch-status")?.textContent ?? "",
+      state: window.attitudeDemo.experiment.batchState(),
+      rows: document.querySelectorAll("#batch-body tr").length,
+    }));
+    batchWaitSamples.push(snap.status.slice(0, 40));
+    if (snap.status.startsWith("完成") || snap.status.startsWith("已取消")) break;
+    if (Date.now() > batchWaitDeadline) {
+      throw new Error(
+        `批量评测在 ${SLOW_MS(240000) / 1000} s 内没有结束——现场：状态「${snap.status}」、` +
+          `running=${snap.state.running}、job=${snap.state.activeJob}、按钮「${snap.state.button}」、表格 ${snap.rows} 行；` +
+          `状态文案轨迹：${batchWaitSamples.slice(0, 3).join(" → ")} … ${batchWaitSamples.slice(-3).join(" → ")}`,
+      );
+    }
+    await new Promise((r) => setTimeout(r, 500));
+  }
   const batch = await page.evaluate(() => ({
     rows: document.querySelectorAll("#batch-body tr").length,
     cols: document.querySelectorAll("#batch-body tr:first-child td").length,
@@ -1932,7 +1967,7 @@ try {
       Object.defineProperty(navigator, "serial", { configurable: true, value: { requestPort: async () => port } });
     });
     await gotoSafe(pg);
-    await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 60000 });
+    await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: BOOT_MS });
     await pg.evaluate(() => {
       const sec = document.getElementById("sec-imu");
       if (sec?.classList.contains("collapsed")) sec.querySelector(".panel-toggle").click();
@@ -1941,14 +1976,14 @@ try {
       sel.dispatchEvent(new Event("change", { bubbles: true }));
       document.getElementById("btn-serial").click();
     });
-    await pg.waitForFunction(() => window.attitudeDemo.plumbing().frames > 10, { timeout: 30000 });
+    await pg.waitForFunction(() => window.attitudeDemo.plumbing().frames > 10, { timeout: STATE_MS });
     // 等进入「重连等待」：此时数据源暂时没有数据，但本轮实验必须原封不动
     await pg.waitForFunction(
       () => {
         const t = document.getElementById("serial-status")?.textContent ?? "";
         return /自动重连|后自动重连|中断/.test(t);
       },
-      { timeout: 30000 },
+      { timeout: STATE_MS },
     );
     const before = await pg.evaluate(() => ({
       t: window.attitudeDemo.sizes().simTime,
@@ -2044,7 +2079,7 @@ try {
       window.Worker = undefined;
     });
     await gotoSafe(pg);
-    await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 60000 });
+    await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: BOOT_MS });
     await pg.evaluate(() => {
       document.getElementById("sec-experiments").classList.remove("collapsed");
       const sel = document.getElementById("batch-runs");
@@ -2072,7 +2107,7 @@ try {
     await pg.click("#btn-batch"); // 真实点击 = 取消
     let cancelledSeen = true;
     try {
-      await pg.waitForFunction(() => (document.getElementById("batch-status")?.textContent ?? "").startsWith("已取消"), { timeout: 5000 });
+      await pg.waitForFunction(() => (document.getElementById("batch-status")?.textContent ?? "").startsWith("已取消"), { timeout: SLOW_MS(5000) });
     } catch { cancelledSeen = false; }
     // 「下一片即停」是可观察事实：等降级循环真的丢掉那个半成品种子并记下时延再取样，
     // 否则读到的是"按钮文案已经变了、计算还在最后一片里"的中间态。
@@ -2094,7 +2129,7 @@ try {
       running: window.attitudeDemo.experiment.batchState().running,
     }));
     // 快速「启动 → 取消 → 再启动」：新一批必须能正常跑完并写表
-    const restart = await pg.evaluate(async () => {
+    const restart = await pg.evaluate(async (budget) => {
       const sel = document.getElementById("batch-runs");
       sel.value = "10";
       sel.dispatchEvent(new Event("change"));
@@ -2103,7 +2138,7 @@ try {
       // 降级路径的每片都要等一次 macrotask，而软件渲染下页面自己的一帧要 ~50 ms，
       // 于是「10 个种子 × 10 s」在本机可以要几十秒（实测最慢一轮 >30 s）。
       // 这条用例判的是"取消后能重启跑完且旧世代不回写"，不是延迟，所以额度按实测放宽并**记录耗时**。
-      const deadline = Date.now() + 90000;
+      const deadline = Date.now() + budget;
       let text = "";
       while (Date.now() < deadline) {
         text = document.getElementById("batch-status")?.textContent ?? "";
@@ -2112,7 +2147,7 @@ try {
       }
       const state = window.attitudeDemo.experiment.batchState();
       return { text, rows: document.querySelectorAll("#batch-body tr").length, state, result: window.attitudeDemo.experiment.batchResult(), elapsedMs: performance.now() - startedAt };
-    });
+    }, SLOW_MS(90000));
     await pg.close();
     return { during, responsiveness, after, settled, restart, cancelledSeen, errs };
   })();
@@ -2687,7 +2722,7 @@ try {
       };
     }, protocol);
     await gotoSafe(pg);
-    await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 60000 });
+    await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: BOOT_MS });
     await pg.evaluate((proto) => {
       const sec = document.getElementById("sec-imu");
       if (sec?.classList.contains("collapsed")) sec.querySelector(".panel-toggle").click();
@@ -2699,7 +2734,7 @@ try {
       m.dispatchEvent(new Event("change", { bubbles: true }));
     }, protocol);
     await pg.click("#btn-ble");
-    await pg.waitForFunction(() => document.body.dataset.imuMode === "real", { timeout: 30000 });
+    await pg.waitForFunction(() => document.body.dataset.imuMode === "real", { timeout: STATE_MS });
     // 每 10 ms 发一帧（分片后是两条通知）
     await pg.evaluate(() => {
       window.__bleTimer = setInterval(() => window.__bleEmit(), 10);
@@ -2708,7 +2743,7 @@ try {
     // 而时钟也可能被别的路径推进）。这一条以前踩过：等到的是「连接前的时钟」。
     await pg.waitForFunction(
       () => /[1-9]\d* 帧\/s/.test(document.getElementById("serial-status")?.textContent ?? ""),
-      { timeout: 12000 },
+      { timeout: SLOW_MS(12000) },
     ).catch(() => undefined);
     const info = await pg.evaluate(() => {
       const imu = window.attitudeDemo.state.lastImu;
@@ -2887,7 +2922,7 @@ try {
       );
     }
     await gotoSafe(pg);
-    await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 60000 });
+    await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: BOOT_MS });
     await pg.evaluate(() => {
       const sec = document.getElementById("sec-imu");
       if (sec?.classList.contains("collapsed")) sec.querySelector(".panel-toggle").click();
@@ -2900,7 +2935,7 @@ try {
     });
     if (opts.connect !== false) {
       await pg.click("#btn-serial");
-      await pg.waitForFunction(() => document.body.dataset.imuMode === "real", { timeout: 30000 });
+      await pg.waitForFunction(() => document.body.dataset.imuMode === "real", { timeout: STATE_MS });
     }
     return { pg, errs, stop: () => pg.evaluate(() => clearInterval(window.__fs.emitTimer)) };
   };
@@ -4023,7 +4058,7 @@ try {
       });
     });
     await gotoSafe(pg);
-    await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 60000 });
+    await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: BOOT_MS });
     await pg.evaluate(() => {
       const sec = document.getElementById("sec-imu");
       if (sec.classList.contains("collapsed")) sec.querySelector(".panel-toggle").click();
@@ -4097,7 +4132,7 @@ try {
       extraWire ?? "",
     );
     await gotoSafe(pg);
-    await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 60000 });
+    await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: BOOT_MS });
     await pg.evaluate(() => {
       const sec = document.getElementById("sec-imu");
       if (sec.classList.contains("collapsed")) sec.querySelector(".panel-toggle").click();
@@ -4106,7 +4141,7 @@ try {
       sel.dispatchEvent(new Event("change", { bubbles: true }));
       document.getElementById("btn-ble").click();
     });
-    await pg.waitForFunction(() => window.attitudeDemo.plumbing().ble === true, { timeout: 30000 });
+    await pg.waitForFunction(() => window.attitudeDemo.plumbing().ble === true, { timeout: STATE_MS });
     return { pg, errs };
   };
 
@@ -4168,7 +4203,7 @@ try {
       window.__late = { gattConnected: () => device.gatt.connected, releaseConnect: () => releaseConnect?.() };
     });
     await gotoSafe(pg);
-    await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 60000 });
+    await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: BOOT_MS });
     const res = await pg.evaluate(async () => {
       const wait = (ms) => new Promise((r) => setTimeout(r, ms));
       const sec = document.getElementById("sec-imu");
@@ -4260,7 +4295,7 @@ try {
       window.__bleDrop = () => { for (const cb of [...window.__ble.deviceListeners]) cb(); };
     });
     await gotoSafe(pg);
-    await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 60000 });
+    await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: BOOT_MS });
     await pg.evaluate(() => {
       const sec = document.getElementById("sec-imu");
       if (sec?.classList.contains("collapsed")) sec.querySelector(".panel-toggle").click();
@@ -4269,7 +4304,7 @@ try {
       sel.dispatchEvent(new Event("change", { bubbles: true }));
       document.getElementById("btn-ble").click();
     });
-    await pg.waitForFunction(() => window.attitudeDemo.plumbing().ble === true, { timeout: 30000 });
+    await pg.waitForFunction(() => window.attitudeDemo.plumbing().ble === true, { timeout: STATE_MS });
     const first = await pg.evaluate(() => ({
       connects: window.__ble.connects,
       charRow: !document.getElementById("ble-char-row")?.classList.contains("hidden"),
@@ -4277,7 +4312,7 @@ try {
     }));
     // 掉线 → 等自动重连成功
     await pg.evaluate(() => window.__bleDrop());
-    await pg.waitForFunction(() => window.attitudeDemo.plumbing().bleReconnects >= 1, { timeout: 12000 });
+    await pg.waitForFunction(() => window.attitudeDemo.plumbing().bleReconnects >= 1, { timeout: SLOW_MS(12000) });
     const afterDrop = await pg.evaluate(() => ({
       connects: window.__ble.connects,
       services: window.__ble.serviceReqs,
@@ -4444,7 +4479,7 @@ try {
     pg.on("console", (m) => m.type() === "warning" && srcWarn.push(m.text().slice(0, 80)));
     pg.on("pageerror", (e) => srcWarn.push("pageerror: " + String(e).slice(0, 80)));
     await gotoSafe(pg);
-    await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 60000 });
+    await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: BOOT_MS });
     // 在每个控件上设一个「与默认明显不同」的值（滑杆取量程端、开关取反、下拉取非首项）
     const source = await pg.evaluate(() => {
       const dl = window.attitudeDemo.deepLink();
@@ -4514,7 +4549,7 @@ try {
     pg2.on("console", (m) => m.type() === "warning" && dstWarn.push(m.text().slice(0, 80)));
     pg2.on("pageerror", (e) => dstWarn.push("pageerror: " + String(e).slice(0, 80)));
     await gotoSafe(pg2, APP_URL + hash);
-    await pg2.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 60000 });
+    await pg2.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: BOOT_MS });
     await new Promise((r) => setTimeout(r, 500));
     const dstValues = await pg2.evaluate((lists) => {
       const read = (id) => {
@@ -4555,6 +4590,8 @@ try {
   // ---------- 文本行协议 / MAVLink 协议：各自的假串口端到端 ----------
   // 这两种协议是本轮新增的「硬件接入入口」，必须在真浏览器里跑一遍：
   // 假端口按各自格式发流，断言解析后的读数与值班（unit/mounting）都正确。
+  /** 慢 runner 上"状态文案晚到"的协议用例（不判失败，但必须留痕） */
+  const protocolStatusTimeouts = [];
   const runProtocolCase = async (protocol, makeWire) => {
     const pg = await newPage();
     await pg.setViewport({ width: 1280, height: 800, deviceScaleFactor: 1 });
@@ -4563,7 +4600,7 @@ try {
     pg.on("pageerror", (e) => errs.push(String(e)));
     await pg.evaluateOnNewDocument(makeWire, protocol);
     await gotoSafe(pg);
-    await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 60000 });
+    await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: BOOT_MS });
     await pg.evaluate(() => {
       const sec = document.getElementById("sec-imu");
       if (sec?.classList.contains("collapsed")) sec.querySelector(".panel-toggle").click();
@@ -4576,22 +4613,25 @@ try {
       mnt.dispatchEvent(new Event("change", { bubbles: true }));
     });
     await pg.click("#btn-serial");
-    await pg.waitForFunction(() => document.body.dataset.imuMode === "real", { timeout: 30000 });
+    await pg.waitForFunction(() => document.body.dataset.imuMode === "real", { timeout: STATE_MS });
     await pg.waitForFunction(
       () => parseFloat((document.getElementById("clock")?.textContent ?? "").replace("t = ", "")) > 0.8,
-      { timeout: 10000 },
+      { timeout: SLOW_MS(10000) },
     );
     // 状态条的第一段文字是「已连接——等待数据帧…」，要等 10 Hz 的 UI 刷新把它换成带帧率的那段。
     // 直接读会在窗口内抓到旧文案（时序竞态，实测在改动前后各命中过一次）——等它出现协议名更稳。
-    await pg
-      .waitForFunction(
+    // 慢 runner 上这个刷新可能晚于额度：超时**不判失败**，但把当时的状态文案带进诊断里。
+    try {
+      await pg.waitForFunction(
         () => {
           const t = document.getElementById("serial-status")?.textContent ?? "";
           return /文本行|MAVLink|帧\/s/.test(t);
         },
-        { timeout: 4000 },
-      )
-      .catch(() => undefined);
+        { timeout: SLOW_MS(8000) },
+      );
+    } catch {
+      protocolStatusTimeouts.push(protocol);
+    }
     const info = await pg.evaluate(() => {
       const imu = window.attitudeDemo.state.lastImu;
       return {
@@ -4708,7 +4748,7 @@ try {
       Object.defineProperty(navigator, "serial", { configurable: true, value: { requestPort: async () => port } });
     });
     await gotoSafe(pg);
-    await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 60000 });
+    await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: BOOT_MS });
     await pg.evaluate(() => {
       const sec = document.getElementById("sec-imu");
       if (sec?.classList.contains("collapsed")) sec.querySelector(".panel-toggle").click();
@@ -4717,7 +4757,7 @@ try {
       sel.dispatchEvent(new Event("change", { bubbles: true }));
     });
     await pg.click("#btn-serial");
-    await pg.waitForFunction(() => document.body.dataset.imuMode === "real", { timeout: 30000 });
+    await pg.waitForFunction(() => document.body.dataset.imuMode === "real", { timeout: STATE_MS });
     // 断线前先攒一点本轮实验记录（用来验证「重连不会清空本轮结果」）
     await new Promise((r) => setTimeout(r, 800));
     const beforeDrop = await pg.evaluate(() => ({
@@ -4725,7 +4765,7 @@ try {
       logRows: window.attitudeDemo.sizes().logRows,
     }));
     // 等**重连成功计数**，不要等状态条：计数只增不减，而状态条会被下一段帧率刷新覆盖。
-    await pg.waitForFunction(() => window.attitudeDemo.plumbing().reconnects >= 1, { timeout: 12000 });
+    await pg.waitForFunction(() => window.attitudeDemo.plumbing().reconnects >= 1, { timeout: SLOW_MS(12000) });
     const framesAfterReconnect = await pg.evaluate(async () => {
       const wait = (ms) => new Promise((r) => setTimeout(r, ms));
       const f0 = window.attitudeDemo.plumbing().frames;
@@ -4767,7 +4807,7 @@ try {
       `重连后新增 ${reconnectCase.framesAfterReconnect.delta} 帧（状态等待，最多 8 s）、` +
       `时钟 ${reconnectCase.beforeDrop.t.toFixed(2)} → ${reconnectCase.framesAfterReconnect.t.toFixed(2)} s、` +
       `记录行 ${reconnectCase.beforeDrop.logRows} → ${reconnectCase.framesAfterReconnect.logRows}；` +
-      `状态「${reconnectCase.framesAfterReconnect.status.slice(0, 40)}」`,
+      `状态「${reconnectCase.framesAfterReconnect.status.slice(0, 40)}」${protocolStatusTimeouts.length ? `；状态文案晚到：${protocolStatusTimeouts.join("、")}` : ""}`,
   );
 
   // MAVLink：RAW_IMU + 一条未知 id 的干扰帧交替发，验证「跳过其它消息」路径
@@ -4876,7 +4916,7 @@ try {
   await gotoSafe(page, APP_URL.split("#")[0] + deep.hash);
   await page.waitForFunction(
     () => parseFloat((document.getElementById("clock")?.textContent ?? "").replace("t = ", "")) > 0.5,
-    { timeout: 30000 },
+    { timeout: STATE_MS },
   );
   const deep2 = await page.evaluate(() => ({
     bias: document.getElementById("imu-gyro-bias").value,
@@ -4976,7 +5016,7 @@ try {
   mobilePage.on("pageerror", (e) => mobileErrors.push(String(e)));
   await mobilePage.setViewport({ width: 390, height: 844, deviceScaleFactor: 1 });
   await gotoSafe(mobilePage);
-  await mobilePage.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 60000 });
+  await mobilePage.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: BOOT_MS });
   const mobile = await mobilePage.evaluate(() => ({
     scrollW: document.documentElement.scrollWidth,
     innerW: window.innerWidth,
@@ -4994,7 +5034,7 @@ try {
   // 「拖拽旋转视角」提示——陀螺仪/加速度计两行读数被盖住。提示是非关键说明，矮视口下隐藏。
   await mobilePage.setViewport({ width: 720, height: 450, deviceScaleFactor: 2 });
   await gotoSafe(mobilePage);
-  await mobilePage.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 60000 });
+  await mobilePage.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: BOOT_MS });
   await new Promise((r) => setTimeout(r, 800));
   const zoomed = await mobilePage.evaluate(() => {
     const hint = document.getElementById("viewport-hint");
@@ -5067,7 +5107,7 @@ try {
     const saved = mobilePage.viewport();
     await mobilePage.setViewport({ width: 390, height: 844, deviceScaleFactor: 1 });
     await gotoSafe(mobilePage);
-    await mobilePage.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 60000 });
+    await mobilePage.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: BOOT_MS });
     await mobilePage.evaluate(() => document.getElementById("btn-docs").click());
     await mobilePage.waitForFunction(() => !document.getElementById("docs-overlay").hidden);
     /**
@@ -5467,22 +5507,22 @@ try {
     });
   });
   await gotoSafe(serialPage);
-  await serialPage.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: 60000 });
+  await serialPage.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: BOOT_MS });
   await serialPage.evaluate(() => {
     const sec = document.getElementById("sec-imu");
     if (sec?.classList.contains("collapsed")) sec.querySelector(".panel-toggle").click();
   });
   await serialPage.click("#btn-serial");
-  await serialPage.waitForFunction(() => document.body.dataset.imuMode === "real", { timeout: 30000 });
+  await serialPage.waitForFunction(() => document.body.dataset.imuMode === "real", { timeout: STATE_MS });
   await serialPage.waitForFunction(
     () => parseFloat((document.getElementById("clock")?.textContent ?? "").replace("t = ", "")) > 1,
-    { timeout: 30000 },
+    { timeout: STATE_MS },
   );
   // 等**目标状态**（帧率读数出现 = 假串口的数据真的在流），而不是等一个固定时刻就断言。
   // 实测第 2 轮出现过「时钟已过 1 s 但状态还停在『等待数据帧…』」——那是数据流启动稍慢，
   // 不是产品缺陷；瞄准状态等待既能容忍慢，也能在真卡死时（15 s 内一直没有帧）如实判失败。
   try {
-    await serialPage.waitForFunction(() => /帧\/s/.test(document.getElementById("serial-status")?.textContent ?? ""), { timeout: 15000 });
+    await serialPage.waitForFunction(() => /帧\/s/.test(document.getElementById("serial-status")?.textContent ?? ""), { timeout: SLOW_MS(15000) });
   } catch { /* 下面按实际读数判定并给出可读原因 */ }
   const serial = await serialPage.evaluate(() => ({
     mode: document.body.dataset.imuMode,
@@ -5512,7 +5552,7 @@ try {
     if (sec?.classList.contains("collapsed")) sec.querySelector(".panel-toggle").click();
   });
   await serialPage.click("#btn-serial");
-  await serialPage.waitForFunction(() => document.body.dataset.imuMode === "sim", { timeout: 5000 });
+  await serialPage.waitForFunction(() => document.body.dataset.imuMode === "sim", { timeout: SLOW_MS(5000) });
   const restored = await serialPage.evaluate(() => ({
     mode: document.body.dataset.imuMode,
     scenarioDisabled: document.getElementById("scenario-select").disabled,

@@ -60,11 +60,20 @@ export function roundVerdict({ code, out = "", report = null, shard = "all", man
   const reasons = [];
   const capacityEvidence = CAPACITY_SIGNATURES.filter((re) => re.test(out)).map(String);
   const logKind = classifyRun(code, out);
-  if (logKind === "product" || logKind === "assert") {
-    const lines = String(out).split(String.fromCharCode(10));
-    const productFailures = lines.filter((l) => l.startsWith("[FAIL]") && !INFRA_FAIL_LINE.test(l));
-    if (productFailures.length) reasons.push(`用例级断言失败 ${productFailures.length} 项：${productFailures[0].slice(0, 120)}`);
+  /**
+   * `assert` 的判据必须**只看用例级失败**：逐项结果里 status="fail" 的条目，
+   * 或日志里 `[FAIL] <用例名> — …`（不含"冒烟测试异常/浏览器进程被回收"这两条外层文案）。
+   * 否则"被异常打断、一条断言都没失败"的运行会被误判成产品缺陷——那是把容量问题说成产品问题。
+   */
+  const checkFailures = (Array.isArray(report?.results) ? report.results : []).filter((r) => r?.status === "fail");
+  const lines = String(out).split(String.fromCharCode(10));
+  const logFailures = lines.filter((l) => l.startsWith("[FAIL]") && !INFRA_FAIL_LINE.test(l));
+  if (checkFailures.length) {
+    reasons.push(`用例级断言失败 ${checkFailures.length} 项：${checkFailures.map((r) => r.id).slice(0, 2).join("；")}`);
+  } else if (logFailures.length) {
+    reasons.push(`用例级断言失败 ${logFailures.length} 项（仅日志可见，结构化结果缺失或不完整）：${logFailures[0].slice(0, 120)}`);
   }
+  const assertionFailed = checkFailures.length > 0 || logFailures.length > 0;
   if (!report) {
     reasons.push("缺少结构化结果文件（无法核对「完整集合」，只有日志不足以判通过）");
   } else {
@@ -72,15 +81,13 @@ export function roundVerdict({ code, out = "", report = null, shard = "all", man
     if (report.shard !== shard) reasons.push(`结构化结果的分片是 ${report.shard}，期望 ${shard}`);
     if (Array.isArray(report.skipped) && report.skipped.length) reasons.push(`有 ${report.skipped.length} 项被跳过：${report.skipped.map((s) => s.id).slice(0, 3).join("；")}`);
     if (Array.isArray(report.duplicateIds) && report.duplicateIds.length) reasons.push(`有重复用例名：${report.duplicateIds.slice(0, 3).join("；")}`);
-    if (report.failed > 0) reasons.push(`结构化结果里 ${report.failed} 项失败`);
     for (const p of manifestProblems) reasons.push(`完整集合比对：${p}`);
   }
   if (!reasons.length) return { kind: "pass", pass: true, reasons: [], capacity: false, capacityEvidence: [] };
-  const assertionsFailed = reasons.some((r) => r.startsWith("用例级断言失败") || r.startsWith("结构化结果里"));
   let kind;
-  if (assertionsFailed) kind = "assert";
+  if (assertionFailed) kind = "assert";
+  else if (logKind === "capacity" || capacityEvidence.length) kind = "env";
   else if (reasons.some((r) => r.includes("未完成") || r.includes("跳过") || r.includes("重复") || r.includes("完整集合") || r.includes("缺少结构化结果"))) kind = "incomplete";
-  else if (logKind === "capacity") kind = "env";
   else kind = "unknown";
   return { kind, pass: false, reasons, capacity: capacityEvidence.length > 0, capacityEvidence };
 }

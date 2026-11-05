@@ -48,7 +48,7 @@ node scripts/evidencecheck.mjs --require-source --require-build   # npm run evid
 | `npm run build` | PASS | 冻结产物（之后未再重建） |
 | `npm run budget` | 14/14 PASS | 每项占用率 ≤90%；报告含名义上限／有效门槛／剩余字节／冻结基线增量；最紧的是「主包 JS」282.4 KB（有效门槛 283.5 KB，剩 1.1 KB） |
 | `doccheck --recompute` | 4/4 PASS | 文档定量结论与生成器实现逐字段复算 |
-| `npm run smoke` | **106 项**（app 86 + devices 20）0 FAIL / 0 warning | 结构化结果 + 完整集合比对（清单 `scripts/smoke-manifest.json`） |
+| `npm run smoke` | **107 项**（app 87 + devices 20）0 FAIL / 0 warning | 结构化结果 + 完整集合比对（清单 `scripts/smoke-manifest.json`） |
 | 本机 Windows `--shard=both --runs=5` | 见 §5 | 每轮 106 项完整集合 |
 | `npm run evidence:verify` | PASS | 见 §2 的三层绑定 |
 
@@ -90,7 +90,7 @@ node scripts/evidencecheck.mjs --require-source --require-build   # npm run evid
 | 历史：Ubuntu CI 5×（`e8e6a8e`） | PASS | GitHub run `41530523646`（祖先提交，不证明当前 SHA） |
 
 驱动器的判定口径（本轮落地）：每轮必须给出**结构化结果**（逐项状态、跳过、重复、`completed` 标记），
-验收比对**完整集合**（app 86 + devices 20 = 106），并把失败分成四类——断言失败／执行未完成／环境失败／根因未知；
+验收比对**完整集合**（app 87 + devices 20 = 107），并把失败分成四类——断言失败／执行未完成／环境失败／根因未知；
 "容量"只在拿到容量证据时才写。**任一断言失败即判 `assert`，不带"机器慢"的解释余地。**
 
 ## 6. 视觉证据（当前源码）

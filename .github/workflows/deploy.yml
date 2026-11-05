@@ -62,6 +62,8 @@ jobs:
       - name: Browser smoke test（完整集合，一轮）
         env:
           SMOKE_VIEWPORT: 800x600
+          # 2 vCPU + 软件 WebGL：额度整体 ×3（断言不变，超时仍会失败并带现场）
+          SMOKE_SLOW: "1"
         run: node scripts/ci-run-smoke.mjs --shard=both --runs=1 --out=.audit-smoke/deploy
 
       - name: Upload smoke logs

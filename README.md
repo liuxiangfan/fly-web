@@ -10,8 +10,8 @@
 **在线演示**：[fly_web.070616.xyz](https://fly_web.070616.xyz)　（备用：[workers.dev](https://quaternion-attitude-demo.liu06167492.workers.dev)）
 
 <!-- facts:begin -->
-每次推送到 `master` 自动验证并部署：类型检查 → 数值自检 126 + 场景几何 10 + HTML 契约 15 + 文档基准 4 + 独立 contracts/status/evidence → 14 项产物预算 → 106 项浏览器冒烟（app / devices 两片）→ Cloudflare Workers；PR 运行同一 gate 与两片冒烟但不部署。
-<!-- verify: check=155 contracts=yes status=yes smoke=106 budget=14 evidence=yes -->
+每次推送到 `master` 自动验证并部署：类型检查 → 数值自检 126 + 场景几何 10 + HTML 契约 15 + 文档基准 4 + 独立 contracts/status/evidence → 14 项产物预算 → 107 项浏览器冒烟（app / devices 两片）→ Cloudflare Workers；PR 运行同一 gate 与两片冒烟但不部署。
+<!-- verify: check=155 contracts=yes status=yes smoke=107 budget=14 evidence=yes -->
 <!-- facts:end -->
 
 ---

@@ -75,6 +75,8 @@ jobs:
         env:
           # 视口只影响「桌面布局用多大的窗口看」，断言不变（窄屏/设备用例仍自设 390×844 / 1280×800）。
           SMOKE_VIEWPORT: 800x600
+          # 2 vCPU + 软件 WebGL：额度整体 ×3（断言不变，超时仍会失败并带现场）
+          SMOKE_SLOW: "1"
         run: node scripts/ci-run-smoke.mjs --shard=${{ matrix.shard }} --runs=1 --out=.audit-smoke/ci
       - name: Upload logs
         if: always()
@@ -106,6 +108,8 @@ jobs:
         # 断言不变（窄屏/设备用例仍自设 390×844 / 1280×800）。
         env:
           SMOKE_VIEWPORT: 800x600
+          # 2 vCPU + 软件 WebGL：额度整体 ×3（断言不变，超时仍会失败并带现场）
+          SMOKE_SLOW: "1"
         run: node scripts/ci-run-smoke.mjs --shard=both --runs=5 --out=.audit-smoke/stability
       - name: Upload logs
         if: always()
@@ -136,6 +140,8 @@ jobs:
         if: inputs.stability_runs != '0'
         env:
           SMOKE_VIEWPORT: 800x600
+          # 2 vCPU + 软件 WebGL：额度整体 ×3（断言不变，超时仍会失败并带现场）
+          SMOKE_SLOW: "1"
         run: node scripts/ci-run-smoke.mjs --shard=both --runs=${{ inputs.stability_runs }} --out=.audit-smoke/stability
       - name: Upload logs
         if: always()

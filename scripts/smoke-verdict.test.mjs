@@ -12,6 +12,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { attributionOf, entryFor, pickStabilityJobs, roundResultProblems, smokeStepProblems, summaryProblems } from "./ci-registration.mjs";
+import { roundVerdict } from "./smoke-verdict.mjs";
 import { coverageProblems, manifestDriftProblems, manifestShapeProblems, parseDeclaredChecks, runProblems } from "./smoke-manifest.mjs";
 
 const SHA = "a".repeat(40);
@@ -101,6 +102,26 @@ test("逐轮结构化结果：缺项、跳过、重复、未完成都不能算�
   assert.ok(roundResultProblems(rounds((r) => { r["app-run1"].skipped = [{ id: "A1", reason: "x" }]; }), manifest, { expectedRuns: 5 }).some((p) => p.includes("跳过")));
   assert.ok(roundResultProblems(rounds((r) => { r["app-run4"].results = r["app-run4"].results.slice(0, 2); }), manifest, { expectedRuns: 5 }).some((p) => p.includes("少跑")));
   assert.ok(roundResultProblems(rounds((r) => { r["devices-run5"].results.push({ id: "幽灵用例", status: "pass" }); }), manifest, { expectedRuns: 5 }).some((p) => p.includes("多出")));
+});
+
+test("诊断正确：被异常打断但**无用例级失败**时不得判成产品断言失败", () => {
+  // 真实 CI 现场：windows-latest 上页面首帧超过 60 s，日志只有外层「冒烟测试异常」一行，
+  // 逐项结果里 status="fail" 的条目数为 0 → 这是容量问题，不是产品缺陷。
+  const out = [
+    "[PASS] 仿真在真实 rAF 下推进 — t = 2.1 s",
+    "[FAIL] 冒烟测试异常 — Waiting failed: 60000ms exceeded",
+    "1 项失败 ❌",
+  ].join(String.fromCharCode(10));
+  const report = { shard: "app", completed: false, failed: 1, skipped: [], duplicateIds: [], abortReason: "Waiting failed: 60000ms exceeded", results: [{ id: "仿真在真实 rAF 下推进", status: "pass" }] };
+  const v = roundVerdict({ code: 1, out, report, shard: "app" });
+  assert.equal(v.kind, "env", `应判容量/环境：${JSON.stringify(v)}`);
+  assert.equal(v.capacity, true);
+  assert.ok(!v.reasons.some((r) => r.startsWith("用例级断言失败")), "没有用例级失败就不许写成「断言失败」");
+
+  // 对照组：真的有用例级失败（逐项 status=fail）→ 必须是 assert（优先于容量证据）
+  const report2 = { shard: "app", completed: false, failed: 2, skipped: [], duplicateIds: [], results: [{ id: "窄屏布局", status: "fail" }, { id: "x", status: "pass" }] };
+  const v2 = roundVerdict({ code: 1, out, report: report2, shard: "app" });
+  assert.equal(v2.kind, "assert");
 });
 
 test("归因保守：只有拿到容量证据才写容量，否则根因未知；断言失败优先于一切解释", () => {

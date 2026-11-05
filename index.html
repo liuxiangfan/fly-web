@@ -5280,8 +5280,8 @@ export function applyMagCalibration(m, cal) {
             <li><b>数值</b>：姿态积分用精确指数映射（不是一阶欧拉）；两姿态夹角用相对四元数的 atan2（零角附近分辨率 ~1e-15 而非 acos 的 1e-8）；欧拉角在 ±90° 处按通行约定取 roll := 0。</li>
             <li><!-- facts:begin --><b>验证</b>：类型检查 + <b>126 项数值自检</b> + <b>10 项三维场景几何自检</b> + <b>15 项 HTML↔TS 契约检查</b> +
               <b>4 项文档基准检查</b> + 独立时间/schema/生命周期/Worker/trace/soak/status/budget/evidence 契约 +
-              <b>106 项浏览器端到端冒烟</b>（app / devices 两片）+ <b>14 项产物预算</b>。
-              <!-- verify: check=155 contracts=yes status=yes smoke=106 budget=14 evidence=yes --><!-- facts:end -->
+              <b>107 项浏览器端到端冒烟</b>（app / devices 两片）+ <b>14 项产物预算</b>。
+              <!-- verify: check=155 contracts=yes status=yes smoke=107 budget=14 evidence=yes --><!-- facts:end -->
               浏览器用例覆盖文档演示、15 页对比度、容器封顶、串口/BLE 重连、Worker 取消、UI/runner trace、
               校准历史、控件接线、档案事务（三类失败档案导入前后完好）、200% 文字缩放与深链往返；
               <span class="mono">evidence:check</span> 机器核对证据索引，长稳与视觉证据用
