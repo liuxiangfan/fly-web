@@ -559,7 +559,9 @@ try {
     await page.keyboard.down("Control");
     await page.keyboard.press("k");
     await page.keyboard.up("Control");
-    await new Promise((r) => setTimeout(r, 300));
+    try {
+      await page.waitForFunction(() => document.activeElement?.id === "docs-search-input", { timeout: SLOW_MS(3000) });
+    } catch { /* 下方按实际焦点判失败，不将等待超时包装成环境通过 */ }
     const focused = await page.evaluate(() => document.activeElement?.id ?? "");
     await page.evaluate(() => {
       const input = document.getElementById("docs-search-input");
