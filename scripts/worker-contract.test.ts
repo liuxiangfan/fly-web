@@ -2,7 +2,8 @@
 import assert from "node:assert/strict";
 import { Worker } from "node:worker_threads";
 import { defaultExperimentConfig, type ExperimentConfig } from "../src/core/experiment-config";
-import { runExperiment, runExperimentAsync, runExperimentDetailed, runExperimentDetailedAsync, runTrace, RUN_H } from "../src/core/runner";
+import { MetricAccumulator, runExperiment, runExperimentAsync, runExperimentDetailed, runExperimentDetailedAsync, runTrace, RUN_H } from "../src/core/runner";
+import { percentile } from "../src/core/stats";
 import type { BatchRequest, BatchResponse } from "../src/core/batch-protocol";
 
 let passed = 0, failed = 0;
@@ -259,6 +260,107 @@ await test("墙钟预算先于步数上限让出，完整数值不变，停止�
   });
   assert.equal(partial.termination.reason, "cancelled");
   assert.ok(stoppedAfterCancel);
+});
+
+await test("30s/15000步收尾逐分位数强制让出macrotask，onStop早于排序，完整结果逐位一致", async () => {
+  const config = { ...defaultExperimentConfig(), durationSec: 30 };
+  const sync = runExperimentDetailed(config);
+  const nativeSort = Array.prototype.sort;
+  const order: string[] = [];
+  const tailSlices: Array<{ steps: number; computeMs: number; completed: boolean }> = [];
+  let stopped = false, stopCount = 0, sorts = 0, turns = 0;
+  let progressAtStop = 0, progress = 0;
+  // 直接观察生产 percentile 的原生排序，不在测试里复制收尾数值路径。
+  Array.prototype.sort = function<T>(this: T[], compareFn?: (a: T, b: T) => number): T[] {
+    if (stopped && this.length === 15000) {
+      assert.equal(turns, sorts + 1, "首排序前和每次排序间必须实际处理计时器，不是微任务让出");
+      order.push(`sort:${++sorts}`);
+      setTimeout(() => { turns++; }, 0);
+    }
+    return nativeSort.call(this, compareFn) as T[];
+  };
+  try {
+    const asyncResult = await runExperimentDetailedAsync(config, {
+      stepsPerSlice: 512, // 无墙钟预算时也不能把十次排序重新合为一片。
+      onProgress: () => { assert.ok(!stopped, "onStop之后不得继续积分/发进度"); progress++; },
+      onStop: () => {
+        assert.equal(sorts, 0, "onStop必须在任何summary排序之前");
+        stopped = true; stopCount++; progressAtStop = progress; order.push("stop");
+        setTimeout(() => { turns++; }, 0);
+      },
+      onSlice: slice => { if (stopped) tailSlices.push(slice); },
+    });
+    order.push("return");
+    assert.equal(stopCount, 1);
+    assert.equal(progress, progressAtStop);
+    assert.equal(sorts, 10, "五算法的P50/P95必须全部保留");
+    assert.equal(turns, 11, "最后一次排序后也要给取消消息一次处理机会");
+    assert.deepEqual(order, ["stop", ...Array.from({ length: 10 }, (_, i) => `sort:${i + 1}`), "return"]);
+    assert.equal(tailSlices.length, 12, "停止边界、十个独立排序片、最终返回片不能合并");
+    assert.ok(tailSlices.slice(1).every(slice => slice.steps === 1));
+    assert.deepEqual(tailSlices.map(slice => slice.completed), [...Array(11).fill(false), true]);
+    assert.ok(asyncResult.metrics.every(metric => metric.n === 15000));
+    assert.deepEqual(asyncResult, sync, "metrics/事件次序/终止口径/姿态/完整samples逐位相等");
+    console.log(`  收尾 ${tailSlices.length} 片；单排序片峰值 ${Math.max(...tailSlices.slice(1, -1).map(slice => slice.computeMs)).toFixed(1)}ms`);
+  } finally {
+    Array.prototype.sort = nativeSort;
+  }
+});
+
+await test("收尾首/中/末片计时器取消：onStop单次、终止时刻不漂移、全部指标统一early-stop", async () => {
+  const config = { ...alignmentConfig, durationSec: 4 };
+  const sync = runExperimentDetailed(config);
+  for (const cancelAfterSort of [0, 5, 10]) {
+    let stopped = false, stopCount = 0, cancelled = false, tailSlice = 0, progressAtStop = 0, progress = 0;
+    const result = await runExperimentDetailedAsync(config, {
+      stepsPerSlice: 512,
+      shouldCancel: () => cancelled,
+      onProgress: () => { assert.ok(!stopped); progress++; },
+      onStop: () => { stopped = true; stopCount++; progressAtStop = progress; },
+      onSlice: slice => {
+        if (stopped && tailSlice++ === cancelAfterSort) {
+          assert.equal(slice.completed, false, "取消必须在返回前的收尾片触发");
+          setTimeout(() => { cancelled = true; }, 0);
+        }
+      },
+    });
+    assert.ok(cancelled);
+    assert.equal(stopCount, 1);
+    assert.equal(progress, progressAtStop);
+    assert.equal(result.termination.reason, "cancelled");
+    assert.equal(result.termination.cancelledAtSec, sync.termination.endSec);
+    assert.equal(result.metrics.length, 5, "收尾取消不得返回半组算法指标");
+    assert.ok(result.metrics.every(metric => metric.steadyMode === "early-stop"));
+    assert.deepEqual(result, {
+      ...sync,
+      termination: { ...sync.termination, reason: "cancelled", cancelledAtSec: sync.termination.endSec },
+      metrics: sync.metrics.map(metric => ({ ...metric, steadyMode: "early-stop" })),
+    }, "取消只改显式终止口径；完整samples/事件次序/数值与积分末态保持不变");
+  }
+});
+
+await test("MetricAccumulator原分位数口径保留：空样本/非有限数/重复值/有界蓄水池", async () => {
+  const estimator = { id: "pure", label: "test" } as Parameters<MetricAccumulator["summary"]>[0];
+  for (const values of [[], [3], [3, 1, 3, -0, 0, 2], [NaN, 2, Infinity, 1, -Infinity]]) {
+    const acc = new MetricAccumulator();
+    for (const [i, value] of values.entries()) acc.add(value, { w: 1, x: 0, y: 0, z: 0 }, i);
+    const original = [...acc.errors];
+    const summary = acc.summary(estimator);
+    assert.ok(Object.is(summary.p50, percentile(original, 0.5)));
+    assert.ok(Object.is(summary.p95, percentile(original, 0.95)));
+    assert.deepEqual(acc.errors, original, "排序不得原地修改保留samples");
+    const task = acc.summaryTask(estimator);
+    assert.deepEqual(task.next(), { value: true, done: false });
+    assert.deepEqual(task.next(), { value: true, done: false });
+    assert.deepEqual(task.next(), { value: summary, done: true });
+  }
+  const acc = new MetricAccumulator({ capOverride: 10, plannedEndSec: 50 });
+  for (let i = 0; i < 25000; i++) acc.add(3 + Math.sin(i), { w: 1, x: 0, y: 0, z: 0 }, i / 500);
+  assert.ok(acc.diagnostics().truncated);
+  assert.equal(acc.diagnostics().reservoirErr, 20000);
+  const task = acc.summaryTask(estimator);
+  task.next(); task.next();
+  assert.deepEqual(task.next(), { value: acc.summary(estimator), done: true });
 });
 
 console.log(`worker-contract: ${passed} PASS / ${failed} FAIL`);

@@ -283,28 +283,22 @@ const newPage = async () => {
     return browser.newPage();
   }
 };
-/** 独立被测页运行时仅停共享页的 WebGL 提交；ticker/数据仍推进，关闭后恢复。 */
+/** 独立用例只运行被测页；临时冻结无关共享页，结束后恢复原现场。 */
 const withIndependentPage = async (body) => {
-  await page.evaluate(() => {
-    const renderer = window.attitudeDemo?.renderer;
-    if (!renderer || window.__smokeSharedRender) return;
-    window.__smokeSharedRender = renderer.render;
-    renderer.render = () => undefined;
-  });
+  const session = await page.createCDPSession();
   let pg;
   try {
+    await session.send("Page.setWebLifecycleState", { state: "frozen" });
     pg = await newPage();
     await pg.bringToFront();
     return await body(pg);
   } finally {
-    if (pg && !pg.isClosed()) await pg.close();
-    await page.evaluate(() => {
-      if (window.__smokeSharedRender) {
-        window.attitudeDemo.renderer.render = window.__smokeSharedRender;
-        delete window.__smokeSharedRender;
-      }
-    });
-    await page.bringToFront();
+    try { if (pg && !pg.isClosed()) await pg.close(); }
+    finally {
+      await session.send("Page.setWebLifecycleState", { state: "active" });
+      await session.detach();
+      await page.bringToFront();
+    }
   }
 };
 page = await browser.newPage();
@@ -4187,76 +4181,134 @@ try {
   // ⑤ 引导课程：走完全部 13 步（用界面上的真实按钮，不走调试接口）。
   //    每一步都会装载实验 / 切视图 / 展开面板，所以这条用例同时覆盖了
   //    「实验库的 id 在课程里没写错」「视图确实切过去了」「走完能正常收尾」。
-  const tourCase = await page.evaluate(async () => {
-    const sec = document.getElementById("sec-tour");
-    if (sec.classList.contains("collapsed")) sec.querySelector(".panel-toggle").click();
-    document.getElementById("tour-start").click();
-    // 课程模块是按需 chunk（首屏不背 19 KB 文案）：等它加载完成、卡片出现再逐步点击。
-    // 旧实现同步挂载，这里若不等待会把「点击后无反应」误判成课程坏了。
-    for (let k = 0; k < 100 && document.getElementById("tour-card").classList.contains("hidden"); k++) {
-      await new Promise((r) => setTimeout(r, 30));
-    }
-    const steps = [];
-    const snap = () => ({
-      counter: document.getElementById("tour-counter").textContent,
-      title: document.getElementById("tour-title").textContent,
-      body: document.getElementById("tour-body").textContent.length,
-      view: document.body.dataset.view,
-      source: document.getElementById("source-select").value,
-      scenario: document.getElementById("scenario-select").value,
-      cardVisible: !document.getElementById("tour-card").classList.contains("hidden"),
-      introHidden: document.getElementById("tour-intro").classList.contains("hidden"),
-      next: document.getElementById("tour-next").textContent,
-    });
-    steps.push(snap());
-    /**
-     * 每步之后**等 UI 落定**再取快照，而不是"点完立刻读"。
-     * CI 的 2 vCPU runner 实测过"第 2 步读到的还是第 1 步的设置"：步骤应用里有会跨帧完成的
-     * UI 同步（视图分段控件过渡、面板展开、实验参数落到控件），点完立刻读就取到上一帧。
-     * 这里的等待有明确的判别依据：计数器（render 里同步写）先变，再让出两帧给跨帧的那部分。
-     */
-    const settle = async () => {
-      await new Promise((r) => setTimeout(r, 0));
-      await new Promise((r) => requestAnimationFrame(() => r(null)));
-      await new Promise((r) => requestAnimationFrame(() => r(null)));
-    };
-    for (let k = 0; k < 13; k++) {
-      const before = document.getElementById("tour-counter").textContent;
-      document.getElementById("tour-next").click();
-      // 计数器变化 = 这一步的 render 已经跑过；最多等 3 s（慢 runner 上一帧可能上百毫秒）
-      for (let w = 0; w < 60 && document.getElementById("tour-counter").textContent === before; w++) {
-        await new Promise((r) => setTimeout(r, 50));
+  const tourCase = diagnostics.tourCase = { steps: [], waits: [], waitFailures: [], done: false,
+    restored: false, restarted: "", closed: false };
+  // 宿主 applyExperiment(id): void → applyExperiment(spec): void、applyView 及 render 都是同步的。
+  // 真正异步的是首次 ensureTour()；静态 HTML 的 counter 已写「第 1 / 13 步」，但标题/正文为空。
+  // 旧用例冷加载等待耗尽仍 push 空快照、点未绑定的 next，13 个 unique 可包含空标题，整列错位一格。
+  const tourTargets = [
+    { view: "attitude", panel: "scenario" },
+    { view: "attitude", source: "pure", scenario: "hover", exp: "drift" },
+    { view: "attitude", source: "pure", scenario: "hover", exp: "drift" },
+    { view: "attitude", source: "mahony", scenario: "violent", exp: "gate", panel: "algo", gate: true },
+    { view: "attitude", source: "mahony", scenario: "composite", exp: "magnetic", mag: true },
+    { view: "attitude", source: "mahony", scenario: "composite", exp: "margFull", mag: true, magMode: "full" },
+    { view: "attitude", source: "kalman", scenario: "hover", exp: "kalman-tuning", panel: "telemetry" },
+    { view: "gimbal", source: "kalman", scenario: "hover", exp: "gimbal" },
+    { view: "attitude", source: "comp", scenario: "pitchHold", exp: "lockAlgo" },
+    { view: "quat", source: "comp", scenario: "hover", exp: "slerp", quatMode: "interp", pair: "combo" },
+    { view: "quat", source: "comp", scenario: "hover", exp: "proj", quatMode: "proj" },
+    { view: "quat", source: "comp", scenario: "hover", exp: "proj", quatMode: "proj", panel: "ins" },
+    { view: "quat", source: "comp", scenario: "hover", exp: "proj", quatMode: "proj", panel: "challenge" },
+  ];
+  const readTourDom = () => page.evaluate(() => ({
+    counter: document.getElementById("tour-counter").textContent,
+    title: document.getElementById("tour-title").textContent,
+    body: document.getElementById("tour-body").textContent.length,
+    view: document.body.dataset.view,
+    activeView: document.querySelector("#view-seg .seg-btn.active")?.dataset.view,
+    source: document.getElementById("source-select").value,
+    scenario: document.getElementById("scenario-select").value,
+    imuMode: document.body.dataset.imuMode,
+    scenarioDisabled: document.getElementById("scenario-select").disabled,
+    exp: document.querySelector("#experiment-list button.active")?.dataset.exp,
+    gate: document.getElementById("gate-toggle").checked,
+    mag: document.getElementById("mag-enable").checked,
+    magMode: document.getElementById("mag-mode").value,
+    quatMode: document.getElementById("quat-mode").value,
+    pair: document.getElementById("quat-pair-select").value,
+    panels: Object.fromEntries([...document.querySelectorAll("#panel .panel-section")].map((sec) =>
+      [sec.dataset.section, !sec.classList.contains("collapsed") &&
+        sec.querySelector(".panel-toggle")?.getAttribute("aria-expanded") === "true"])),
+    cardVisible: !document.getElementById("tour-card").classList.contains("hidden"),
+    introHidden: document.getElementById("tour-intro").classList.contains("hidden"),
+    startRowHidden: document.getElementById("tour-start-row").classList.contains("hidden"),
+    next: document.getElementById("tour-next").textContent,
+    prevDisabled: document.getElementById("tour-prev").disabled,
+    controller: window.attitudeDemo?.tour?.info,
+    visibilityState: document.visibilityState,
+  }));
+  // 保留原先每阶段 3000 ms 额度；Node 墙钟约束也覆盖单次 CDP 读取，绝不等页面 rAF。
+  const boundTour = async (phase, operation, timeout = 3000) => {
+    let timer;
+    try {
+      return await Promise.race([operation(), new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`tour ${phase} 超过 ${timeout} ms`)), timeout);
+      })]);
+    } finally { clearTimeout(timer); }
+  };
+  const waitTourState = async (phase, predicate) => {
+    const start = nodePerformance.now(), timeout = 3000;
+    let state;
+    try {
+      while (nodePerformance.now() - start < timeout) {
+        state = await boundTour(phase, readTourDom, Math.max(1, timeout - (nodePerformance.now() - start)));
+        if (nodePerformance.now() - start < timeout && predicate(state)) {
+          tourCase.waits.push({ phase, elapsedMs: nodePerformance.now() - start, state });
+          return state;
+        }
+        await new Promise((resolve) => setTimeout(resolve, Math.min(25, Math.max(0, timeout - (nodePerformance.now() - start)))));
       }
-      await settle();
-      steps.push(snap());
+      throw new Error(`tour ${phase} 未满足（${timeout} ms）`);
+    } catch (e) {
+      tourCase.waitFailures.push({ phase, timeout, elapsedMs: nodePerformance.now() - start, state, error: String(e) });
+      throw e;
     }
-    const done = document.getElementById("tour-card").classList.contains("hidden");
-    const restored = !document.getElementById("tour-intro").classList.contains("hidden");
-    // 再按一次「开始」应能重新开课（上次走到底已经退出）
-    document.getElementById("tour-start").click();
-    const restarted = document.getElementById("tour-counter").textContent;
-    document.getElementById("tour-close").click();
-    const closed = document.getElementById("tour-card").classList.contains("hidden");
-    return { steps, done, restored, restarted, closed };
-  });
-  const walked = tourCase.steps.slice(0, 13);
+  };
+  const matchesTourStep = (s, k) => {
+    const match = /^第 (\d+) \/ 13 步 · 约 \d+ s$/.exec(s.counter);
+    const target = tourTargets[k];
+    return Number(match?.[1]) === k + 1 && s.title.trim().length > 0 && s.body > 80 &&
+      s.cardVisible && s.introHidden && s.startRowHidden && s.imuMode === "sim" && !s.scenarioDisabled &&
+      s.activeView === target.view && s.next === (k === 12 ? "完成" : "下一步") && s.prevDisabled === (k === 0) &&
+      Object.entries(target).every(([key, value]) => key === "panel" ? s.panels[value] === true : s[key] === value);
+  };
+  const clickTour = (id) => boundTour(`点击 ${id}`, () => page.evaluate((buttonId) => {
+    document.getElementById(buttonId).click();
+  }, id));
+  const tourExited = (s) => !s.cardVisible && !s.introHidden && !s.startRowHidden;
+  try {
+    tourCase.before = await boundTour("起始现场", readTourDom);
+    await boundTour("展开课程面板", () => page.evaluate(() => {
+      const sec = document.getElementById("sec-tour");
+      if (sec.classList.contains("collapsed")) sec.querySelector(".panel-toggle").click();
+    }));
+    await clickTour("tour-start");
+    for (let k = 0; k < 13; k++) {
+      // 只有精确第 k+1 步与该步目标现场同时成立才计入；不因超时补点或沿用旧快照。
+      tourCase.steps.push(await waitTourState(`第 ${k + 1}/13 步现场`, (s) => matchesTourStep(s, k)));
+      if (k < 12) await clickTour("tour-next");
+    }
+    // 最后一次点的是「完成」：exit 不改 counter，不能再等 counter 变化。
+    await clickTour("tour-next");
+    tourCase.finished = await waitTourState("完成后收起与入口恢复", tourExited);
+    tourCase.done = !tourCase.finished.cardVisible;
+    tourCase.restored = !tourCase.finished.introHidden && !tourCase.finished.startRowHidden;
+    await clickTour("tour-start");
+    tourCase.restartState = await waitTourState("重开精确第 1 步", (s) => matchesTourStep(s, 0));
+    tourCase.restarted = tourCase.restartState.counter;
+    await clickTour("tour-close");
+    tourCase.closeState = await waitTourState("关闭后收起与入口恢复", tourExited);
+    tourCase.closed = !tourCase.closeState.cardVisible;
+  } catch (e) {
+    // 原断言必须 FAIL，完整现场留 diagnostics；清理不能补成 done/restored/closed=true。
+    tourCase.error = String(e);
+    try { await clickTour("tour-close"); }
+    catch (cleanupError) { tourCase.cleanupError = String(cleanupError); }
+  }
+  const walked = tourCase.steps;
   check(
     "引导课程：13 步逐条装载现场（实验/视图/面板）并正常收尾",
-    walked.length === 13 &&
+    !tourCase.error && tourCase.waitFailures.length === 0 &&
+      walked.length === 13 &&
       new Set(walked.map((s) => s.title)).size === 13 &&
-      walked.every((s) => s.cardVisible && s.body > 80) &&
-      walked.every((s, k) => s.counter.startsWith(`第 ${k + 1} / 13 步`)) &&
-      walked[0].introHidden &&
-      walked[7].view === "gimbal" && // 第 8 步：万向节锁几何
-      walked[10].view === "quat" && // 第 11 步：4D 投影
-      walked[1].source === "pure" && // 第 2 步：零偏漂移实验把来源切到纯积分
-      tourCase.done &&
-      tourCase.restored &&
-      tourCase.restarted.startsWith("第 1 / 13 步") &&
-      tourCase.closed,
+      walked.every(matchesTourStep) &&
+      tourCase.done && tourCase.restored &&
+      tourCase.restarted.startsWith("第 1 / 13 步") && tourCase.closed,
     `${walked.length} 步；标题去重 ${new Set(walked.map((s) => s.title)).size}；` +
-      `第 2 步来源=${walked[1].source}（应 pure）；第 8/11 步视图=${walked[7].view}/${walked[10].view}（应 gimbal/quat）；` +
-      `走完自动收起=${tourCase.done}、开始入口恢复=${tourCase.restored}；✕ 可退出=${tourCase.closed}`,
+      `第 2 步来源=${walked[1]?.source}（应 pure）；第 8/11 步视图=${walked[7]?.view}/${walked[10]?.view}（应 gimbal/quat）；` +
+      `走完自动收起=${tourCase.done}、开始入口恢复=${tourCase.restored}；✕ 可退出=${tourCase.closed}；` +
+      `等待失败=${tourCase.waitFailures.length}${tourCase.error ? `；${tourCase.error}` : ""}`,
   );
 
   // ⑥ 应用界面里的「见文档·…」链接（a[data-doc-open]）：从面板直接跳进文档对应页。

@@ -135,6 +135,8 @@ export interface RunHooks {
 }
 
 const EST_IDS: EstimatorId[] = ["pure", "comp", "mahony", "madg", "kalman"];
+/** 普通 yield 是一个世界步；true 强制异步出口让出，不能被步数预算合并。 */
+type RunTask<T> = Generator<true | void, T, void>;
 
 /**
  * SO(3) 小角误差分解（比欧拉分解更稳健，万向节锁附近不会突变）。
@@ -396,6 +398,11 @@ export class MetricAccumulator {
    *   也会漏掉真正的取消——这里改成由调用方明确告知。
    */
   summary(e: Estimator, _steadyFromSec?: number | null, completed = true): EstimatorRunMetrics {
+    return exhaustTask(this.summaryTask(e, _steadyFromSec, completed));
+  }
+
+  /** 同步耗尽、异步逐分位数让出；保留原排序与插值，指标逐位一致。 */
+  *summaryTask(e: Estimator, _steadyFromSec?: number | null, completed = true): RunTask<EstimatorRunMetrics> {
     const n = this.seen;
     const mean = n ? this.sum / n : NaN;
     const rmse = n ? Math.sqrt(this.sumSq / n) : NaN;
@@ -409,6 +416,12 @@ export class MetricAccumulator {
     const earlyStopped = !completed;
     const rmsOf = (sumSq: number): number => (n ? Math.sqrt(sumSq / n) : NaN);
     const t = this.tracker.summary();
+    // 短跑用全样本；长跑用原定长蓄水池。每次排序都是独立的不可抢占单位。
+    const values = this.truncated ? this.resErr : this.errors;
+    const p50 = percentile(values, 0.5);
+    yield true;
+    const p95 = percentile(values, 0.95);
+    yield true;
     return {
       id: e.id as EstimatorId,
       label: e.label,
@@ -417,8 +430,8 @@ export class MetricAccumulator {
       rmse,
       max: n ? this.maxErr : NaN,
       // 短跑用全样本（精确）；长跑用定长蓄水池（等概率抽样，无相位混叠）
-      p50: percentile(this.truncated ? this.resErr : this.errors, 0.5),
-      p95: percentile(this.truncated ? this.resErr : this.errors, 0.95),
+      p50,
+      p95,
       steadyRmse,
       steadyFromSec: cut,
       /** 分位数是否来自定长蓄水池（样本数超过 STATS_CAP 时为 true） */
@@ -471,14 +484,14 @@ export function runExperimentAsync(configIn: ExperimentConfig, hooks: AsyncRunHo
   return exhaustTaskAsync(runTask(configIn, hooks, false), hooks);
 }
 
-function exhaustTask<T>(task: Generator<void, T, void>): T {
+function exhaustTask<T>(task: RunTask<T>): T {
   for (;;) {
     const step = task.next();
     if (step.done) return step.value;
   }
 }
 
-async function exhaustTaskAsync<T>(task: Generator<void, T, void>, hooks: AsyncRunHooks): Promise<T> {
+async function exhaustTaskAsync<T>(task: RunTask<T>, hooks: AsyncRunHooks): Promise<T> {
   const budget = Number.isFinite(hooks.stepsPerSlice) ? Math.max(1, Math.min(512, Math.floor(hooks.stepsPerSlice!))) : 128;
   const timeBudget = Number.isFinite(hooks.maxSliceMs) ? Math.max(1, Math.min(16, hooks.maxSliceMs!)) : Infinity;
   const clock = hooks.sliceClock ?? (() => performance.now());
@@ -494,6 +507,7 @@ async function exhaustTaskAsync<T>(task: Generator<void, T, void>, hooks: AsyncR
         hooks.onSlice?.({ steps, computeMs: clock() - started, completed: true });
         return step.value;
       }
+      if (step.value === true) break; // 收尾边界强制 macrotask，步数/墙钟预算不能吞掉它。
     } while (steps < budget && clock() - started < timeBudget);
     hooks.onSlice?.({ steps, computeMs: clock() - started, completed: false });
     await yieldToMessages();
@@ -647,17 +661,17 @@ function runTask(
   configIn: ExperimentConfig,
   hooks: RunHooks,
   keepSeries: false,
-): Generator<void, HeadlessRunResult, void>;
+): RunTask<HeadlessRunResult>;
 function runTask(
   configIn: ExperimentConfig,
   hooks: RunHooks,
   keepSeries: true,
-): Generator<void, HeadlessRunResult & { series: ErrorSeries[] }, void>;
+): RunTask<HeadlessRunResult & { series: ErrorSeries[] }>;
 function* runTask(
   configIn: ExperimentConfig,
   hooks: RunHooks,
   keepSeries: boolean,
-): Generator<void, HeadlessRunResult & { series?: ErrorSeries[] }, void> {
+): RunTask<HeadlessRunResult & { series?: ErrorSeries[] }> {
   const config = cloneExperimentConfig(configIn);
   const world = new World(scenarios[config.scenario] ?? scenarios.hover, config.seed);
   // 手动剧本的目标角来自配置（不是全局可变对象）——否则「同配置同 seed」并不可复现
@@ -762,6 +776,7 @@ function* runTask(
   // 最后一个步后的让出也可能收到取消，不把末片取消记成正常完成。
   if (cancelledAtSec === null && hooks.shouldCancel?.()) cancelledAtSec = world.t;
   hooks.onStop?.();
+  yield true; // 积分已停止，先处理入站消息，再开始首个算法的指标排序。
 
   // 终止口径：请求时长 / 实际结束 / 最后一次解算 / 尾巴长度，四项分开报（复核 P2-1）
   const lastSolveSec = lastSolve;
@@ -776,10 +791,17 @@ function* runTask(
 
   const finalQuats = {} as Record<EstimatorId, Quat>;
   const metrics: EstimatorRunMetrics[] = [];
-  ests.forEach((e, i) => {
+  for (let i = 0; i < ests.length; i++) {
+    const e = ests[i];
     finalQuats[e.id as EstimatorId] = { ...e.q };
-    metrics.push(acc[i].summary(e, config.steadyFromSec, termination.reason === "completed"));
-  });
+    metrics.push(yield* acc[i].summaryTask(e, config.steadyFromSec, termination.reason === "completed"));
+  }
+  // 收尾让出期间也可能收到取消；仍返回全部算法指标，统一口径，不把半组算作完成。
+  if (cancelledAtSec === null && hooks.shouldCancel?.()) {
+    termination.reason = "cancelled";
+    termination.cancelledAtSec = world.t; // 积分已停止，取消不会改变 endSec / lastSolveSec。
+    for (const metric of metrics) metric.steadyMode = "early-stop";
+  }
 
   const base: HeadlessRunResult = {
     config,
