@@ -208,6 +208,7 @@ if (workerSettled) {
     requestToRunnerStopMs: mainCancelLatencyMs,
     runnerStopToPostAwaitMs: timing?.runnerStoppedAt != null && timing?.postAwaitAt != null ? timing.postAwaitAt - timing.runnerStoppedAt : null,
     requestToPostAwaitMs: after.state.cancelLatencyMs,
+    eventToRunnerStopMs: input && timing?.runnerStoppedAt != null ? timing.runnerStoppedAt - input.eventTimeStamp : null,
     nodeInputToRunnerStopMs: input && timing?.runnerStoppedAt != null ? input.timeOrigin + timing.runnerStoppedAt - node.sentEpochMs : null,
     observedAfterStopMs: timing?.runnerStoppedAt != null ? after.observedAt - timing.runnerStoppedAt : null,
     clockNote: "Node/browser epoch uses timeOrigin+performance.now; event/runner/await use page monotonic time",
@@ -232,10 +233,10 @@ record("batch timer", diagnostics.timerBaseline?.count >= 40 && diagnostics.time
   `基线仅诊断，运行 ${diagnostics.timerDuringBatch?.count ?? 0} 样本，p95=${diagnostics.timerDuringBatch?.p95 ?? "缺失"} ms，固定目标200`);
 record("main cancellation", diagnostics.beforeCancellation?.state.running && diagnostics.afterCancellation?.input?.trusted &&
   diagnostics.afterCancellation?.input?.stateBeforeHandler.running && diagnostics.cancellation?.runnerSettled &&
-  diagnostics.cancellation?.cancelledSeen && withinTarget(mainCancelLatencyMs) && withinTarget(diagnostics.cancellation?.nodeInputToRunnerStopMs) &&
+  diagnostics.cancellation?.cancelledSeen && withinTarget(mainCancelLatencyMs) && withinTarget(diagnostics.cancellation?.eventToRunnerStopMs) &&
   partialSeeds >= 1 && diagnostics.afterCancellation?.state.running === false && diagnostics.afterCancellation?.state.activeJob === 0 &&
   JSON.stringify(diagnostics.afterCancellation?.result) === JSON.stringify(worker.result) && diagnostics.afterCancellation?.body.trim() === "",
-  `request→runner ${mainCancelLatencyMs ?? "缺失"} ms，input→runner ${diagnostics.cancellation?.nodeInputToRunnerStopMs ?? "缺失"} ms，post-await单记；取消前「${diagnostics.beforeCancellation?.status ?? "未启动"}」`);
+  `request→runner ${mainCancelLatencyMs ?? "缺失"} ms，input→runner ${diagnostics.cancellation?.eventToRunnerStopMs ?? "缺失"} ms，post-await单记；取消前「${diagnostics.beforeCancellation?.status ?? "未启动"}」`);
 record("telemetry", diagnostics.beforeCancellation?.state.slices?.count > 0 && diagnostics.beforeCancellation?.frameTiming?.count > 0,
   "必须保留主线程 slice 与 api.performance 分项测量，不把缺失当0");
 record("worker complete", workerSettled && worker.mode === "worker" && worker.rows === 5 && worker.result?.generation === worker.state.generation,

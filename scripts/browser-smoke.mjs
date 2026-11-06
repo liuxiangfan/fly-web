@@ -283,6 +283,30 @@ const newPage = async () => {
     return browser.newPage();
   }
 };
+/** 独立被测页运行时仅停共享页的 WebGL 提交；ticker/数据仍推进，关闭后恢复。 */
+const withIndependentPage = async (body) => {
+  await page.evaluate(() => {
+    const renderer = window.attitudeDemo?.renderer;
+    if (!renderer || window.__smokeSharedRender) return;
+    window.__smokeSharedRender = renderer.render;
+    renderer.render = () => undefined;
+  });
+  let pg;
+  try {
+    pg = await newPage();
+    await pg.bringToFront();
+    return await body(pg);
+  } finally {
+    if (pg && !pg.isClosed()) await pg.close();
+    await page.evaluate(() => {
+      if (window.__smokeSharedRender) {
+        window.attitudeDemo.renderer.render = window.__smokeSharedRender;
+        delete window.__smokeSharedRender;
+      }
+    });
+    await page.bringToFront();
+  }
+};
 page = await browser.newPage();
 await page.setViewport({ ...VIEWPORT, deviceScaleFactor: 1 });
 attachSharedListeners(page);
@@ -1923,8 +1947,7 @@ try {
   );
 
   // 复核反例回归：断线重连的过渡态必须**冻结**数据流（不得混入模拟 IMU、不得重置本轮时钟）
-  const reconnectFreeze = await (async () => {
-    const pg = await newPage();
+  const reconnectFreeze = await withIndependentPage(async (pg) => {
     await pg.setViewport({ width: 1280, height: 800 });
     const errs = [];
     pg.on("console", (m) => m.type() === "error" && errs.push(m.text()));
@@ -2008,7 +2031,7 @@ try {
     }));
     await pg.close();
     return { before, during, errs };
-  })();
+  });
   check(
     "重连过渡态冻结数据流：时钟不重置、记录不新增、不混入模拟数据",
     Math.abs(reconnectFreeze.during.t - reconnectFreeze.before.t) < 1e-9 &&
@@ -2073,9 +2096,8 @@ try {
    * timer 是事件循环诊断，不冒充输入事件；200 ms 是固定目标，不随基线放大。
    * runner 停止和 await 返回必须有独立时点，不能用轮询到文案/半成品的时间冒充。
    */
-  const mainCancel = await (async () => {
+  const mainCancel = await withIndependentPage(async (pg) => {
     const diagnostic = diagnostics.sw10 = { targetMs: 200, minimumSamples: 40, waitFailures: [], errors: [] };
-    const pg = await newPage();
     await pg.setViewport({ width: 1280, height: 800 });
     const errs = diagnostic.errors;
     pg.on("console", (m) => m.type() === "error" && errs.push(m.text()));
@@ -2194,6 +2216,7 @@ try {
       requestToRunnerStopMs: timing?.requestedAt != null && timing?.runnerStoppedAt != null ? timing.runnerStoppedAt - timing.requestedAt : null,
       runnerStopToPostAwaitMs: timing?.runnerStoppedAt != null && timing?.postAwaitAt != null ? timing.postAwaitAt - timing.runnerStoppedAt : null,
       requestToPostAwaitMs: after.state.cancelLatencyMs,
+      eventToRunnerStopMs: input && timing?.runnerStoppedAt != null ? timing.runnerStoppedAt - input.eventTimeStamp : null,
       nodeInputToRunnerStopMs: input && timing?.runnerStoppedAt != null ? input.timeOrigin + timing.runnerStoppedAt - nodeInputSentEpochMs : null,
       observedAfterStopMs: timing?.runnerStoppedAt != null ? after.observedAt - timing.runnerStoppedAt : null,
       rawTiming: timing ?? null,
@@ -2237,22 +2260,23 @@ try {
     diagnostic.final = await snapshot();
     await pg.close();
     return { during, idleLatency, responsiveness, after, settled, restart, cancelledSeen, runnerSettled, errs };
-  })();
+  });
   const cancelMetrics = diagnostics.sw10.cancellation;
   const withinTarget = (value) => Number.isFinite(value) && value >= 0 && value <= 200;
-  const cancelName = "SW-10 主线程降级：真实 GUI 取消未完成种子，输入到 runner 停止 ≤200 ms（post-await 单独记录）";
+  const cancelName = "SW-10 主线程降级：真实 GUI 取消未完成种子，浏览器事件到 runner 停止 ≤200 ms（命令传输与 post-await 单记）";
   const responseName = "SW-10 主线程降级：运行期 timer 响应 ≥40 样本且 p95 ≤200 ms，取消后界面继续可用";
   diagnostics.sw10.checks = [cancelName, responseName, "SW-10 主线程降级：取消后再启动能跑完，且旧世代不回写"];
   check(
-    "SW-10 主线程降级：真实 GUI 取消未完成种子，输入到 runner 停止 ≤200 ms（post-await 单独记录）",
+    "SW-10 主线程降级：真实 GUI 取消未完成种子，浏览器事件到 runner 停止 ≤200 ms（命令传输与 post-await 单记）",
     mainCancel.during.state.running && mainCancel.during.state.button.includes("取消") &&
       mainCancel.during.state.workerDisabled === true && mainCancel.after.input?.trusted === true &&
       mainCancel.after.input?.beforeHandlerState.running === true && mainCancel.cancelledSeen && mainCancel.runnerSettled &&
-      withinTarget(cancelMetrics.nodeInputToRunnerStopMs) && withinTarget(cancelMetrics.requestToRunnerStopMs) &&
+      withinTarget(cancelMetrics.eventToRunnerStopMs) && withinTarget(cancelMetrics.requestToRunnerStopMs) &&
       mainCancel.after.state.partialSeeds >= 1 && mainCancel.after.state.running === false &&
       mainCancel.after.state.activeJob === 0 && diagnostics.sw10.waitFailures.length === 0,
-    `输入→handler ${cancelMetrics.nodeInputToHandlerMs?.toFixed(1) ?? "缺失"} ms；handler→runner ${cancelMetrics.handlerToRunnerStopMs?.toFixed(1) ?? "缺失"} ms；` +
-      `runner→post-await ${cancelMetrics.runnerStopToPostAwaitMs?.toFixed(1) ?? "缺失"} ms；输入→runner ${cancelMetrics.nodeInputToRunnerStopMs?.toFixed(1) ?? "缺失"} ms（固定200）；` +
+    `命令传输+输入等待→handler ${cancelMetrics.nodeInputToHandlerMs?.toFixed(1) ?? "缺失"} ms（仅诊断）；` +
+      `浏览器事件→handler ${cancelMetrics.eventToHandlerMs?.toFixed(1) ?? "缺失"} ms；handler→runner ${cancelMetrics.handlerToRunnerStopMs?.toFixed(1) ?? "缺失"} ms；` +
+      `runner→post-await ${cancelMetrics.runnerStopToPostAwaitMs?.toFixed(1) ?? "缺失"} ms；事件→runner ${cancelMetrics.eventToRunnerStopMs?.toFixed(1) ?? "缺失"} ms（固定200）；` +
       `取消前「${mainCancel.during.status}」；丢弃 ${mainCancel.after.state.partialSeeds} 个；等待失败 ${diagnostics.sw10.waitFailures.length}`,
   );
   check(
@@ -3844,27 +3868,92 @@ try {
     return out;
   });
   // ③ 明确打开数学页，前置页/可见按钮/真实输入都留痕；反馈不是复制载荷的替代品。
-  const formulaCopy = diagnostics.formulaCopy = { waitFailures: [], targetPage: "math" };
+  const formulaCopy = diagnostics.formulaCopy = { waitFailures: [], targetPage: "math", before: {},
+    after: { selectedText: "", clipboardText: null, label: "" } };
+  const formulaPageSelector = '#docs-overlay .doc-page[data-doc-page="math"]';
+  const formulaNavSelector = '#docs-overlay .docs-toc .module-link[data-doc="math"]';
+  // #math 确为 article；visible:true 不校验折叠 details 或点击命中，不能只换 id/延长等待。
+  const readFormulaDom = () => page.evaluate((pageSelector, navSelector) => {
+    const describe = (el) => {
+      if (!el) return null;
+      const r = el.getBoundingClientRect(), s = getComputedStyle(el);
+      const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+      return { tag: el.tagName, id: el.id, docPage: el.dataset.docPage, role: el.getAttribute("role"),
+        hidden: el.hidden, hiddenAttr: el.getAttribute("hidden"), display: s.display,
+        visibility: s.visibility, opacity: s.opacity,
+        rect: { x: r.x, y: r.y, width: r.width, height: r.height },
+        rendered: el.getClientRects().length > 0 && r.width > 0 && r.height > 0 &&
+          s.display !== "none" && s.visibility !== "hidden" && !el.closest("[hidden]"),
+        hit: hit ? { tag: hit.tagName, id: hit.id, className: String(hit.className) } : null,
+        hitInside: Boolean(hit && el.contains(hit)) };
+    };
+    const overlay = document.getElementById("docs-overlay");
+    const targets = [...document.querySelectorAll(pageSelector)];
+    const nav = document.querySelector(navSelector), details = nav?.closest("details");
+    return { overlay: describe(overlay), targetPages: targets.map(describe),
+      currentDoc: [...document.querySelectorAll("#docs-overlay .doc-page:not([hidden])")].map((el) => el.dataset.docPage),
+      activeModule: document.querySelector("#docs-overlay .module-link.active")?.dataset.doc,
+      nav: describe(nav), details: details ? { id: details.id, open: details.open } : null,
+      button: describe(targets[0]?.querySelector(".formula .formula-copy")),
+      navigationInput: window.__formulaNavInput ?? null,
+      viewport: { width: innerWidth, height: innerHeight }, overlayScrollTop: overlay?.scrollTop,
+      docScrollTop: document.querySelector("#docs-overlay .doc-pages")?.scrollTop,
+      hasFocus: document.hasFocus(), visibilityState: document.visibilityState,
+      activeElementId: document.activeElement?.id ?? "", secureContext: isSecureContext,
+      clipboard: { readText: typeof navigator.clipboard?.readText, writeText: typeof navigator.clipboard?.writeText } };
+  }, formulaPageSelector, formulaNavSelector);
+  // Node 计时采样，不依赖页面 rAF；原有 STATE_MS/3000 ms 额度不变。
+  const waitFormulaState = async (phase, read, predicate, timeout) => {
+    const start = nodePerformance.now();
+    let state;
+    do {
+      state = await read();
+      if (predicate(state)) return state;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    } while (nodePerformance.now() - start < timeout);
+    formulaCopy.waitFailures.push({ phase, timeout, elapsedMs: nodePerformance.now() - start, state });
+    throw new Error(`formula ${phase} 未满足（${timeout} ms）`);
+  };
   // 只给测试 browser context 读剪贴板权限，实际写入仍由用户激活的原生 API 完成；不替换 clipboard。
   try {
     await browser.defaultBrowserContext().overridePermissions(new URL(APP_URL).origin, ["clipboard-read", "clipboard-write"]);
     formulaCopy.clipboardReadPermission = "granted in test browser context";
   } catch (e) { formulaCopy.clipboardReadPermission = String(e); }
+  let formulaButton = null;
+  try {
   await page.bringToFront();
+  formulaCopy.navigationBefore = await readFormulaDom();
   await page.click("#btn-docs");
-  await page.waitForSelector('#docs-overlay:not([hidden]) .module-link[data-doc="math"]', { visible: true, timeout: STATE_MS });
-  await page.click('.module-link[data-doc="math"]');
-  await page.waitForSelector('#math:not([hidden]) .formula-copy', { visible: true, timeout: STATE_MS });
-  const formulaButton = await page.$('#math .formula .formula-copy');
+  const opened = await waitFormulaState("文档对话框打开", readFormulaDom,
+    (s) => s.overlay?.hidden === false && s.overlay.rendered && s.overlay.role === "dialog", STATE_MS);
+  if (opened.details?.open === false) await page.click("#toc-disclosure > summary");
+  const navButton = await page.$(formulaNavSelector);
+  if (!navButton) throw new Error("数学模块导航缺失");
+  await navButton.evaluate((button) => button.scrollIntoView({ block: "center" }));
+  formulaCopy.navigationReady = await waitFormulaState("数学模块导航可命中", readFormulaDom,
+    (s) => s.nav?.rendered && s.nav.hitInside && s.details?.open !== false, STATE_MS);
+  await navButton.evaluate((button) => {
+    window.__formulaNavInput = null;
+    button.addEventListener("click", (event) => { window.__formulaNavInput = { trusted: event.isTrusted,
+      x: event.clientX, y: event.clientY, targetTag: event.target.tagName,
+      targetDoc: event.target.closest(".module-link")?.dataset.doc, handlerAt: performance.now() }; },
+    { capture: true, once: true });
+  });
+  await navButton.click();
+  await navButton.dispose();
+  formulaCopy.navigationAfter = await waitFormulaState("唯一当前数学页及公式按钮", readFormulaDom,
+    (s) => s.navigationInput?.trusted === true && s.navigationInput.targetDoc === "math" &&
+      s.currentDoc.length === 1 && s.currentDoc[0] === "math" && s.activeModule === "math" &&
+      s.targetPages.length === 1 && s.targetPages[0].hidden === false && s.targetPages[0].rendered && s.button?.rendered, STATE_MS);
+  formulaButton = await page.$(`${formulaPageSelector}:not([hidden]) .formula .formula-copy`);
+  if (!formulaButton) throw new Error("当前数学页公式按钮缺失");
   await formulaButton.evaluate((button) => button.scrollIntoView({ block: "center" }));
   await formulaButton.hover();
-  await page.waitForFunction(() => {
-    const button = document.querySelector("#math .formula .formula-copy");
-    return button && Number(getComputedStyle(button).opacity) > 0;
-  }, { timeout: 3000, polling: 25 });
-  formulaCopy.before = await page.evaluate(() => {
+  formulaCopy.buttonReady = await waitFormulaState("公式按钮悬停可见且可命中", readFormulaDom,
+    (s) => s.currentDoc.length === 1 && s.currentDoc[0] === "math" &&
+      s.button?.rendered && Number(s.button.opacity) > 0 && s.button.hitInside, 3000);
+  formulaCopy.before = await formulaButton.evaluate((button) => {
     const blocks = [...document.querySelectorAll(".doc-page .formula")];
-    const button = document.querySelector("#math .formula .formula-copy");
     const body = button?.parentElement.querySelector(".formula-body");
     const rect = button?.getBoundingClientRect();
     const style = button ? getComputedStyle(button) : null;
@@ -3876,23 +3965,23 @@ try {
       state: button?.dataset.copyState, label: button?.textContent ?? "",
       visible: Boolean(rect?.width && rect?.height && style?.visibility !== "hidden" && Number(style?.opacity) > 0),
       bodyContainsButton: Boolean(body?.querySelector("button")),
-      mathHidden: document.getElementById("math")?.hidden,
+      mathHidden: button.closest('.doc-page[data-doc-page="math"]')?.hidden,
       visibilityState: document.visibilityState, hasFocus: document.hasFocus(), activeElementId: document.activeElement?.id ?? "",
     };
   });
-  await page.evaluate(() => {
-    const button = document.querySelector("#math .formula .formula-copy");
+  await formulaButton.evaluate((button) => {
     window.__formulaCopyInput = null;
     button.addEventListener("click", (event) => { window.__formulaCopyInput = { trusted: event.isTrusted,
+      x: event.clientX, y: event.clientY,
       handlerAt: performance.now(), eventTimeStamp: event.timeStamp, hasFocus: document.hasFocus() }; }, { capture: true, once: true });
   });
   await formulaButton.click();
   try {
-    await page.waitForFunction(() => ["copied", "selected", "manual"].includes(
-      document.querySelector("#math .formula .formula-copy")?.dataset.copyState), { timeout: 3000, polling: 25 });
-  } catch (e) { formulaCopy.waitFailures.push({ phase: "copy terminal state", reason: String(e) }); }
-  formulaCopy.after = await page.evaluate(async () => {
-    const button = document.querySelector("#math .formula .formula-copy");
+    await waitFormulaState("copy terminal state", () => formulaButton.evaluate((button) => ({
+      state: button.dataset.copyState, label: button.textContent, input: window.__formulaCopyInput })),
+    (s) => ["copied", "selected", "manual"].includes(s.state), 3000);
+  } catch (e) { formulaCopy.terminalWaitError = String(e); }
+  formulaCopy.after = await formulaButton.evaluate(async (button) => {
     const body = button?.parentElement.querySelector(".formula-body");
     const state = button?.dataset.copyState;
     const selection = window.getSelection();
@@ -3911,9 +4000,19 @@ try {
       bodyContainsButton: Boolean(body?.querySelector("button")),
       style: { opacity: button ? getComputedStyle(button).opacity : null, ariaLive: button?.getAttribute("aria-live") } };
   });
-  await page.screenshot({ path: join(shots, "formula-copy-feedback.png") });
-  await page.click("#btn-docs-close");
-  await browser.defaultBrowserContext().clearPermissionOverrides();
+  } catch (e) {
+    formulaCopy.error = String(e);
+    formulaCopy.waitFailures.push({ phase: "navigation/copy", reason: String(e) });
+    try { formulaCopy.failureDom = await readFormulaDom(); }
+    catch (snapshotError) { formulaCopy.failureDomError = String(snapshotError); }
+  } finally {
+    await formulaButton?.dispose();
+    try { await page.screenshot({ path: join(shots, "formula-copy-feedback.png") }); }
+    catch (e) { formulaCopy.screenshotError = String(e); }
+    // 导航失败仍报原公式断言并继续套件；Esc 不依赖滚动后关闭按钮的坐标。
+    if (await page.evaluate(() => document.getElementById("docs-overlay")?.hidden === false)) await page.keyboard.press("Escape");
+    await browser.defaultBrowserContext().clearPermissionOverrides();
+  }
   check(
     "惯性导航面板：画布有内容 + 读数表 + 摘要",
     extras.insCanvas.paintedPixels > 200 &&
@@ -3941,15 +4040,15 @@ try {
       : copyState === "manual" && formulaCopy.after.label === "请手动选中并按 Ctrl+C" &&
         formulaCopy.after.selectedText === "";
   formulaCopy.payloadCorrect = copyPayloadCorrect;
-  formulaCopy.reason = copyState === "manual" ? "自动复制/选中不可用，明确提示手动操作，未声称复制成功"
-    : copyPayloadCorrect ? "真实载荷与公式正文一致" : formulaCopy.after.clipboardReason ?? "终态标签或真实 selection/clipboard 与正文不一致";
+  formulaCopy.reason = formulaCopy.error ?? (copyState === "manual" ? "自动复制/选中不可用，明确提示手动操作，未声称复制成功"
+    : copyPayloadCorrect ? "真实载荷与公式正文一致" : formulaCopy.after.clipboardReason ?? "终态标签或真实 selection/clipboard 与正文不一致");
   formulaCopy.checkName = "公式一键复制：数学页可见按钮真实点击，状态与真实载荷一致且正文无按钮污染";
   check(
     "公式一键复制：数学页可见按钮真实点击，状态与真实载荷一致且正文无按钮污染",
     formulaCopy.before.formulaCount > 20 && formulaCopy.before.oneButtonPerFormula &&
       formulaCopy.before.bodiesExcludeButtons && formulaCopy.before.buttonCount === formulaCopy.before.formulaCount &&
       formulaCopy.before.visible && formulaCopy.before.mathHidden === false &&
-      formulaCopy.before.expectedText.length > 0 && !formulaCopy.after.bodyContainsButton &&
+      (formulaCopy.before.expectedText?.length ?? 0) > 0 && !formulaCopy.after.bodyContainsButton &&
       formulaCopy.after.input?.trusted === true && formulaCopy.waitFailures.length === 0 && copyPayloadCorrect,
     `${formulaCopy.before.formulaCount} 个公式均一个按钮；状态 ${copyState ?? "缺失"} /「${formulaCopy.after.label}」；` +
       `真实selection ${formulaCopy.after.selectedText.length} 字、clipboard ${formulaCopy.after.clipboardText?.length ?? "不可读"} 字；${formulaCopy.reason}`,
