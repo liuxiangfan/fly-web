@@ -2111,7 +2111,7 @@ try {
    */
   const mainCancel = await withIndependentPage(async (pg) => {
     const diagnostic = diagnostics.sw10 = { targetMs: 200, minimumSamples: 40, waitFailures: [], errors: [] };
-    await pg.setViewport({ width: 1280, height: 800 });
+    await pg.setViewport({ ...VIEWPORT, deviceScaleFactor: 1 });
     const errs = diagnostic.errors;
     pg.on("console", (m) => m.type() === "error" && errs.push(m.text()));
     pg.on("pageerror", (e) => errs.push(String(e)));
@@ -2179,6 +2179,12 @@ try {
     // 确认采样后仍在批量中；不声称首种子，status 原文保留实际完成数。
     const during = diagnostic.beforeCancellation = await snapshot();
     await pg.evaluate(() => {
+      for (const type of ["pointerdown", "pointerup", "mousedown", "mouseup"]) {
+        document.addEventListener(type, event => {
+          if (!event.target.closest?.("#btn-batch")) return;
+          (window.__sw10.pointerEvents ??= []).push({ type, timestamp: event.timeStamp, handledAt: performance.now(), trusted: event.isTrusted });
+        }, { capture: true });
+      }
       document.addEventListener("click", (event) => {
         if (!event.target.closest?.("#btn-batch")) return;
         window.__sw10.input = {
@@ -2196,7 +2202,7 @@ try {
     await pg.mouse.down();
     const nodeInputSentEpochMs = nodePerformance.timeOrigin + nodePerformance.now();
     await pg.mouse.up(); // 这一真实 mouseup 产生 click；移动/按下的 CDP 往返不混入点击排队时延。
-    diagnostic.nodeInput = { kind: "click-producing mouseup dispatch", sentEpochMs: nodeInputSentEpochMs,
+    diagnostic.nodeInput = { viewport: pg.viewport(), kind: "click-producing mouseup dispatch", sentEpochMs: nodeInputSentEpochMs,
       clickReturnedEpochMs: nodePerformance.timeOrigin + nodePerformance.now(), position: { x: box.x + box.width / 2, y: box.y + box.height / 2 } };
     let cancelledSeen = false, runnerSettled = false;
     try {
@@ -2213,6 +2219,7 @@ try {
     const after = await pg.evaluate(() => ({
       state: window.attitudeDemo.experiment.batchState(),
       input: window.__sw10.input,
+      pointerEvents: window.__sw10.pointerEvents ?? [],
       observedAt: performance.now(),
       status: document.getElementById("batch-status")?.textContent ?? "",
       body: document.getElementById("batch-body")?.innerHTML ?? "",
