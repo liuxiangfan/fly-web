@@ -2,7 +2,8 @@
 
 <!-- current:begin -->
 
-> 文档更新：2026-11-05 · 当前分支：`master` · HEAD：`830e4e3786bcf4dddbada7514fed05a8fd3a83ad`（工作树改动尚未提交）。
+> 文档更新：2026-11-06 · 修复分支：`fix/smoke-interaction-release` · 发布目标：`v0.2.0`（尚未发布）。以 Git 当前 HEAD 为准。
+> 本次正在修复实际 CI 的交互响应与公式复制失败；旧版长稳／稳定性是历史证据，不能证明本次修复已通过。
 > 最新软件质量复核：见 [`QUALITY-SOFTWARE-ONLY.md`](QUALITY-SOFTWARE-ONLY.md)（本轮按软件工单实施后重新评分，含"未做到"的逐条说明）。
 > 顺序与状态看 [`ROADMAP.md`](ROADMAP.md)，具体方法与反例看 [`SOFTWARE-IMPROVEMENT-PLAN.md`](SOFTWARE-IMPROVEMENT-PLAN.md)。
 
@@ -10,7 +11,7 @@
 
 纯前端四元数姿态解算教学软件：多数据源与离线回放、五算法数字对照、Three.js 姿态／万向节／四元数视图、校准数学、INS、批量评测与应用内教材。
 
-- 在线入口：<https://fly_web.070616.xyz>；本轮已部署，线上构建 `95a804131d78`（部署后 smoke 实测通过）。
+- 在线入口：<https://fly_web.070616.xyz>；2026-11-06 核对线上提交 `58a11ba09a91` 与远端 master 一致；本次 v0.2.0 修复尚未部署。
 - 坐标：世界 NED、机体 FRD，四元数 `q` 为机体系→世界系；显示 X=北、Y=上、Z=东。
 - 技术栈：Vite + TypeScript（无框架）+ Three.js；KaTeX 字体；手写 Canvas 图表。
 - **本阶段范围**：只支持 Windows 本机运行（不追求跨平台），硬件部分不在范围内。
@@ -24,7 +25,7 @@
 数值自检 126 + 场景几何 10 + HTML 契约 15 + 文档基准 4
 
 - `npm run check` = selftest（126）+ scenecheck（10）+ htmlcheck（15）+ doccheck（4），共 **155 项**；随后执行 contracts、statuscheck 与 evidencecheck。
-- `contracts` 链（每个文件都是独立反例集）：time / schema / doc-search / archive-ui / lifecycle / worker / trace，以及 node:test 的 soak / evidence / smoke-verdict / status / budget 契约。
+- `contracts` 链（每个文件都是独立反例集）：time / schema / doc-search / formula-copy / archive-ui / lifecycle / worker / trace，以及 node:test 的 soak / evidence / smoke-verdict / status / budget 契约。
 - `npm run budget` = **14 项**产物预算；判定已抽成纯函数（`scripts/budget-core.mjs`），报告同时给出**名义上限 / 有效门槛（90%）/ 剩余字节 / 相对冻结基线（830e4e3）增量**，修法提示只指向减重。主包 JS 当前 282.4 KB（有效门槛 283.5 KB，剩 1.1 KB）——**余量很薄，是已知待办**。
 - 浏览器冒烟声明 **107 项**（app 87 + devices 20）；驱动器比对的是**完整集合**（清单 `scripts/smoke-manifest.json`，由契约测试守着不漂移），不是 PASS 行数。
 - 产品源码摘要（本轮冻结构建）：`d97bbbafb374…`（83 个构建输入文件）；构建标识 `d97bbbafb374-4ace2bc8a8795108`。**构建可复现**（`builtAt` 取提交时间，两次构建 `distHash` 相同）——证据不会因"重建一次"而失效。
@@ -38,11 +39,8 @@
 - 严格验收通过：`npm run evidence:verify`（源码摘要 + 产物摘要 + buildId 三层绑定）。
 - **线上部署已通过**（run 42040828875 / 提交 95a80413）：部署后 smoke 第 1 次即过——页脚构建标识与提交一致、
   产物 buildId `a7077ce19adc-…`、时钟推进、评测表 5 行、canvas、控制台零错误（证据 `generated/postdeploy-2026-11-05-95a8041-live.json`）。
-- CI 口径（本轮实测后定）：**部署闸门 = 静态门禁 + 部署后对线上产物的 smoke**；完整的 107 项浏览器套件在
-  `ci.yml`（PR/分支）与部署后的 `smoke-suite` 作业里跑，结果如实记录。原因：windows-latest 只有 2 vCPU，
-  软件 WebGL 下"同一浏览器进程开第二个 WebGL 页面"可超过 180 s，属**容量**而非产品缺陷——把容量红灯
-  当部署闸门会让每次部署都红，红灯也就失去意义。判定由 `scripts/smoke-verdict.mjs` 分四类，
-  **只有用例级失败才算产品问题**（那类失败仍会让作业红）。
+- CI 实际状态（run 42074606433）：verify 与 deploy 成功，完整 smoke-suite 两项断言失败（交互 timer p95 430.8 ms 与公式复制反馈）；本轮没有超时中断，不能归为纯容量问题。
+- smoke-suite 与 deploy 都依赖 verify，可能并行运行；smoke-suite 目前 `continue-on-error: true`，工作流总览成功不代表完整套件通过。发布验收必须单独查看该作业结果。
 - 判据自身的两次校准与一次既存用例的时序修正，如实记录在 `VERIFICATION-EVIDENCE.md` §4.1。
 
 代码修改后的验证顺序：

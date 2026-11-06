@@ -234,5 +234,32 @@ await test("协作取消：取消在下一片生效，片预算有界且只影�
   assert.deepEqual(await runExperimentAsync(one), runExperiment(one), "片预算只影响调度，不允许影响数值结果");
 });
 
+await test("墙钟预算先于步数上限让出，完整数值不变，停止回调在异步返回之前", async () => {
+  const config = { ...defaultExperimentConfig(), durationSec: 0.1 };
+  const slices: Array<{ steps: number; computeMs: number; completed: boolean }> = [];
+  let clock = 0;
+  let stopped = false;
+  const result = await runExperimentAsync(config, {
+    stepsPerSlice: 512, maxSliceMs: 4,
+    sliceClock: () => clock++,
+    onSlice: slice => slices.push(slice),
+    onStop: () => { stopped = true; },
+  });
+  assert.ok(stopped);
+  assert.ok(slices.length > 1);
+  assert.ok(slices.filter(s => !s.completed).every(s => s.steps <= 4), "时钟预算必须实际触发，而不是只声明字段");
+  assert.deepEqual(result, runExperiment(config));
+  let cancelled = false;
+  let stoppedAfterCancel = false;
+  const partial = await runExperimentAsync({ ...config, durationSec: 30 }, {
+    maxSliceMs: 4, sliceClock: () => clock++,
+    onSlice: () => { cancelled = true; },
+    shouldCancel: () => cancelled,
+    onStop: () => { stoppedAfterCancel = cancelled; },
+  });
+  assert.equal(partial.termination.reason, "cancelled");
+  assert.ok(stoppedAfterCancel);
+});
+
 console.log(`worker-contract: ${passed} PASS / ${failed} FAIL`);
 if (failed) process.exitCode = 1;

@@ -192,6 +192,38 @@ function structuredCloneTuning(
   return out;
 }
 
+/** 校准快照共用的深拷贝：保留未知键与可选字段形态，不做 schema 清洗或默认值补齐。 */
+export function cloneMagCalibration(cal: MagCalibration): MagCalibration {
+  return {
+    ...cal,
+    offset: [...cal.offset] as V3,
+    scale: [...cal.scale] as V3,
+    ...(cal.matrix ? { matrix: [...cal.matrix] } : {}),
+    ...(cal.validation
+      ? {
+          validation: {
+            ...cal.validation,
+            ...(cal.validation.late ? { late: { ...cal.validation.late } } : {}),
+          },
+        }
+      : {}),
+    ...(cal.fittedWith ? { fittedWith: { ...cal.fittedWith } } : {}),
+  };
+}
+
+/** 六面加计校准快照：validation/fittedWith/faces 都与源对象独立。 */
+export function cloneAccelCalibration(cal: AccelCalibration): AccelCalibration {
+  return {
+    ...cal,
+    M: [...cal.M],
+    bias: [...cal.bias] as V3,
+    rmse: [...cal.rmse] as V3,
+    faces: [...cal.faces],
+    ...(cal.validation ? { validation: { ...cal.validation } } : {}),
+    ...(cal.fittedWith ? { fittedWith: { ...cal.fittedWith } } : {}),
+  };
+}
+
 /** 深拷贝，避免调用方修改默认配置 */
 export function cloneExperimentConfig(c: ExperimentConfig): ExperimentConfig {
   return {
@@ -205,36 +237,8 @@ export function cloneExperimentConfig(c: ExperimentConfig): ExperimentConfig {
     },
     manualTargetDeg: c.manualTargetDeg ? ([...c.manualTargetDeg] as [number, number, number]) : [0, 0, 0],
     ab: c.ab ? { ...c.ab } : undefined,
-    magCalibration: c.magCalibration
-      ? {
-          ...c.magCalibration,
-          offset: [...c.magCalibration.offset] as V3,
-          scale: [...c.magCalibration.scale] as V3,
-          ...(c.magCalibration.matrix ? { matrix: [...c.magCalibration.matrix] } : {}),
-          // 验证结果与器件指纹都要深拷贝：共享引用会被后续拟合/参数变化污染
-          ...(c.magCalibration.validation
-            ? {
-                validation: {
-                  ...c.magCalibration.validation,
-                  // late 是嵌套对象：浅拷会让克隆与原配置共享同一引用（复核反例：改克隆残差污染原件）
-                  ...(c.magCalibration.validation.late ? { late: { ...c.magCalibration.validation.late } } : {}),
-                },
-              }
-            : {}),
-          ...(c.magCalibration.fittedWith ? { fittedWith: { ...c.magCalibration.fittedWith } } : {}),
-        }
-      : null,
-    accelCalibration: c.accelCalibration
-      ? {
-          ...c.accelCalibration,
-          M: [...c.accelCalibration.M],
-          bias: [...c.accelCalibration.bias] as V3,
-          rmse: [...c.accelCalibration.rmse] as V3,
-          faces: [...c.accelCalibration.faces],
-          ...(c.accelCalibration.validation ? { validation: { ...c.accelCalibration.validation } } : {}),
-          ...(c.accelCalibration.fittedWith ? { fittedWith: { ...c.accelCalibration.fittedWith } } : {}),
-        }
-      : null,
+    magCalibration: c.magCalibration ? cloneMagCalibration(c.magCalibration) : null,
+    accelCalibration: c.accelCalibration ? cloneAccelCalibration(c.accelCalibration) : null,
   };
 }
 

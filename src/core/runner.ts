@@ -128,6 +128,8 @@ export interface RunHooks {
   progressEverySec?: number;
   /** 每个世界步开始前检查，不依赖进度回调频率；true 表示取消。 */
   shouldCancel?: () => boolean;
+  /** 积分循环已结束、指标收尾尚未开始；用于区分停止与 Promise 返回时点。 */
+  onStop?: () => void;
   /** **自检专用**：覆盖 STATS_CAP，用来验证「样本截断不改变均值/稳态/分位数口径」 */
   statsCapOverride?: number;
 }
@@ -454,6 +456,11 @@ export function runExperiment(configIn: ExperimentConfig, hooks: RunHooks = {}):
 export interface AsyncRunHooks extends RunHooks {
   /** 每片世界步数，默认 128，硬上限 512；只改变调度，不改变数值路径。 */
   stepsPerSlice?: number;
+  /** 每片墙钟计算预算；单个世界步不可抢占，最多超出一个步的耗时。 */
+  maxSliceMs?: number;
+  /** 调度观测与测试时钟，不参与数值内核。 */
+  sliceClock?: () => number;
+  onSlice?: (slice: { steps: number; computeMs: number; completed: boolean }) => void;
 }
 
 /** 真正让出 macrotask：Promise.resolve() 只清空微任务，收不到 Worker 入站消息。 */
@@ -461,7 +468,7 @@ const yieldToMessages = (): Promise<void> => new Promise(resolve => setTimeout(r
 
 /** 同一 generator 的异步出口；每有限步交还事件循环，cancel 可在单种子中途生效。 */
 export function runExperimentAsync(configIn: ExperimentConfig, hooks: AsyncRunHooks = {}): Promise<HeadlessRunResult> {
-  return exhaustTaskAsync(runTask(configIn, hooks, false), hooks.stepsPerSlice);
+  return exhaustTaskAsync(runTask(configIn, hooks, false), hooks);
 }
 
 function exhaustTask<T>(task: Generator<void, T, void>): T {
@@ -471,15 +478,24 @@ function exhaustTask<T>(task: Generator<void, T, void>): T {
   }
 }
 
-async function exhaustTaskAsync<T>(task: Generator<void, T, void>, stepsPerSlice = 128): Promise<T> {
-  const budget = Number.isFinite(stepsPerSlice) ? Math.max(1, Math.min(512, Math.floor(stepsPerSlice))) : 128;
+async function exhaustTaskAsync<T>(task: Generator<void, T, void>, hooks: AsyncRunHooks): Promise<T> {
+  const budget = Number.isFinite(hooks.stepsPerSlice) ? Math.max(1, Math.min(512, Math.floor(hooks.stepsPerSlice!))) : 128;
+  const timeBudget = Number.isFinite(hooks.maxSliceMs) ? Math.max(1, Math.min(16, hooks.maxSliceMs!)) : Infinity;
+  const clock = hooks.sliceClock ?? (() => performance.now());
   // start 后立即 cancel（含只需一片的短任务）也应有一次入站处理机会。
   await yieldToMessages();
   for (;;) {
-    for (let i = 0; i < budget; i++) {
+    const started = clock();
+    let steps = 0;
+    do {
       const step = task.next();
-      if (step.done) return step.value;
-    }
+      steps++;
+      if (step.done) {
+        hooks.onSlice?.({ steps, computeMs: clock() - started, completed: true });
+        return step.value;
+      }
+    } while (steps < budget && clock() - started < timeBudget);
+    hooks.onSlice?.({ steps, computeMs: clock() - started, completed: false });
     await yieldToMessages();
   }
 }
@@ -620,7 +636,7 @@ export function runExperimentDetailedAsync(
   configIn: ExperimentConfig,
   hooks: AsyncRunHooks = {},
 ): Promise<HeadlessRunResult & { series: ErrorSeries[] }> {
-  return exhaustTaskAsync(runTask(configIn, hooks, true), hooks.stepsPerSlice);
+  return exhaustTaskAsync(runTask(configIn, hooks, true), hooks);
 }
 
 /**
@@ -745,6 +761,7 @@ function* runTask(
   }
   // 最后一个步后的让出也可能收到取消，不把末片取消记成正常完成。
   if (cancelledAtSec === null && hooks.shouldCancel?.()) cancelledAtSec = world.t;
+  hooks.onStop?.();
 
   // 终止口径：请求时长 / 实际结束 / 最后一次解算 / 尾巴长度，四项分开报（复核 P2-1）
   const lastSolveSec = lastSolve;

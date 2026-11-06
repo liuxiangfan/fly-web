@@ -1,7 +1,7 @@
 {
   "name": "quaternion-attitude-demo",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -11,7 +11,7 @@
     "coverage": "c8 --include='src/**/*.ts' --reporter=text npm run check",
     "scenecheck": "tsx scripts/scenecheck.ts",
     "check": "npm run selftest && npm run scenecheck && npm run htmlcheck && npm run doccheck && npm run contracts && npm run statuscheck && npm run evidence:check",
-    "contracts": "tsx scripts/time-contract.test.ts && tsx scripts/schema-contract.test.ts && tsx scripts/doc-search-contract.test.ts && tsx scripts/archive-ui-contract.test.ts && tsx scripts/lifecycle-contract.test.ts && tsx scripts/worker-contract.test.ts && node scripts/trace-contract.test.mjs && node --test scripts/soak-contract.test.mjs scripts/evidence-contract.test.mjs scripts/smoke-verdict.test.mjs scripts/status-contract.test.mjs scripts/budget-contract.test.mjs",
+    "contracts": "tsx scripts/time-contract.test.ts && tsx scripts/schema-contract.test.ts && tsx scripts/doc-search-contract.test.ts && tsx scripts/formula-copy-contract.test.ts && tsx scripts/archive-ui-contract.test.ts && tsx scripts/lifecycle-contract.test.ts && tsx scripts/worker-contract.test.ts && node scripts/trace-contract.test.mjs && node --test scripts/soak-contract.test.mjs scripts/evidence-contract.test.mjs scripts/smoke-verdict.test.mjs scripts/status-contract.test.mjs scripts/budget-contract.test.mjs",
     "htmlcheck": "tsx scripts/htmlcheck.ts",
     "doccheck": "tsx scripts/doccheck.ts",
     "statuscheck": "tsx scripts/statuscheck.ts",
