@@ -1999,7 +1999,26 @@ try {
       Object.defineProperty(navigator, "serial", { configurable: true, value: { requestPort: async () => port } });
     });
     await gotoSafe(pg);
-    await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: BOOT_MS });
+    await pg.bringToFront();
+    const bootDiagnostic = diagnostics.reconnectBoot = { samples: [], errors: errs, pages: [] };
+    const bootDeadline = Date.now() + BOOT_MS;
+    for (;;) {
+      const sample = await pg.evaluate(() => ({
+        fps: document.getElementById("fps")?.textContent ?? "",
+        clock: document.getElementById("clock")?.textContent ?? "",
+        ready: document.readyState, visible: document.visibilityState, focused: document.hasFocus(),
+        hasApi: Boolean(window.attitudeDemo), frames: window.attitudeDemo?.performance?.()?.count ?? null,
+        contextLost: window.attitudeDemo?.renderer?.getContext()?.isContextLost() ?? null,
+      }));
+      bootDiagnostic.samples.push({ at: Date.now(), ...sample });
+      if (/^\d+\s+fps$/.test(sample.fps)) break;
+      if (Date.now() >= bootDeadline) {
+        bootDiagnostic.pages = (await browser.pages()).map(tab => ({ url: tab.url(), closed: tab.isClosed() }));
+        await pg.screenshot({ path: join(shots, "reconnect-boot-failure.png") }).catch(() => undefined);
+        throw new Error(`重连独立页未就绪（${BOOT_MS} ms）：${JSON.stringify(sample)}；错误 ${JSON.stringify(errs)}`);
+      }
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
     await pg.evaluate(() => {
       const sec = document.getElementById("sec-imu");
       if (sec?.classList.contains("collapsed")) sec.querySelector(".panel-toggle").click();
