@@ -4228,8 +4228,8 @@ try {
     controller: window.attitudeDemo?.tour?.info,
     visibilityState: document.visibilityState,
   }));
-  // 保留原先每阶段 3000 ms 额度；Node 墙钟约束也覆盖单次 CDP 读取，绝不等页面 rAF。
-  const boundTour = async (phase, operation, timeout = 3000) => {
+  // 页面状态使用3秒预算，命令传输采用既有STATE_MS，并分别记录。
+  const boundTour = async (phase, operation, timeout = STATE_MS) => {
     let timer;
     try {
       return await Promise.race([operation(), new Promise((_, reject) => {
@@ -4242,11 +4242,11 @@ try {
     let state;
     try {
       while (nodePerformance.now() - start < timeout) {
-        state = await boundTour(phase, readTourDom, Math.max(1, timeout - (nodePerformance.now() - start)));
-        if (nodePerformance.now() - start < timeout && predicate(state)) {
-          tourCase.waits.push({ phase, elapsedMs: nodePerformance.now() - start, state });
-          return state;
-        }
+        const readingAt = nodePerformance.now();
+        state = await boundTour(phase, readTourDom);
+        const receivedAt = nodePerformance.now();
+        tourCase.waits.push({ phase: `${phase} CDP读取`, elapsedMs: receivedAt - readingAt, state });
+        if (predicate(state)) return state;
         await new Promise((resolve) => setTimeout(resolve, Math.min(25, Math.max(0, timeout - (nodePerformance.now() - start)))));
       }
       throw new Error(`tour ${phase} 未满足（${timeout} ms）`);

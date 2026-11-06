@@ -78,6 +78,7 @@ import {
   accelResultHtml,
   accelStatusText,
   accelVerifyLineHtml,
+  fixedList,
   magHistoryHtml,
   magResultHtml,
   magStatusText,
@@ -139,6 +140,10 @@ const CHART_WINDOW = 30;
 
 const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
 
+function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 // 仿真步异常保护：记录一次并暂停，渲染循环与交互不受影响（可切模式后继续）
 let simErrorShown = false;
 /** 仿真异常横幅的 DOM 引用：复位时要把它摘掉，否则那条红字会一直挂在屏幕上（实测踩到） */
@@ -155,7 +160,7 @@ function showSimError(err: unknown): void {
   const chip = document.createElement("div");
   chip.className = "ov-chip";
   chip.style.color = "#f85149";
-  chip.textContent = `仿真已暂停：${err instanceof Error ? err.message : String(err)}（切换机动模式后点「继续」可恢复）`;
+  chip.textContent = `仿真已暂停：${errorText(err)}（切换机动模式后点「继续」可恢复）`;
   (document.getElementById("toast-layer") ?? $("readout-overlay")).appendChild(chip);
   simErrorChip = chip;
 }
@@ -329,9 +334,9 @@ function tickAccelCalibration(t: number, sample: ImuSample): void {
   accelCalState.samples.push({ raw: a, face });
   accelCalState.window = [];
   accelCalState.message =
-    `已记录 ${face} 朝下：a = [${a.map((v) => v.toFixed(2)).join(", ")}] m/s² · ` +
+    `已记录 ${face} 朝下：a = [${fixedList(a, 2)}] m/s² · ` +
     `静止质量 平均 ${quality.meanGyroDps.toFixed(2)}°/s / 最大 ${quality.maxGyroDps.toFixed(2)}°/s / σ‖a‖ ${quality.accelNormStd.toFixed(3)} ` +
-    `（${accelCalState.samples.length}/6 面，${span.toFixed(2)} s 均值，陀螺均值 [${g.map((v) => v.toFixed(3)).join(", ")}] rad/s）`;
+    `（${accelCalState.samples.length}/6 面，${span.toFixed(2)} s 均值，陀螺均值 [${fixedList(g, 3)}] rad/s）`;
   updateAccelCalUi();
 }
 /** 采面失败的统一出口：清窗口 + 写一次性文案 + 刷新面板 */
@@ -1491,6 +1496,10 @@ const quatSlider = bindSlider(
   (v) => v.toFixed(2),
 );
 
+function quatText(q: Quat, digits = 3): string {
+  return `[${fixedList([q.w, q.x, q.y, q.z], digits)}]`;
+}
+
 function applyQuatInterpolation(
   pair: { from: [number, number, number]; to: [number, number, number]; path?: Array<[number, number, number]> },
   t: number,
@@ -1506,7 +1515,7 @@ function applyQuatInterpolation(
     qFromEuler(pair.to[0] * k, pair.to[1] * k, pair.to[2] * k),
     t,
   );
-  $("quat-readout").textContent = `[${[q.w, q.x, q.y, q.z].map((a) => a.toFixed(3)).join(", ")}]`;
+  $("quat-readout").textContent = quatText(q);
   // 面板读数：两条路径的总转角与中点分叉
   const info = sceneHandles.quatView.arcInfo();
   const el = document.getElementById("quat-arcinfo");
@@ -2428,7 +2437,7 @@ updateMagCalUi();
 
 function projApply(q: Quat): void {
   projState.current = { ...q };
-  $("quat-readout").textContent = `[${[q.w, q.x, q.y, q.z].map((a) => a.toFixed(3)).join(", ")}]`;
+  $("quat-readout").textContent = quatText(q);
   sceneHandles.quatView.setProjection(q);
   updateProjTurn(q);
 }
@@ -3160,17 +3169,21 @@ function selectedQ(): Quat {
   return ests.find((e) => e.id === state.source)!.q;
 }
 
+function eulerText(e: ReturnType<typeof qToEuler>, separator = " "): string {
+  return `φ ${fmtSigned(e.roll * DEG)}°${separator}θ ${fmtSigned(e.pitch * DEG)}°${separator}ψ ${fmtSigned(e.yaw * DEG)}°`;
+}
+
 function updateReadouts(): void {
   const q = selectedQ();
   const eu = qToEuler(q);
   // 真实模式无真值：这一行显示 Mahony 参照基准（图例里的「真实」即基准）
   const refQ = referenceQ();
   const te = qToEuler(refQ);
-  $("readout-quat").textContent = `q = [${[q.w, q.x, q.y, q.z].map((a) => a.toFixed(4)).join(", ")}]`;
-  $("readout-euler").innerHTML = `φ ${fmtSigned(eu.roll * DEG)}° &nbsp; θ ${fmtSigned(eu.pitch * DEG)}° &nbsp; ψ ${fmtSigned(eu.yaw * DEG)}°`;
-  $("readout-true").innerHTML = !hasGroundTruth()
-    ? `<span style="color:#e6edf3">基准(${currentReferenceKind() === "external" ? "外部" : "Mahony"})</span> φ ${fmtSigned(te.roll * DEG)}° θ ${fmtSigned(te.pitch * DEG)}° ψ ${fmtSigned(te.yaw * DEG)}°`
-    : `真实 φ ${fmtSigned(te.roll * DEG)}° θ ${fmtSigned(te.pitch * DEG)}° ψ ${fmtSigned(te.yaw * DEG)}°`;
+  $("readout-quat").textContent = `q = ${quatText(q, 4)}`;
+  $("readout-euler").innerHTML = eulerText(eu, " &nbsp; ");
+  $("readout-true").innerHTML = (!hasGroundTruth()
+    ? `<span style="color:#e6edf3">基准(${currentReferenceKind() === "external" ? "外部" : "Mahony"})</span> `
+    : "真实 ") + eulerText(te);
   const imu = state.lastImu;
   if (imu) {
     const gyroDps: [number, number, number] = [imu.gyro[0] * DEG, imu.gyro[1] * DEG, imu.gyro[2] * DEG];
@@ -3899,7 +3912,7 @@ function applyArchiveChecked(cfg: ExperimentConfig):
     // 面板渲染阶段就失败：**还没有写任何状态**，直接如实报错
     return {
       ok: false,
-      error: `档案面板渲染失败（当前实验现场未改动）：${err instanceof Error ? err.message : String(err)}`,
+      error: `档案面板渲染失败（当前实验现场未改动）：${errorText(err)}`,
     };
   }
   // ④ 提交。控件写入仍可能被处理器抛错打断，因此用统一异常边界：失败就把配置与面板写回导入前的计划，
@@ -3910,7 +3923,7 @@ function applyArchiveChecked(cfg: ExperimentConfig):
     try { writeArchiveState(before, planBefore); } catch { /* 回滚尽力而为；下面的错误信息已说明现场可能不完整 */ }
     return {
       ok: false,
-      error: `档案应用失败（已回滚配置）：${err instanceof Error ? err.message : String(err)}`,
+      error: `档案应用失败（已回滚配置）：${errorText(err)}`,
     };
   }
   // ⑤ 兜底断言：真实读回必须与离线模型一致。不一致说明模型失真（离线判定与控件语义脱钩），
@@ -3980,7 +3993,7 @@ async function importArchiveFile(file: File): Promise<void> {
       migratedFrom: parsed.migratedFrom ?? null,
     });
   } catch (err) {
-    toast(`档案导入失败：${err instanceof Error ? err.message : String(err)}`, "#f85149");
+    toast(`档案导入失败：${errorText(err)}`, "#f85149");
   }
 }
 
@@ -4029,6 +4042,10 @@ function setTelemetryVisible(on: boolean): void {
   updateGravityLegend();
 }
 
+function arrowLegendHtml(color: string, text: string): string {
+  return `<span class="lg-item"><span class="lg-dot" style="background:${color}"></span>${text}</span>`;
+}
+
 /** 图例文字随显示源变化：真实姿态没有解算过程，说明而不是展示箭头 */
 function updateGravityLegend(): void {
   const legend = $("gravity-legend");
@@ -4037,21 +4054,17 @@ function updateGravityLegend(): void {
     return;
   }
   legend.innerHTML =
-    `<span class="lg-item"><span class="lg-dot" style="background:#f1f5f9"></span>预测的「下」（当前估计姿态）</span>` +
-    `<span class="lg-item"><span class="lg-dot" style="background:#e879f9"></span>实测的「下」（加速度计）</span>`;
+    arrowLegendHtml("#f1f5f9", "预测的「下」（当前估计姿态）") +
+    arrowLegendHtml("#e879f9", "实测的「下」（加速度计）");
 }
 
 /** 磁航向图例：说明琥珀箭头，随 MARG 开关换文案 */
 function updateMagLegend(): void {
   const magOn = ($("mag-enable") as HTMLInputElement).checked;
   const legend = $("mag-legend");
-  if (!magOn) {
-    legend.innerHTML =
-      `<span class="lg-item"><span class="lg-dot" style="background:#ffb454"></span>磁航向指示（MARG 已关：会随陀螺仪漂移偏离真北）</span>`;
-  } else {
-    legend.innerHTML =
-      `<span class="lg-item"><span class="lg-dot" style="background:#ffb454"></span>磁航向指示（MARG 开：被磁场约束，与罗盘箭头保持一致）</span>`;
-  }
+  legend.innerHTML = arrowLegendHtml("#ffb454", magOn
+    ? "磁航向指示（MARG 开：被磁场约束，与罗盘箭头保持一致）"
+    : "磁航向指示（MARG 已关：会随陀螺仪漂移偏离真北）");
 }
 
 $("palette-toggle").addEventListener("change", () => {
@@ -5074,7 +5087,7 @@ function ensureTour(): Promise<TourApi> {
       .then(({ mountTour }) => (tour = mountTour(tourHost)))
       .catch((err: unknown) => {
         tourLoad = null; // 允许重试（例如离线时 chunk 没取到）
-        toast(`引导课程加载失败：${err instanceof Error ? err.message : String(err)}`, "#f85149");
+        toast(`引导课程加载失败：${errorText(err)}`, "#f85149");
         throw err;
       });
   }
@@ -5274,6 +5287,10 @@ function openExportDialog(): void {
   dlg.showModal();
 }
 
+function csvNumberLine(values: number[]): string {
+  return values.map((v) => (Number.isFinite(v) ? v.toFixed(6) : "")).join(",");
+}
+
 function exportCsv(quatOn: boolean, imuOn: boolean, imuCalibratedCols = false): void {
   /**
    * 源列语义必须**逐行**判定（ROUND11 P1）：校准日志回放录下的源读数已经是校准后的，
@@ -5325,7 +5342,7 @@ function exportCsv(quatOn: boolean, imuOn: boolean, imuCalibratedCols = false): 
         vals.push(...new Array<number>(IMU_EXPORT_COLUMNS.length).fill(NaN));
       }
     }
-    lines.push(vals.map((v) => (Number.isFinite(v) ? v.toFixed(6) : "")).join(","));
+    lines.push(csvNumberLine(vals));
   }
   const meta = [
     `# quaternion-attitude-demo export`,
@@ -5389,7 +5406,7 @@ function exportRawCsv(): void {
   const lines = [header.join(",")];
   for (const r of rawRecord.rows) {
     const g = r.gyro.map((v) => v * DEG);
-    lines.push([r.t, ...g, ...r.accel, ...r.mag].map((v) => (Number.isFinite(v) ? v.toFixed(6) : "")).join(","));
+    lines.push(csvNumberLine([r.t, ...g, ...r.accel, ...r.mag]));
   }
   const meta = [
     "# quaternion-attitude-demo raw IMU export",
@@ -5527,12 +5544,8 @@ function logInsTrail(): void {
 /** 米数的可读格式（跨越 0.01 m – 10 km） */
 function fmtMeters(v: number): string {
   const a = Math.abs(v);
-  if (a >= 10000) return `${(v / 1000).toFixed(0)} km`;
-  if (a >= 1000) return `${(v / 1000).toFixed(1)} km`;
-  if (a >= 100) return `${v.toFixed(0)} m`;
-  if (a >= 10) return `${v.toFixed(1)} m`;
-  if (a >= 1) return `${v.toFixed(2)} m`;
-  return `${v.toFixed(3)} m`;
+  if (a >= 1000) return `${(v / 1000).toFixed(a >= 10000 ? 0 : 1)} km`;
+  return `${v.toFixed(a >= 100 ? 0 : a >= 10 ? 1 : a >= 1 ? 2 : 3)} m`;
 }
 
 /** 收集各通道的当前位置与轨迹，交给 ui/ins-view.ts 绘制（本函数只负责取数） */
@@ -5882,7 +5895,7 @@ async function serialConnect(): Promise<void> {
     clearSerialSlotIfOwned(session);
     // 这里**不**因 stale 而跳过错误文案：本次尝试确实失败了，状态行必须如实收尾
     // （否则"正在打开端口…"会永远挂在面板上）。切换来源时串口面板本就被禁用，不会误导。
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorText(err);
     setSerialStatus(`连接失败：${msg}（未选端口 / 端口被占用 / 波特率该平台不支持——SerialWeb 等其它工具需先断开）`, true);
   } finally {
     if (serialState.connectingGen === connectGen) {
@@ -6038,7 +6051,7 @@ function createSerialSession(port: SerialPortLike, gen: number): SerialTransport
 }
 
 function reportTransportError(err: unknown): void {
-  toast(`连接操作失败：${err instanceof Error ? err.message : String(err)}`, "#f85149");
+  toast(`连接操作失败：${errorText(err)}`, "#f85149");
 }
 
 /**
@@ -6666,7 +6679,7 @@ async function importReplayFile(file: File): Promise<void> {
   try {
     text = await file.text();
   } catch (err) {
-    toast(`读取文件失败：${err instanceof Error ? err.message : String(err)}`, "#f85149");
+    toast(`读取文件失败：${errorText(err)}`, "#f85149");
     return;
   }
   const res = parseImuCsv(text);
@@ -7159,7 +7172,7 @@ async function bleConnect(): Promise<void> {
     applyDataSourceSemantics();
     resetSim();
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorText(err);
     // 用户点取消是常态，不该当成错误吓人
     const cancelled = /cancel|chooser|user/i.test(msg);
     // ROUND12：异常分支也必须**按归属**释放本次尝试（旧实现直接调用无 target 的全局
@@ -7254,7 +7267,7 @@ document.getElementById("ble-char")?.addEventListener("change", () => {
       .catch((err: unknown) => {
         // 订阅失败必须是**可报告的**（旧实现只在 .then 里处理成功路径，失败直接变成
         // 未捕获拒绝、控制台报错而界面无感——ROUND12）
-        toast(`切换通知特征失败：${err instanceof Error ? err.message : String(err)}`, "#f85149");
+        toast(`切换通知特征失败：${errorText(err)}`, "#f85149");
         if (sel && bleState.char) sel.value = bleState.char.uuid;
       });
   }

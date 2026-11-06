@@ -138,6 +138,56 @@ const EST_IDS: EstimatorId[] = ["pure", "comp", "mahony", "madg", "kalman"];
 /** 普通 yield 是一个世界步；true 强制异步出口让出，不能被步数预算合并。 */
 type RunTask<T> = Generator<true | void, T, void>;
 
+/** 三路 nth-element：固定种子枢轴，重复值一次归组；checkpoint 至多 256 次数值比较。 */
+function* selectTask(a: number[], k: number, left: number): RunTask<number> {
+  let right = a.length - 1, work = 0;
+  const pivotRng = mulberry32(0x9e3779b9);
+  while (left < right) {
+    const pivot = a[left + Math.floor(pivotRng() * (right - left + 1))];
+    let lo = left, i = left, hi = right;
+    while (i <= hi) {
+      const v = a[i];
+      if (v < pivot) { a[i++] = a[lo]; a[lo++] = v; }
+      else if (v > pivot) { a[i] = a[hi]; a[hi--] = v; }
+      else i++;
+      if (++work === 128) { work = 0; yield; }
+    }
+    if (k < lo) right = lo - 1;
+    else if (k > hi) left = hi + 1;
+    else break;
+  }
+  yield;
+  return a[k];
+}
+
+/** 共用副本精确选秩；checkpoint 可按墙钟/步数预算合并，分位数终点强制处理消息。 */
+export function* percentileTask(values: readonly number[], ps: readonly number[]): RunTask<number[]> {
+  const a: number[] = [], result: number[] = [];
+  let fallback = false, floor = 0;
+  for (let i = 0; i < values.length; i++) {
+    const v = values[i];
+    a.push(v);
+    fallback ||= Number.isNaN(v) || Object.is(v, -0);
+    if ((i + 1) % 128 === 0) yield;
+  }
+  yield;
+  // 原实现没有过滤非有限值；NaN 比较器非全序、±0 要稳定次序，仅异常输入沿用原排序。
+  if (fallback) { a.sort((a, b) => a - b); yield; }
+  for (const p of ps) {
+    const pos = Math.min(1, Math.max(0, p)) * (a.length - 1);
+    const lo = Math.floor(pos), hi = Math.ceil(pos);
+    let low = NaN, high = NaN;
+    if (a.length && Number.isFinite(pos)) {
+      low = fallback ? a[lo] : yield* selectTask(a, lo, lo >= floor ? floor : 0);
+      floor = lo;
+      high = lo === hi ? low : fallback ? a[hi] : yield* selectTask(a, hi, lo);
+    }
+    result.push(lo === hi ? low : low + (high - low) * (pos - lo));
+    yield true;
+  }
+  return result;
+}
+
 /**
  * SO(3) 小角误差分解（比欧拉分解更稳健，万向节锁附近不会突变）。
  *
@@ -198,6 +248,29 @@ export function applyTuning(e: Estimator, t: EstimatorTuning): void {
     if (t.kalmanChi2 !== undefined) k.gateChi2 = t.kalmanChi2;
     if (t.kalmanResetCov !== undefined) k.resetCovOnInject = t.kalmanResetCov;
   }
+}
+
+/** trace 与统计运行共享初始化/观测配置，减重且不改变调参、重置与校准次序。 */
+function prepareRun(configIn: ExperimentConfig) {
+  const config = cloneExperimentConfig(configIn);
+  const world = new World(scenarios[config.scenario] ?? scenarios.hover, config.seed);
+  if (config.manualTargetDeg) world.setManualTarget(config.manualTargetDeg);
+  const ests = makeEstimators();
+  for (const e of ests) applyTuning(e, config.estimators[e.id as EstimatorId]);
+  const q0 = initialAttitudeOf(config);
+  for (const e of ests) e.reset(q0);
+  const options = {
+    estimators: ests,
+    solveRateHz: config.solveRateHz,
+    calibrate: {
+      // 得到标定与应用标定是独立状态，trace/统计都只在启用时应用。
+      mag: (raw: V3) => applyMagCalibration(raw, config.magCalibrationApplied ? config.magCalibration : null),
+      accel: (raw: V3) => applyAccelCalibration(raw, config.accelCalibrationApplied ? config.accelCalibration ?? null : null),
+    },
+    magEnabled: config.estimators.comp.magEnabled,
+    autoCoarseAlign: config.autoCoarseAlign !== false,
+  };
+  return { config, world, ests, options };
 }
 
 /**
@@ -401,7 +474,7 @@ export class MetricAccumulator {
     return exhaustTask(this.summaryTask(e, _steadyFromSec, completed));
   }
 
-  /** 同步耗尽、异步逐分位数让出；保留原排序与插值，指标逐位一致。 */
+  /** 同步耗尽、异步按有限工作量让出；精确秩与原插值保持指标逐位一致。 */
   *summaryTask(e: Estimator, _steadyFromSec?: number | null, completed = true): RunTask<EstimatorRunMetrics> {
     const n = this.seen;
     const mean = n ? this.sum / n : NaN;
@@ -416,12 +489,9 @@ export class MetricAccumulator {
     const earlyStopped = !completed;
     const rmsOf = (sumSq: number): number => (n ? Math.sqrt(sumSq / n) : NaN);
     const t = this.tracker.summary();
-    // 短跑用全样本；长跑用原定长蓄水池。每次排序都是独立的不可抢占单位。
+    // 短跑全样本（最多 60000），长跑原蓄水池（20000）；共用副本，不做全排序。
     const values = this.truncated ? this.resErr : this.errors;
-    const p50 = percentile(values, 0.5);
-    yield true;
-    const p95 = percentile(values, 0.95);
-    yield true;
+    const [p50, p95] = yield* percentileTask(values, [0.5, 0.95]);
     return {
       id: e.id as EstimatorId,
       label: e.label,
@@ -576,26 +646,13 @@ export function runTrace(
   // 上限参数必须是非负安全整数：NaN 会让 `steps.length >= maxSteps` 永远为假（等于没有上限），
   // 1.5 会多记一步。非法值回落到默认上限，而不是悄悄取消保护。
   const maxSteps = Number.isFinite(maxStepsIn) && maxStepsIn >= 1 ? Math.floor(maxStepsIn) : 20000;
-  const config = cloneExperimentConfig(configIn);
-  const world = new World(scenarios[config.scenario] ?? scenarios.hover, config.seed);
-  if (config.manualTargetDeg) world.setManualTarget(config.manualTargetDeg);
-  const ests = makeEstimators();
-  for (const e of ests) applyTuning(e, config.estimators[e.id as EstimatorId]);
-  const q0 = initialAttitudeOf(config);
-  for (const e of ests) e.reset(q0);
+  const { config, world, ests, options } = prepareRun(configIn);
 
   const steps: TraceStep[] = [];
   const traceEvents = new TraceEvents();
   const { eventCounts, alignTimes } = traceEvents;
   const loop = new SolveLoop({
-    estimators: ests,
-    solveRateHz: config.solveRateHz,
-    calibrate: {
-      mag: (raw) => applyMagCalibration(raw, config.magCalibrationApplied ? config.magCalibration : null),
-      accel: (raw) => applyAccelCalibration(raw, config.accelCalibrationApplied ? config.accelCalibration ?? null : null),
-    },
-    magEnabled: config.estimators.comp.magEnabled,
-    autoCoarseAlign: config.autoCoarseAlign !== false,
+    ...options,
     // 上限之后**不再记步、也不再计事件**：否则 alignTimes/事件计数会覆盖到 steps 里
     // 根本不存在的时刻，与「逐帧对齐」的契约自相矛盾。
     onAlign: (ev) => { if (steps.length < maxSteps) traceEvents.align(ev.t); },
@@ -672,14 +729,7 @@ function* runTask(
   hooks: RunHooks,
   keepSeries: boolean,
 ): RunTask<HeadlessRunResult & { series?: ErrorSeries[] }> {
-  const config = cloneExperimentConfig(configIn);
-  const world = new World(scenarios[config.scenario] ?? scenarios.hover, config.seed);
-  // 手动剧本的目标角来自配置（不是全局可变对象）——否则「同配置同 seed」并不可复现
-  if (config.manualTargetDeg) world.setManualTarget(config.manualTargetDeg);
-  const ests = makeEstimators();
-  for (const e of ests) applyTuning(e, config.estimators[e.id as EstimatorId]);
-  const q0 = initialAttitudeOf(config);
-  for (const e of ests) e.reset(q0);
+  const { config, world, ests, options } = prepareRun(configIn);
 
   // statsCapOverride 只给自检用：注入更小的上限即可验证「截断不改变均值/稳态口径」
   const acc: MetricAccumulator[] = ests.map(() => {
@@ -701,16 +751,7 @@ function* runTask(
   // 任何阈值、检查顺序、冷却时长的差异都在这一处被消除，
   // 「批量结论能否代表界面」才有可验证的前提（冒烟里用同 seed 逐帧比对）。
   const loop = new SolveLoop({
-    estimators: ests,
-    solveRateHz: config.solveRateHz,
-    calibrate: {
-      // 「拟合得到一份标定」与「应用这份标定」是两个独立状态：
-      // 只取消勾选「应用」时，批量必须与界面一样吃原始读数，而不是照常校准。
-      mag: (raw) => applyMagCalibration(raw, config.magCalibrationApplied ? config.magCalibration : null),
-      accel: (raw) => applyAccelCalibration(raw, config.accelCalibrationApplied ? config.accelCalibration ?? null : null),
-    },
-    magEnabled: config.estimators.comp.magEnabled,
-    autoCoarseAlign: config.autoCoarseAlign !== false,
+    ...options,
     onAlign: (ev) => {
       events.push({
         t: ev.t,
@@ -776,7 +817,7 @@ function* runTask(
   // 最后一个步后的让出也可能收到取消，不把末片取消记成正常完成。
   if (cancelledAtSec === null && hooks.shouldCancel?.()) cancelledAtSec = world.t;
   hooks.onStop?.();
-  yield true; // 积分已停止，先处理入站消息，再开始首个算法的指标排序。
+  yield true; // 积分已停止，先处理入站消息，再开始首个算法的指标选择。
 
   // 终止口径：请求时长 / 实际结束 / 最后一次解算 / 尾巴长度，四项分开报（复核 P2-1）
   const lastSolveSec = lastSolve;
