@@ -32,8 +32,8 @@ export function magStatusText(s: MagPanelState): string {
   if (n > 0 && !s.cal) return `已采 ${n} 点——点「拟合并应用」解出硬铁/软铁`;
   if (s.cal) {
     return s.applied
-      ? `已应用：${n} 点拟合 · 残差 ${(s.cal.residual * 100).toFixed(1)}%`
-      : `已拟合（未应用）：${n} 点 · 残差 ${(s.cal.residual * 100).toFixed(1)}%`;
+      ? `已应用：${n} 点拟合 · 残差 ${percentText(s.cal.residual, 1)}%`
+      : `已拟合（未应用）：${n} 点 · 残差 ${percentText(s.cal.residual, 1)}%`;
   }
   return "未校准。模拟模式可一键生成样本；真实模式需缓慢翻滚机体采集。";
 }
@@ -48,26 +48,38 @@ function ratioText(v: number | null | undefined): string {
   return typeof v === "number" && Number.isFinite(v) ? v.toFixed(2) : "—（不适用）";
 }
 
+export function fixedList(values: readonly number[], digits: number, separator = ", "): string {
+  return values.map((v) => v.toFixed(digits)).join(separator);
+}
+
+function percentText(v: number, digits = 2): string {
+  return (v * 100).toFixed(digits);
+}
+
+function staleHtml(stale?: string | null): string {
+  return stale ? `<div class="dim" style="color:#fbbf24">⚠ ${stale}</div>` : "";
+}
+
+function magValidationText(label: string, v: MagCalibration["validation"]): string {
+  return v ? ` · ${label} ${percentText(v.residual)}%（${v.count} 点，比值 ${ratioText(v.ratio)}）` : "";
+}
+
 export function magResultHtml(cal: MagCalibration | null, verifyLine: string, stale?: string | null): string {
   if (!cal) return "";
   const model = cal.kind === "full" ? "完整 3×3 椭球" : "对角软铁";
   const body =
-    `<div>模型 ${model} · 硬铁 offset [${cal.offset.map((v) => v.toFixed(1)).join(", ")}] μT</div>` +
+    `<div>模型 ${model} · 硬铁 offset [${fixedList(cal.offset, 1)}] μT</div>` +
     (cal.kind === "full" && cal.matrix
-      ? `<div>M = [${cal.matrix.map((v) => v.toFixed(3)).join(", ")}]</div>`
-      : `<div>软铁 scale [${cal.scale.map((v) => v.toFixed(3)).join(", ")}]</div>`) +
-    `<div>场强 ${cal.field.toFixed(1)} μT · 样本 ${cal.count} · 残差 ${(cal.residual * 100).toFixed(2)}%` +
-    (cal.validation
-      ? ` · 验证残差 ${(cal.validation.residual * 100).toFixed(2)}%（${cal.validation.count} 点，比值 ${ratioText(cal.validation.ratio)}）`
-      : "") +
-    (cal.validation?.late
-      ? ` · 后段留出 ${(cal.validation.late.residual * 100).toFixed(2)}%（${cal.validation.late.count} 点，比值 ${ratioText(cal.validation.late.ratio)}）`
-      : "") +
+      ? `<div>M = [${fixedList(cal.matrix, 3)}]</div>`
+      : `<div>软铁 scale [${fixedList(cal.scale, 3)}]</div>`) +
+    `<div>场强 ${cal.field.toFixed(1)} μT · 样本 ${cal.count} · 残差 ${percentText(cal.residual)}%` +
+    magValidationText("验证残差", cal.validation) +
+    magValidationText("后段留出", cal.validation?.late) +
     `</div>` +
     (cal.kind === "full"
       ? `<div class="dim">完整模型按目标场强缩放到 ${cal.field.toFixed(1)} μT；仅凭点云无法确定绝对场强，默认取本装置世界磁场 50 μT</div>`
       : "") +
-    (stale ? `<div class="dim" style="color:#fbbf24">⚠ ${stale}</div>` : "");
+    staleHtml(stale);
   return body + verifyLine;
 }
 
@@ -80,7 +92,7 @@ export function magVerifyLineHtml(v: {
   afterMaxDeg: number;
 }, refField: readonly number[]): string {
   return (
-    `<div>独立验证（${v.count} 组新样本，${refField.map((x) => x.toFixed(1)).join("/")} μT 真值场）：` +
+    `<div>独立验证（${v.count} 组新样本，${fixedList(refField, 1, "/")} μT 真值场）：` +
     `航向误差 平均 <b>${v.beforeMeanDeg.toFixed(2)}° → ${v.afterMeanDeg.toFixed(2)}°</b>、` +
     `最大 ${v.beforeMaxDeg.toFixed(2)}° → ${v.afterMaxDeg.toFixed(2)}°</div>`
   );
@@ -100,7 +112,7 @@ export function accelStatusText(s: AccelPanelState): string {
   if (s.message) return s.message;
   if (s.cal) {
     return (
-      `已拟合 ${s.cal.faces.length}/6 面 · 残差 RMS [${s.cal.rmse.map((v) => v.toFixed(3)).join(", ")}] m/s²` +
+      `已拟合 ${s.cal.faces.length}/6 面 · 残差 RMS [${fixedList(s.cal.rmse, 3)}] m/s²` +
       (s.applied ? " · 已应用" : " · 未应用")
     );
   }
@@ -112,11 +124,11 @@ export function accelResultHtml(cal: AccelCalibration | null, verifyLine: string
   if (!cal) return "";
   const v = cal.validation;
   return (
-    `<div>M = [${cal.M.map((x) => x.toFixed(4)).join(", ")}]</div>` +
-    `<div>bias = [${cal.bias.map((x) => x.toFixed(3)).join(", ")}] m/s² · 样本 ${cal.count}` +
+    `<div>M = [${fixedList(cal.M, 4)}]</div>` +
+    `<div>bias = [${fixedList(cal.bias, 3)}] m/s² · 样本 ${cal.count}` +
     (v ? ` · 留一验证 平均 ${v.meanNormErrMs2.toFixed(4)} / 最大 ${v.maxNormErrMs2.toFixed(4)} m/s²（${v.heldOutFaces} 朝向）` : "") +
     `</div>` +
-    (stale ? `<div class="dim" style="color:#fbbf24">⚠ ${stale}</div>` : "") +
+    staleHtml(stale) +
     verifyLine
   );
 }
@@ -166,8 +178,8 @@ export function magHistoryHtml(entries: CalibrationHistoryEntry[]): string {
       (e) =>
         `<div class="cal-hist-row" data-cal-id="${e.id}">` +
         `<span class="mono dim">${e.atText}</span> · ${e.model === "full" ? "完整椭球" : "对角"} · ` +
-        `${e.sampleCount} 点 · 残差 ${(e.residual * 100).toFixed(2)}%` +
-        (e.lateResidual !== null ? ` · 后段 ${(e.lateResidual * 100).toFixed(2)}%` : "") +
+        `${e.sampleCount} 点 · 残差 ${percentText(e.residual)}%` +
+        (e.lateResidual !== null ? ` · 后段 ${percentText(e.lateResidual)}%` : "") +
         (e.active
           ? ` <span class="dim">（当前）</span>`
           : ` <button type="button" class="btn btn-mini" data-cal-restore="${e.id}">恢复</button>`) +

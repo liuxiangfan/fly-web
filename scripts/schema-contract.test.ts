@@ -1,7 +1,7 @@
 /** 档案/schema 与校准入口契约；独立计数，不改变历史 selftest 门禁。 */
 import assert from "node:assert/strict";
 import { parseArchive, buildArchive, type ArchiveRunInfo } from "../src/core/experiment-archive";
-import { defaultExperimentConfig, parseMagCalibration, parseAccelCalibration, validateExperimentConfig, archiveExpressibilityProblems, archiveRoundTripProblems, cloneExperimentConfig } from "../src/core/experiment-config";
+import { defaultExperimentConfig, parseMagCalibration, parseAccelCalibration, validateExperimentConfig, archiveExpressibilityProblems, archiveRoundTripProblems, cloneExperimentConfig, cloneMagCalibration, cloneAccelCalibration } from "../src/core/experiment-config";
 import { copyCalibration } from "../src/core/calibration-validation";
 import { calibrateAccel, synthesizeAccelSamples, type AccelCalibration } from "../src/core/accelcal";
 import { applyMagCalibration, calibrateMag, calibrateMagFull, calibrateMagWithValidation } from "../src/core/magcal";
@@ -332,6 +332,58 @@ test("SW-04 克隆是全函数：缺条目 / 多余键 / 空 params 都不抛异
   assert.deepEqual(Object.keys(cloned.estimators), ["pure", "comp", "mahony", "madg", "kalman"], "克隆只保留已知算法 id");
   // 空 params 也不能把克隆带崩，而且必须补回默认参数（否则内核读到 undefined）
   assert.deepEqual(cloned.estimators.comp.params, defaultExperimentConfig().estimators.comp.params);
+});
+
+test("校准快照共用克隆：未知键、缺省 kind、可选字段存在性与嵌套隔离不变", () => {
+  const fittedWith = { at: "2026-11-06", crossAxis: 0, nonlin: 0, noise: 0.1, extension: "保留" };
+  const sourceMag = {
+    ...mag,
+    matrix: [1, 0, 0, 0, 1, 0, 0, 0, 1],
+    validation: {
+      residual: 0.1, count: 30, maxErrUt: 2, ratio: null,
+      late: { residual: 0.2, count: 10, maxErrUt: 3, ratio: null, extension: "后段扩展" },
+      extension: "验证扩展",
+    },
+    fittedWith,
+    extension: "模型扩展",
+  };
+  delete (sourceMag as Partial<typeof sourceMag>).kind;
+  const sourceAccel = {
+    ...accel,
+    validation: { meanNormErrMs2: 0.1, maxNormErrMs2: 0.2, heldOutFaces: 6, extension: "验证扩展" },
+    fittedWith,
+    extension: "模型扩展",
+  };
+  const cfg = defaultExperimentConfig();
+  cfg.magCalibration = sourceMag as any;
+  cfg.accelCalibration = sourceAccel;
+  const snapshot = cloneExperimentConfig(cfg);
+  const copyMag = cloneMagCalibration(cfg.magCalibration!) as unknown as typeof sourceMag;
+  const copyAccel = cloneAccelCalibration(sourceAccel) as typeof sourceAccel;
+  assert.deepEqual(copyMag, sourceMag);
+  assert.deepEqual(copyAccel, sourceAccel);
+  assert.equal(JSON.stringify(snapshot.magCalibration), JSON.stringify(copyMag));
+  assert.equal(JSON.stringify(snapshot.accelCalibration), JSON.stringify(copyAccel));
+  assert.equal(Object.prototype.hasOwnProperty.call(copyMag, "kind"), false, "克隆不得补缺省 kind");
+  for (const key of ["offset", "scale", "matrix", "validation", "fittedWith"] as const) assert.notEqual(copyMag[key], sourceMag[key]);
+  assert.notEqual(copyMag.validation.late, sourceMag.validation.late);
+  for (const key of ["M", "bias", "rmse", "faces", "validation", "fittedWith"] as const) assert.notEqual(copyAccel[key], sourceAccel[key]);
+  copyMag.offset[0] = 99;
+  copyMag.validation.late.residual = 99;
+  copyMag.fittedWith.noise = 99;
+  copyAccel.M[0] = 99;
+  copyAccel.faces[0] = "-x";
+  assert.equal(sourceMag.offset[0], 1);
+  assert.equal(sourceMag.validation.late.residual, 0.2);
+  assert.equal(fittedWith.noise, 0.1);
+  assert.equal(sourceAccel.M[0], 1.02);
+  assert.equal(sourceAccel.faces[0], "+x");
+  for (const optional of [{}, { validation: undefined, fittedWith: undefined }, { validation: null, fittedWith: null }]) {
+    const input = { ...mag, ...optional } as any;
+    const copy = cloneMagCalibration(input);
+    assert.deepEqual(copy, input);
+    assert.deepEqual(Object.keys(copy), Object.keys(input));
+  }
 });
 
 console.log(`schema-contract: ${passed} PASS / ${failed} FAIL`);

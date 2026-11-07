@@ -4,7 +4,55 @@
 > `docs/PROJECT-STATE.md` 迁移而来。PROJECT-STATE 是**当前状态**的恢复锚点，
 > 保持精简；要追溯"当初为什么这么改"，来这里查。
 >
-> 新增一轮里程碑时：在本文件顶部加一节（倒序），并在 PROJECT-STATE 的里程碑索引表里加一行。
+> 新增一轮里程碑时：在本文件顶部加一节（倒序），同步 PROJECT-STATE 的当前状态与验证入口。
+
+## 2026-11-07 · CI 首轮双绿
+
+- 软件渲染下关闭 GPU watchdog（SwiftShader 慢会被 watchdog 当挂起杀掉），并让工作集探针记录趋势；提交 `b12b832` 的 `CI`（gate、app 87/87、devices 20/20）与 `Deploy`（verify、smoke-suite）**首轮全部通过**，未使用重跑。
+
+- 实测工作集约 2.5→2.8 GB、增长平缓；回收时 JS 堆仅 12 MB，排除应用内存泄漏。
+
+## 2026-11-07 · 取消停止时刻口径修正与二次证据冻结
+
+- CI 的 `smoke-suite` 出现过一次**用例级**失败：取消时 runner 已在分片（163 片、单片最长 31.4 ms），219.9 ms 内确实停下，但 `runnerStoppedAt` 缺失。根因是 `onStop` 用 `batchGeneration === myGen + 1` 当判据——世代号只应防止旧批次回写界面，不该决定「停止时刻」。改为「有取消在等且批量已不在运行」即记录。
+- 测试侧区分两种合法来源并各自保留 200 ms 硬约束：`runner-stop`（已有分片，必须有真实停止时刻）与 `prepare-time-settle`（一次分片都没跑，用取消结算时刻），来源写进断言明细；`perf-report.mjs` 同口径。本机复验 `来源 runner-stop`、事件→runner 14.5 ms。
+- 浏览器回收的诊断补上 Chrome 工作集峰值（`tasklist`）与「最后用例」；同时修正诊断续行误用 `[FAIL] ` 前缀被判定成产品缺陷的问题。CI 现场显示回收时 JS 堆仅 12 MB、DOM 1 个文档——排除应用内存泄漏，属 2 vCPU + SwiftShader 的进程级回收。
+- 新构建 `2bb7ea30` / `e791bb9d` 上重采全部证据：5 轮 107/107×5（零 warning、零重启）；两份 600 s 长稳（批量常驻 0.9 MB、趋势 6.0 MB；重连 4.6 MB、16.7 MB）；视觉 11 张零控制台错误；性能墙钟 58.9 fps、真实输入 p95 1.3 ms、运行期 timer p95 13.4 ms、取消 11.9 ms、堆峰值 20.9 MB；`evidence:verify` 三层绑定通过。
+
+## 2026-11-07 · 五轮稳定性与证据冻结
+
+- 本机（Windows，Edge，SwiftShader，CI 同档 800×600 + SMOKE_SLOW）：连续 **5 轮 × 107 项全过、零 FAIL、零 warning、零重启**——`generated/stability-local-windows-358be02f.json`。
+- 期间发现「外部真值回放」用固定 250 ms 等统计样本：浏览器刚被回收、页面重编着色器时可能一步没推进，表格四列全是「—」。改为**有界状态等待**（最多 8 s，等 Mahony 均值成为有限值），失败时把 playing/simTime 一起交回断言；单跑复验 Mahony 均值 0.40°、simTime 10.00。
+- 两份 600 s 长稳通过（批量：常驻水位 5.6 MB、趋势 4.7 MB；重连：3.5 MB、17.2 MB，均在门槛内）；视觉 11 张（320/390/768/1440、200% 文字、打印、三视图，零控制台错误）；性能墙钟 58.7 fps、真实输入 p95 3.7 ms、运行期 timer p95 12.4 ms、取消 10.7 ms；体积归因同步重采。
+- 证据按源码摘要 + 产物摘要 + buildId 三层绑定登记（`npm run evidence:verify` 通过）。旧的 CI 稳定性失败条目 `ci-windows-stability-830e4e3` 降为历史并注明由本轮取代——失败记录保留，不删除。
+
+## 2026-11-07 · 软件渲染画质档（WP-01/WP-03 第一轮）
+
+- 起点是 CI 的一条因果链：`smoke-suite` 在 Windows 2 vCPU 上「事件→handler 302.5 ms、运行中 timer p95 326.2 ms、单帧 172.7 ms、切片 216.9 ms」，而 handler→runner 只要 11.9 ms——点击不是处理慢，是主线程被整段占住。
+- 新增 `scripts/perf-probe.mjs` 单变量对照工具（诊断用，不是门禁）：同页同一批量负载下分别切换阴影／环境贴图／像素比／是否渲染，采 rAF 间隔、`render()` 同步耗时、运行期 timer、真实鼠标 event→handler／event→runner，并可挂 CDP 采样分析器报 JS 自耗时。
+- 本机 SwiftShader 800×600 实测：帧间隔 p50 33.3 ms、`scene` 峰值 21.5 ms；去掉环境贴图或半分辨率即回到一个 vsync。分析器显示主线程 JS 大头是 ESKF 的 `applyUpdate`／`matMul`（约 14% 墙钟）。
+- 产品修复：`createScene()` 读 `WEBGL_debug_renderer_info`，识别到 SwiftShader／llvmpipe／基础显示驱动时降为「性能优先」画质——无 MSAA、无阴影贴图、无 IBL、像素比封顶 1；有 GPU 的机器不受影响。控制台说明降档原因，自动化可用 `attitudeDemo.renderQuality()` 断言档位。
+- 效果（同机 800×600）：单帧 JS 峰值 22.4 → **8.2 ms**，`scene` 21.5 → **5.0 ms**，帧间隔稳定在 16.7 ms。按 CI 同档配置跑完整集合：**107/107、零 warning**，SW-10 事件→handler 0.3 ms、事件→runner 13.7 ms、timer p95 10.9 ms、切片最长 4.4 ms；引导课程 13 步全过。
+- 课程首次点击先给「正在加载引导课程…」即时反馈，避免冷 chunk 下载期间点击像没生效。
+- 预算未放宽：主包 283.2 KiB（有效门槛 283.5 KiB，余量 0.3 KiB），14 项全部通过。最终产物 `358be02fe263-bda8e3827e249687` 上重跑本机完整集合仍为 107/107、零 warning。
+- Windows CI（提交 `2640153`，PR #2）：`gate`、`smoke-shards (app)` 87/87、`smoke-shards (devices)` 20/20 全绿；完整 `smoke-suite` 首轮 87 项全 PASS 但 Chrome 进程被回收 1 次被工具判为基础设施失败，按其提示重跑后 **107 PASS / 0 FAIL / 0 warn，判定全绿**。SW-10 事件→handler 0.3 ms、事件→runner 14.7 ms、timer p95 39.6 ms、切片最长 15.4 ms、单帧最长 27.7 ms（修复前 302.5／314.4／326.2／216.9／172.7 ms）；课程 13 步全过。
+
+## 2026-11-06 · v0.2.0-rc.1 预发行与后续性能方案
+
+- 已发布 [v0.2.0-rc.1](https://github.com/liuxiangfan/fly-web/releases/tag/v0.2.0-rc.1)，标签绑定 `c7d353b0605e22982a0c3dca8c5bae3e2335a840`，附静态构建 ZIP 与 SHA256SUMS；GitHub 附件摘要与本地校验一致。
+- 这是非草稿预发行，不取代正式版；PR #2 未合并，master 和线上部署未改变。发布说明明确保留 Windows CI 的取消／timer 200 ms超标与课程首状态失败。
+- 新增独立 [`WINDOWS-PERFORMANCE-OPTIMIZATION-PLAN.md`](WINDOWS-PERFORMANCE-OPTIMIZATION-PLAN.md)：按时间线诊断、数值调度、渲染/UI、课程冷加载、量具隔离与正式证据冻结六项工单继续，保留原阈值与预算，列出对照矩阵、永久反例、运行命令与回滚模板。
+- 本次只发布已确认候选产物与编写方案，不继续改产品代码、不运行 Ubuntu、不把文档计划当成已完成优化。
+
+## 2026-11-06 · v0.2.0 修复与发布准备
+
+- 以真实 Windows CI 的两项断言失败为起点，不把完整执行后的交互响应和复制反馈失败归为纯容量问题。
+- runner 异步调度保留步数硬上限，增加 4 ms 墙钟计算片预算；积分、种子与算法顺序不变，停止时点与指标收尾／Promise 返回时点分开记录。
+- 交互测量采用至少 40 个 timer 样本和真实输入事件，固定 200 ms 目标；保留计算片、渲染、UI、长任务和取消时序的原始诊断，不按空闲基线放宽门槛。
+- 公式正文与按钮分离；剪贴板 API 缺失、同步异常、拒绝、挂起有界回退；真实建立选区才提示按 Ctrl+C，迟到完成不改新操作反馈。新增 17 项确定性契约。
+- 浏览器公式检查打开可见数学页并前置焦点，用真实点击和目标状态等待替代固定 300 ms；核对正文载荷与选区不含按钮文案。
+- 为守住既有主包预算，复用重复的遥测模板、校准深拷贝与 Blob 下载路径；不删除教学功能或放宽预算。
+- 中英文 README 同步 Windows 环境、复制回退、版本和真实 CI／部署关系；Release 的正式发布与验证结果将在完成后另记。
 
 ## 2026-11-05 · 软件工单实施轮（SW-01～SW-12）
 

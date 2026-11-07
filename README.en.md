@@ -14,11 +14,21 @@
 **Live demo**: [fly_web.070616.xyz](https://fly_web.070616.xyz)　(backup: [workers.dev](https://quaternion-attitude-demo.liu06167492.workers.dev))
 
 <!-- facts:begin -->
-Every push to `master` verifies and deploys automatically: type-check → 126 numeric + 10 scene-geometry + 15 HTML-contract + 4 doc-benchmark checks + independent contracts/status/evidence checks → 14 bundle budgets → 107 browser checks (two shards: app / devices) → Cloudflare Workers. Pull requests run the same gate and both smoke shards without deploying.
+Windows CI on each push to `master` runs type-check → 126 numeric + 10 scene-geometry + 15 HTML-contract + 4 doc-benchmark checks + independent contracts/status/evidence checks → 14 bundle budgets → Cloudflare Workers deployment → live core smoke. The full 107 browser checks (app / devices) run in a separate job currently configured with `continue-on-error: true`. Check **the `smoke-suite` job itself**: a green workflow does not mean every test passed. Pull requests run the static gate and both smoke shards without deploying.
 <!-- verify: check=155 contracts=yes status=yes smoke=107 budget=14 evidence=yes -->
 <!-- facts:end -->
 
 ---
+
+## v0.2.0 changes
+
+- Wall-clock slices for main-thread batch fallback, preserving seeded numerical results and cancellation isolation.
+- Separate diagnostics for event-loop waiting, real input, compute slices, rendering and UI work; the 200 ms acceptance target is not raised with the baseline.
+- Formula copying falls back to manual selection when Clipboard API is missing, fails or times out. Button feedback is excluded from the copied text.
+- Release versions, deployed commits and full-suite results are reported separately; deployment success is not a claim that every test passed.
+- Without GPU acceleration (SwiftShader / llvmpipe / basic display driver) the app switches to a "performance" quality tier: no MSAA, no shadow map, no environment map, pixel ratio capped at 1. Those environments used to take hundreds of milliseconds per frame (3 fps, unresponsive to clicks); GPU machines keep the full quality. The console explains the downgrade and `attitudeDemo.renderQuality()` reports the active tier.
+
+[Releases](https://github.com/liuxiangfan/fly-web/releases) · [Changelog](docs/CHANGELOG.md) · [Verification evidence](docs/VERIFICATION-EVIDENCE.md)
 
 ## What problem does it solve?
 
@@ -284,7 +294,7 @@ is the classic confusion pair for red-blind viewers, and 6–12 curves are on sc
 **text-table equivalents of the three charts** (canvases are unreadable to screen readers; collapsibles give
 the same numbers), **error breakdown** in the glass box (per-axis φ/θ/ψ error plus total angle, answering
 "which axis dominates"), deep-link sharing (parameters + view + chart state + collapsed panels) and PWA
-offline use, **one-click formula copying** and **printing / PDF export of the current page only** (for
+offline use, **one-click formula copying** (manual text selection with Ctrl+C instructions if Clipboard API is unavailable, fails or times out; no false success feedback) and **printing / PDF export of the current page only** (for
 handouts), and keyboard shortcuts (space / R / 1-3 / D / **G guided tour** / **Ctrl+⌘+K doc search** / ?).
 
 ---
@@ -305,21 +315,30 @@ handouts), and keyboard shortcuts (space / R / 1-3 / D / **G guided tour** / **C
 
 ## Quick start
 
+**Environment: Windows 10/11, Node.js 22, Chrome or Edge.** Ubuntu verification is out of scope for this release.
+
 ```bash
 git clone https://github.com/liuxiangfan/fly-web.git
 cd fly-web
-npm install
+npm ci
 
 npm run dev       # development server
 npm run build     # type-check + build into dist/
-npm run preview   # preview the built output
+npm run preview -- --host 127.0.0.1 --port 4173 --strictPort
+```
+
+Rebuild after source changes and hard-refresh the browser. These smoke drivers start and stop preview themselves; do not run another server on the same port:
+
+```bash
+npm run smoke:app
+npm run smoke:devices
 ```
 
 **Verification** (worth running in full before committing):
 
 ```bash
 npx tsc --noEmit  # type check
-npm run check     # 154 assertions: 125 numeric + 10 scene geometry + 15 HTML contracts + 4 doc benchmarks
+npm run check     # 155 assertions: 126 numeric + 10 scene geometry + 15 HTML contracts + 4 doc benchmarks; followed by independent contracts/status/evidence
 npm run budget    # bundle-size budget (14 ceilings: total / fonts / font count / HTML / app shell / docs / gzip / main JS / main JS gzip / on-demand chunks)
 npm run smoke     # 107 real-browser end-to-end checks (export→import round trip, fake text/MAVLink serial
                   # ports, a fake BLE device, print media, accessibility, long-run stability, every slider's
@@ -335,7 +354,7 @@ npm run smoke     # 107 real-browser end-to-end checks (export→import round tr
 > samples — their only repaint point is `step(dt)`, so a changed fingerprint proves the main loop really is
 > connected; the other three demos are one-shot or slider-driven),
 > **all on-screen text must meet WCAG AA contrast** (both the dark dashboard and the light documentation theme,
-> with backgrounds alpha-composited up the ancestor chain, across all 14 doc pages),
+> with backgrounds alpha-composited up the ancestor chain, across all 15 doc pages),
 > and **four rolling containers must stay capped during a long run** (it really pushes 40 s of simulated time
 > through to prove the trimming logic runs, rather than just looking calm).
 > Two further checks are *class-level*: **every slider's number box must accept typing** (two threshold boxes

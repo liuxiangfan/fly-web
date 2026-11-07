@@ -10,11 +10,21 @@
 **在线演示**：[fly_web.070616.xyz](https://fly_web.070616.xyz)　（备用：[workers.dev](https://quaternion-attitude-demo.liu06167492.workers.dev)）
 
 <!-- facts:begin -->
-每次推送到 `master` 自动验证并部署：类型检查 → 数值自检 126 + 场景几何 10 + HTML 契约 15 + 文档基准 4 + 独立 contracts/status/evidence → 14 项产物预算 → 107 项浏览器冒烟（app / devices 两片）→ Cloudflare Workers；PR 运行同一 gate 与两片冒烟但不部署。
+Windows CI 在每次推送到 `master` 后执行：类型检查 → 数值自检 126 + 场景几何 10 + HTML 契约 15 + 文档基准 4 + 独立 contracts/status/evidence → 14 项产物预算 → Cloudflare Workers 部署 → 线上基础 smoke。完整 107 项浏览器冒烟（app / devices 两片）是独立作业，目前 `continue-on-error: true`；请查看 **`smoke-suite` 自身的结论**，工作流总览绿色不代表全部测试通过。PR 运行静态门禁和两片冒烟，不部署。
 <!-- verify: check=155 contracts=yes status=yes smoke=107 budget=14 evidence=yes -->
 <!-- facts:end -->
 
 ---
+
+## v0.2.0 更新
+
+- 批量评测主线程降级增加墙钟切片预算，保持同 seed 数值一致与取消隔离。
+- 交互诊断分别记录事件循环等待、真实输入、计算片、渲染和 UI 耗时；200 ms 验收线不随基线抬高。
+- 公式复制支持 Clipboard API 缺失、失败或超时后的手动选区回退；正文不再包含按钮反馈。
+- 发布版本、线上部署提交与完整测试结论分别记录，不把部署成功当成所有测试通过。
+- 无 GPU 加速（SwiftShader / llvmpipe / 基础显示驱动）时自动切「性能优先」画质：关闭 MSAA、阴影贴图与环境贴图，像素比封顶 1。这些环境原本每帧要几百毫秒（3 fps 且点不动），现在与正常 GPU 一样流畅；有 GPU 的机器画质不变。降档会在控制台说明原因，`attitudeDemo.renderQuality()` 可查当前档位。
+
+[发布记录](https://github.com/liuxiangfan/fly-web/releases) · [变更日志](docs/CHANGELOG.md) · [验证证据](docs/VERIFICATION-EVIDENCE.md)
 
 ## 它解决什么问题
 
@@ -219,7 +229,7 @@ IMU 面板新增交互式**加速度计六面校准**（六面采集 → 静止�
 **三块曲线的等价文本表格**（画布对读屏不可读，折叠表格给出同样的当前读数）、
 玻璃盒里的**误差分解**（逐轴 φ/θ/ψ 误差 + 总角距，回答「偏差主要在哪根轴上」）、
 深链分享（参数 + 视图 + 曲线开合 + 面板收起状态）、PWA 离线、
-文档内**公式一键复制**与**打印 / 存 PDF 只输出当前页**（发讲义用）、
+文档内**公式一键复制**（自动复制不可用、失败或超时则选中正文，提示按 Ctrl+C；不会假报成功）与**打印 / 存 PDF 只输出当前页**（发讲义用）、
 快捷键（空格 / R / 1-3 / D / **G 引导课程** / **Ctrl+⌘+K 文档搜索** / ?）。
 
 ---
@@ -240,14 +250,23 @@ IMU 面板新增交互式**加速度计六面校准**（六面采集 → 静止�
 
 ## 快速开始
 
+**环境：Windows 10/11、Node.js 22、Chrome 或 Edge。** 当前不安排 Ubuntu 验证。
+
 ```bash
 git clone https://github.com/liuxiangfan/fly-web.git
 cd fly-web
-npm install
+npm ci
 
 npm run dev       # 开发服务器
 npm run build     # 类型检查 + 构建到 dist/
-npm run preview   # 预览构建产物
+npm run preview -- --host 127.0.0.1 --port 4173 --strictPort
+```
+
+修改源码后必须重新 build 并强刷。完整冒烟驱动器可自行启动和关闭预览，不要同时占用同一端口：
+
+```bash
+npm run smoke:app
+npm run smoke:devices
 ```
 
 **验证**（提交前建议全跑）：

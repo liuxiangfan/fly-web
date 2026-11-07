@@ -1,7 +1,18 @@
 # 验证证据与证明边界
 
-> 本轮（2026-11-05 · 软件工单实施轮）在本机 Windows 上重采了全部证据。
-> 冻结构建：源码摘要 `d97bbbafb374…`（83 个构建输入文件），构建标识 `d97bbbafb374-4ace2bc8a8795108`，`distHash 4ace2bc8a8795108`（**可复现**：同一份源码两次构建哈希相同）。
+> 最新验证：2026-11-06 · v0.2.0 修复分支，本地提交 `dbf22c7`（远端尚未更新）。
+> 当前本地验收源码摘要 `63cd97bf0bf234009a816a841699303f`，固定构建 `63cd97bf0bf2-afbbb5d7696c5008`。以下旧轮次细节保留为历史，不代表当前 CI 已通过。
+
+## v0.2.0 本地验证
+
+- 全门禁顺序：tsc → check → build；基础检查 155 项及独立契约无失败，预算 14 项保持原门槛，文档全量复算一致。
+- 复制契约 17 项；runner 契约包含实际墙钟预算与同步／异步数值等价；校准深拷贝额外覆盖未知键和嵌套隔离。
+- 真实 Windows 完整套件五轮：每轮 107 项、零失败／warning／重启；首次测试曾读到 Ctrl+K 设置焦点前的状态，保留失败日志，改为有界目标等待后重跑完整五轮。
+- 两份 600 秒长稳：批量 3/3 批与软件替身重连 66/66 恢复均通过，常驻水位增量约 4.4 MB；报告分别为 `generated/soak-batch-600-63cd97bf.json`、`generated/soak-reconnect-600-63cd97bf.json`。
+- 性能报告固定 200 ms 目标，timer 40 样本与真实鼠标输入分开；输入→handler→runner停止→post-await 原始时序、长任务、渲染/UI分项与slice耗时保留在报告 diagnostics。
+- 公式真实鼠标点击验证得到正文选区回退，选区不含按钮反馈；不将手动回退宣称为自动写入系统剪贴板成功。截图采集与控制台检查通过；当前模型接口未提供图像内容，人工视觉判定不声称已完成。
+- `evidence:verify` 已核对六类本地 current 报告的源码摘要、产物摘要及 buildId 一致；旧性能、视觉、体积原件归档为 `*-before-v0.2.0.json`，未重贴摘要。
+- **Windows CI／线上发布待远端操作确认**，本地通过不代替 GitHub smoke-suite 通过。
 > 机器索引：[`generated/evidence-manifest.json`](generated/evidence-manifest.json)；软件评分与未完成项见 [`QUALITY-SOFTWARE-ONLY.md`](QUALITY-SOFTWARE-ONLY.md)。
 > 每一条 current 证据都要能同时回答四件事：**报告正文结论是什么**、**对应哪份源码**、**对应哪份产物**、**被测服务跑的是不是这份产物**。
 

@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-11-05T17:05:20.583Z",
-  "sourceCommit": "1f41e479dc20550117872dd5efad8a0bc291c018",
-  "sourceDigest": "d97bbbafb374c820d3661319d58a12dc",
-  "distHash": "4ace2bc8a8795108",
-  "buildId": "d97bbbafb374-4ace2bc8a8795108",
+  "generatedAt": "2026-11-06T06:09:57.003Z",
+  "sourceCommit": "dbf22c7de295395bd4faf88cc9802014fbb1cefb",
+  "sourceDigest": "63cd97bf0bf234009a816a841699303f",
+  "distHash": "afbbb5d7696c5008",
+  "buildId": "63cd97bf0bf2-afbbb5d7696c5008",
   "note": "体积归因用的是一次**带 sourcemap 的独立重建**（dist-size/），不修改 dist/；chunk 级 raw/gzip 与 dist/ 同源同配置。",
   "chunks": [
     {
@@ -15,25 +15,25 @@
       "gzip": 131882
     },
     {
-      "name": "index-Dwy-5DSc.js",
-      "file": "index-Dwy-5DSc.js",
+      "name": "index-C3qD0yf6.js",
+      "file": "index-C3qD0yf6.js",
       "kind": "main",
-      "raw": 289231,
-      "gzip": 107861
+      "raw": 289775,
+      "gzip": 108665
     },
     {
-      "name": "batch.worker-vgz_vkXA.js",
-      "file": "batch.worker-vgz_vkXA.js",
+      "name": "batch.worker-B7-M4S-S.js",
+      "file": "batch.worker-B7-M4S-S.js",
       "kind": "worker-batch",
-      "raw": 44058,
-      "gzip": 15736
+      "raw": 44093,
+      "gzip": 15828
     },
     {
-      "name": "doc-demos-BUkNyb4h.js",
-      "file": "doc-demos-BUkNyb4h.js",
+      "name": "doc-demos-BZ4J5nhn.js",
+      "file": "doc-demos-BZ4J5nhn.js",
       "kind": "lazy-doc-demos",
       "raw": 22808,
-      "gzip": 9305
+      "gzip": 9304
     },
     {
       "name": "tour-B5wnUiRt.js",
@@ -47,15 +47,15 @@
     "groups": [
       {
         "group": "装配层(main.ts)",
-        "sourceBytes": 356627
+        "sourceBytes": 357452
       },
       {
         "group": "数值内核",
-        "sourceBytes": 202924
+        "sourceBytes": 203811
       },
       {
         "group": "数据通路/存档",
-        "sourceBytes": 168480
+        "sourceBytes": 168267
       },
       {
         "group": "场景渲染",
@@ -63,14 +63,14 @@
       },
       {
         "group": "界面",
-        "sourceBytes": 53149
+        "sourceBytes": 56528
       }
     ],
     "topModules": [
       {
         "module": "main.ts",
         "group": "装配层(main.ts)",
-        "bytes": 356627
+        "bytes": 357452
       },
       {
         "module": "estimators/index.ts",
@@ -80,12 +80,12 @@
       {
         "module": "core/runner.ts",
         "group": "数值内核",
-        "bytes": 38784
+        "bytes": 39671
       },
       {
         "module": "core/experiment-config.ts",
         "group": "数据通路/存档",
-        "bytes": 33639
+        "bytes": 33426
       },
       {
         "module": "scene/quatview.ts",

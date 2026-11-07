@@ -8,9 +8,11 @@
  * 文档对话框焦点、A/B 图例、深链恢复、3D canvas 与帧率、控制台错误。
  */
 import puppeteer from "puppeteer-core";
+import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
+import { performance as nodePerformance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import { readProvenance } from "./build-provenance.mjs";
 
@@ -109,7 +111,50 @@ const checkResults = [];
 const checkNameCounts = new Map();
 const skippedChecks = [];
 const duplicateIds = [];
+// 原始测量不能挤进会截断的 check.detail；即使等待失败也要随最终结果保留现场。
+const diagnostics = { checkOutcomes: [] };
+/**
+ * 基础设施诊断：浏览器被系统回收时，「最后跑过哪个用例 + 当时的堆/DOM 有多大」是唯一能
+ * 区分「容量到极限」与「别的原因」的证据。采样放进有界环形（最多 24 个），不逐用例堆积。
+ */
+const infraDiag = { lastCheck: "(未开始)", samples: [], disconnects: [] };
+/**
+ * Chrome 进程树的工作集（Windows，`tasklist`）：页面 JS 堆只有 12 MB 时进程仍可能被系统回收，
+ * 因为 SwiftShader 的帧缓冲/纹理由**宿主内存**承担，不在 JS 堆里。只记峰值，够判断"是不是系统内存到顶"。
+ * 非 Windows（本机之外的 CI 或开发机）拿不到就留 null，不当失败。
+ */
+const sampleChromeWorkingSet = () => {
+  if (process.platform !== "win32") return;
+  // 不按镜像名过滤（那会返回本地化的「没有运行的任务」提示，解析不到就只剩一句看不懂的噪声）：
+  // 列全部进程，再按名称挑 Chromium 家族——本机用 Edge、CI 用 Chrome，两处口径一致。
+  execFile("tasklist", ["/FO", "CSV", "/NH"], { timeout: 20000, windowsHide: true }, (err, stdout) => {
+    // 取不到就留原因：CI 上这条曾经是「缺失」，只有原因能说明是 PATH、权限还是解析问题
+    if (err) { infraDiag.chromeProbe = String(err.message).slice(0, 120); return; }
+    let totalKb = 0;
+    for (const line of String(stdout).split(/\r?\n/)) {
+      const m = /^"?(chrome|msedge)\.exe"?,\s*"\d+"[^,]*,[^,]*,[^,]*,\s*"([\d,.]+)\s*K"/i.exec(line.trim());
+      if (m) totalKb += Number(m[2].replace(/[,.]/g, "")) || 0;
+    }
+    if (totalKb > 0) {
+      const mb = Math.round(totalKb / 1024);
+      infraDiag.peakChromeMb = Math.max(infraDiag.peakChromeMb ?? 0, mb);
+      // 曲线比峰值有用：单调上升=泄漏/未归还，锯齿=正常回收。有界保存，够画一条趋势。
+      (infraDiag.wsSamples ??= []).push({ at: Date.now(), check: infraDiag.lastCheck.slice(0, 24), mb });
+      if (infraDiag.wsSamples.length > 32) infraDiag.wsSamples.shift();
+    }
+  });
+};
+const samplePageMemory = async (pg) => {
+  try {
+    const m = await pg.metrics();
+    infraDiag.samples.push({ at: Date.now(), nodes: m.Nodes, docs: m.Documents, heapMb: Math.round(m.JSHeapUsedSize / 1048576) });
+    if (infraDiag.samples.length > 24) infraDiag.samples.shift();
+  } catch { /* 页面可能已经随进程消失，采样失败本身不是用例失败 */ }
+};
 const check = (name, cond, detail) => {
+  if (/^SW-10 主线程降级|^公式一键复制/.test(name)) {
+    diagnostics.checkOutcomes.push({ name, pass: Boolean(cond), reason: String(detail ?? "") });
+  }
   const seen = checkNameCounts.get(name) ?? 0;
   checkNameCounts.set(name, seen + 1);
   if (seen > 0) {
@@ -122,6 +167,13 @@ const check = (name, cond, detail) => {
   checkResults.push({ id: name, shard: SHARD, status: cond ? "pass" : "fail", detail: String(detail ?? "").slice(0, 300) });
   console.log(`[${cond ? "PASS" : "FAIL"}] ${name} — ${detail}`);
   cond ? passes++ : failures++;
+  // 顺手记一个「最近跑过哪个用例」：浏览器被系统回收时，日志只能说明崩溃发生在两条 PASS 之间，
+  // 结合这里的名字与下面的堆/DOM 采样才能回答「是不是内存耗到极限」。
+  infraDiag.lastCheck = name;
+  if (checkResults.length % 10 === 0) {
+    void samplePageMemory(page);
+    sampleChromeWorkingSet();
+  }
 };
 /** 明确的跳过登记口：跳过的用例必须留痕（"没跑"不许伪装成"通过"）。 */
 const skip = (name, reason) => {
@@ -137,6 +189,8 @@ const skip = (name, reason) => {
 // 逐个尝试候选浏览器：某些 Windows 环境下 Edge 的 crashpad 会启动失败，直接换 Chrome 即可，
 // 而不是让整条冒烟因为「第一个存在的可执行文件打不开」而红掉。
 let browser = null;
+/** 正常收尾期间不计入「进程被回收」：那是我们自己关的 */
+let shuttingDown = false;
 let profileDir = process.env.SMOKE_PROFILE ?? "";
 const launchBrowser = async () => {
   for (const [i, exe] of candidates.entries()) {
@@ -164,9 +218,20 @@ const launchBrowser = async () => {
           "--disable-background-timer-throttling",
           "--disable-backgrounding-occluded-windows",
           "--disable-renderer-backgrounding",
+          // SwiftShader 软光栅天生慢：GPU 进程 watchdog 会把「慢」当「挂起」处理并杀掉进程，
+          // 表现为浏览器会话消失（Target.createTarget: Session not found）。这是**测试环境**开关，
+          // 不影响产品；被测页面照常渲染，不降低任何断言。
+          "--disable-gpu-watchdog",
         ],
       });
       profileDir = dir;
+      // 进程消失（被系统回收/崩溃）时留现场：正常收尾关闭不算一次基础设施事件
+      browser.on("disconnected", () => {
+        if (shuttingDown) return;
+        infraDiag.disconnects.push({
+          at: Date.now(), lastCheck: infraDiag.lastCheck, lastSample: infraDiag.samples.at(-1) ?? null,
+        });
+      });
       console.log(`[INFO] 使用浏览器：${exe}`);
       // 版本要能被驱动脚本解析出来写进稳定性摘要（证据要能回答"用哪个浏览器跑的"）
       browserVersion = await browser.version();
@@ -275,6 +340,24 @@ const newPage = async () => {
       } catch { /* 让具体用例自己的 waitFor 报更准确的失败 */ }
     }
     return browser.newPage();
+  }
+};
+/** 独立用例只运行被测页；临时冻结无关共享页，结束后恢复原现场。 */
+const withIndependentPage = async (body) => {
+  const session = await page.createCDPSession();
+  let pg;
+  try {
+    await session.send("Page.setWebLifecycleState", { state: "frozen" });
+    pg = await newPage();
+    await pg.bringToFront();
+    return await body(pg);
+  } finally {
+    try { if (pg && !pg.isClosed()) await pg.close(); }
+    finally {
+      await session.send("Page.setWebLifecycleState", { state: "active" });
+      await session.detach();
+      await page.bringToFront();
+    }
   }
 };
 page = await browser.newPage();
@@ -553,7 +636,9 @@ try {
     await page.keyboard.down("Control");
     await page.keyboard.press("k");
     await page.keyboard.up("Control");
-    await new Promise((r) => setTimeout(r, 300));
+    try {
+      await page.waitForFunction(() => document.activeElement?.id === "docs-search-input", { timeout: SLOW_MS(3000) });
+    } catch { /* 下方按实际焦点判失败，不将等待超时包装成环境通过 */ }
     const focused = await page.evaluate(() => document.activeElement?.id ?? "");
     await page.evaluate(() => {
       const input = document.getElementById("docs-search-input");
@@ -1763,16 +1848,27 @@ try {
     const src = document.getElementById("source-select");
     src.value = "truth";
     src.dispatchEvent(new Event("change"));
-    await sleep(250);
+    // 等**统计表真的出现样本**，而不是固定 250 ms：浏览器刚被回收、页面重新编译着色器时，
+    // 这 250 ms 可能一步都没推进，表格四列全是「—」——那是时序，不是产品缺陷。
+    // 有界等待同时保留区分能力：若真的一直没有样本，这里会超时并把现场交回断言。
+    const mahonyCells = () => {
+      const row = [...document.querySelectorAll("#metrics-body tr")].find((tr) => tr.textContent.includes("Mahony"));
+      const cells = row ? [...row.querySelectorAll("td")].map((td) => td.textContent.trim()) : [];
+      return { cells, finite: cells.length > 2 && Number.isFinite(parseFloat(cells[2])) };
+    };
+    let st = mahonyCells();
+    const metricsDeadline = performance.now() + 8000;
+    while (!st.finite && performance.now() < metricsDeadline) { await sleep(50); st = mahonyCells(); }
     const chip = document.getElementById("readout-true")?.textContent ?? "";
     const legend0 = document.querySelector("#att-legend .legend-chip")?.textContent ?? "";
     const info = window.attitudeDemo.replay.info;
-    const row = [...document.querySelectorAll("#metrics-body tr")].find((tr) => tr.textContent.includes("Mahony"));
-    const cells = row ? [...row.querySelectorAll("td")].map((td) => td.textContent.trim()) : [];
+    const cells = st.cells;
     const mean = parseFloat(cells[2]);
+    const playing = window.attitudeDemo.state.playing;
+    const simTime = window.attitudeDemo.state.simTime;
     window.attitudeDemo.replay.stop();
     await sleep(120);
-    return { disabled, chip, legend0, info, imported, mean, cells };
+    return { disabled, chip, legend0, info, imported, mean, cells, playing, simTime };
   });
   check(
     "外部真值回放：基准切到外部真值，且长间隔按子步插值（完美日志平均误差接近 0）",
@@ -1781,7 +1877,8 @@ try {
       Number.isFinite(truthReplay.mean) && truthReplay.mean < 5,
     `truth 选项 disabled=${truthReplay.disabled}；读数「${truthReplay.chip.slice(0, 60)}」；` +
       `图例「${truthReplay.legend0.slice(0, 40)}」；导入=${truthReplay.imported}；` +
-      `Mahony 当前/均值/峰值=${JSON.stringify(truthReplay.cells.slice(1, 5))}（均值应 < 5°）`,
+      `Mahony 当前/均值/峰值=${JSON.stringify(truthReplay.cells.slice(1, 5))}（均值应 < 5°）；` +
+      `playing=${truthReplay.playing}、simTime=${truthReplay.simTime?.toFixed?.(2)}`,
   );
   await page.evaluate(() => {
     const sel = document.getElementById("scenario-select");
@@ -1915,8 +2012,7 @@ try {
   );
 
   // 复核反例回归：断线重连的过渡态必须**冻结**数据流（不得混入模拟 IMU、不得重置本轮时钟）
-  const reconnectFreeze = await (async () => {
-    const pg = await newPage();
+  const reconnectFreeze = await withIndependentPage(async (pg) => {
     await pg.setViewport({ width: 1280, height: 800 });
     const errs = [];
     pg.on("console", (m) => m.type() === "error" && errs.push(m.text()));
@@ -1968,7 +2064,26 @@ try {
       Object.defineProperty(navigator, "serial", { configurable: true, value: { requestPort: async () => port } });
     });
     await gotoSafe(pg);
-    await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: BOOT_MS });
+    await pg.bringToFront();
+    const bootDiagnostic = diagnostics.reconnectBoot = { samples: [], errors: errs, pages: [] };
+    const bootDeadline = Date.now() + BOOT_MS;
+    for (;;) {
+      const sample = await pg.evaluate(() => ({
+        fps: document.getElementById("fps")?.textContent ?? "",
+        clock: document.getElementById("clock")?.textContent ?? "",
+        ready: document.readyState, visible: document.visibilityState, focused: document.hasFocus(),
+        hasApi: Boolean(window.attitudeDemo), frames: window.attitudeDemo?.performance?.()?.count ?? null,
+        contextLost: window.attitudeDemo?.renderer?.getContext()?.isContextLost() ?? null,
+      }));
+      bootDiagnostic.samples.push({ at: Date.now(), ...sample });
+      if (/^\d+\s+fps$/.test(sample.fps)) break;
+      if (Date.now() >= bootDeadline) {
+        bootDiagnostic.pages = (await browser.pages()).map(tab => ({ url: tab.url(), closed: tab.isClosed() }));
+        await pg.screenshot({ path: join(shots, "reconnect-boot-failure.png") }).catch(() => undefined);
+        throw new Error(`重连独立页未就绪（${BOOT_MS} ms）：${JSON.stringify(sample)}；错误 ${JSON.stringify(errs)}`);
+      }
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
     await pg.evaluate(() => {
       const sec = document.getElementById("sec-imu");
       if (sec?.classList.contains("collapsed")) sec.querySelector(".panel-toggle").click();
@@ -2000,7 +2115,7 @@ try {
     }));
     await pg.close();
     return { before, during, errs };
-  })();
+  });
   check(
     "重连过渡态冻结数据流：时钟不重置、记录不新增、不混入模拟数据",
     Math.abs(reconnectFreeze.during.t - reconnectFreeze.before.t) < 1e-9 &&
@@ -2061,91 +2176,163 @@ try {
   );
 
   /**
-   * SW-10 验收：主线程降级路径必须是**协作取消**。
-   *
-   * 旧实现的缺陷（复核已复现）：降级分支用同步 `runExperiment` 跑整个种子，
-   * 只在种子之间 `setTimeout` 让出——一个 30 s 实验 ≈ 550 ms 期间事件循环被占满，
-   * 真实鼠标点击要排在同步计算后面才被处理（旧用例在注释里承认过这一点）。
-   * 现在的验收要求是：**真实 GUI 点击**取消、在**首个种子还没跑完**时生效、
-   * 下一计算片即停（时延 ≤200 ms），期间交互响应 p95 ≤200 ms，且半成品种子不计入完成。
+   * SW-10：30×30 多种子运行期间采样，然后真实 GUI 取消当前未完成的种子。
+   * timer 是事件循环诊断，不冒充输入事件；200 ms 是固定目标，不随基线放大。
+   * runner 停止和 await 返回必须有独立时点，不能用轮询到文案/半成品的时间冒充。
    */
-  const mainCancel = await (async () => {
-    const pg = await newPage();
-    await pg.setViewport({ width: 1280, height: 800 });
-    const errs = [];
+  const mainCancel = await withIndependentPage(async (pg) => {
+    const diagnostic = diagnostics.sw10 = { targetMs: 200, minimumSamples: 40, waitFailures: [], errors: [] };
+    await pg.setViewport({ ...VIEWPORT, deviceScaleFactor: 1 });
+    const errs = diagnostic.errors;
     pg.on("console", (m) => m.type() === "error" && errs.push(m.text()));
     pg.on("pageerror", (e) => errs.push(String(e)));
     await pg.evaluateOnNewDocument(() => {
-      // 没有 Worker 的浏览器环境：批量评测必须回退到主线程分片
       window.Worker = undefined;
+      window.__sw10 = { longTasks: [], longTaskSupported: false, input: null };
+      try {
+        const observer = new PerformanceObserver((list) => {
+          for (const e of list.getEntries()) window.__sw10.longTasks.push({ start: e.startTime, duration: e.duration });
+        });
+        observer.observe({ entryTypes: ["longtask"] });
+        window.__sw10.longTaskSupported = true;
+      } catch (e) { window.__sw10.longTaskReason = String(e); }
     });
     await gotoSafe(pg);
+    await pg.bringToFront();
     await pg.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: BOOT_MS });
     await pg.evaluate(() => {
       document.getElementById("sec-experiments").classList.remove("collapsed");
       const sel = document.getElementById("batch-runs");
-      sel.value = "30x30"; // 单种子 ≈550 ms：取消必须发生在首个种子**中途**
+      sel.value = "30x30";
       sel.dispatchEvent(new Event("change"));
-      // 显式强制降级（与「浏览器没有 Worker」同一条路径），保证本用例测的就是降级分支
       window.attitudeDemo.experiment.disableWorker();
+      window.attitudeDemo.performance?.(true);
     });
-    /**
-     * 事件循环响应的**基线**：批量还没开始时先量一次同样的往返。
-     *
-     * 为什么必须有基线：绝对的 "p95 ≤200 ms" 在 2 vCPU + 软件 WebGL 的 CI runner 上
-     * 描述的是"这台机器的渲染有多慢"，不是"协作取消做得好不好"（实测那台机器单帧就要上百毫秒）。
-     * 真正该断言的产品性质是：**开了批量之后，页面不能比它自己空闲时明显更卡**。
-     * 绝对 200 ms 仍是参考环境（本机桌面）的验收目标，报告里照常打印绝对值与是否达到。
-     */
-    const measureLoopLatency = () =>
-      pg.evaluate(async () => {
-        const samples = [];
-        for (let i = 0; i < 12; i++) {
-          const t0 = performance.now();
-          await new Promise((r) => setTimeout(r, 0));
-          samples.push(performance.now() - t0);
-        }
-        const sorted = [...samples].sort((a, b) => a - b);
-        return { samples, p95: sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * 0.95) - 1)] };
-      });
-    const idleLatency = await measureLoopLatency();
-    await pg.click("#btn-batch"); // 真实点击（走输入事件队列）
-    // 运行中测同一指标：把"批量占主线程"的代价与空闲基线对比
-    const responsiveness = await measureLoopLatency();
-    const during = await pg.evaluate(() => ({
+    const snapshot = () => pg.evaluate(() => ({
       state: window.attitudeDemo.experiment.batchState(),
       status: document.getElementById("batch-status")?.textContent ?? "",
+      frameTiming: window.attitudeDemo.performance?.() ?? null,
+      visibilityState: document.visibilityState,
+      hasFocus: document.hasFocus(),
+      activeElement: { id: document.activeElement?.id ?? "", tag: document.activeElement?.tagName ?? "" },
+      longTaskSupported: window.__sw10.longTaskSupported,
+      longTaskReason: window.__sw10.longTaskReason ?? null,
+      longTasks: window.__sw10.longTasks.slice(),
     }));
-    await pg.click("#btn-batch"); // 真实点击 = 取消
-    let cancelledSeen = true;
+    const measureLoopLatency = (runningRequired) => pg.evaluate(async (required) => {
+      const samples = [], observations = [];
+      const startedAt = performance.now();
+      for (let i = 0; i < 40; i++) {
+        const before = window.attitudeDemo.experiment.batchState();
+        if (required && !before.running) break;
+        const t0 = performance.now();
+        await new Promise((r) => setTimeout(r, 0));
+        const at = performance.now();
+        const after = window.attitudeDemo.experiment.batchState();
+        samples.push(at - t0);
+        observations.push({ requestedAt: t0, observedAt: at, runningBefore: before.running,
+          runningAfter: after.running, generation: after.generation, slices: after.slices ?? null,
+          status: document.getElementById("batch-status")?.textContent ?? "" });
+        if (at - startedAt > 15000) break;
+      }
+      const sorted = [...samples].sort((a, b) => a - b);
+      const percentile = (q) => sorted.length ? sorted[Math.ceil(sorted.length * q) - 1] : null;
+      return { kind: "setTimeout(0) event-loop latency, not input", samples, observations,
+        count: samples.length, p50: percentile(0.5), p95: percentile(0.95), max: sorted.at(-1) ?? null,
+        percentileMethod: "nearest rank", startedAt, endedAt: performance.now(),
+        allDuringBatch: observations.length >= 40 && observations.every((s) => s.runningBefore && s.runningAfter) };
+    }, runningRequired);
+    const idleLatency = diagnostic.timerBaseline = await measureLoopLatency(false);
+    diagnostic.before = await snapshot();
+    await pg.evaluate(() => window.attitudeDemo.performance?.(true));
+    await pg.click("#btn-batch");
+    const responsiveness = diagnostic.timerDuringBatch = await measureLoopLatency(true);
+    // 确认采样后仍在批量中；不声称首种子，status 原文保留实际完成数。
+    const during = diagnostic.beforeCancellation = await snapshot();
+    await pg.evaluate(() => {
+      for (const type of ["pointerdown", "pointerup", "mousedown", "mouseup"]) {
+        document.addEventListener(type, event => {
+          if (!event.target.closest?.("#btn-batch")) return;
+          (window.__sw10.pointerEvents ??= []).push({ type, timestamp: event.timeStamp, handledAt: performance.now(), trusted: event.isTrusted });
+        }, { capture: true });
+      }
+      document.addEventListener("click", (event) => {
+        if (!event.target.closest?.("#btn-batch")) return;
+        window.__sw10.input = {
+          handlerAt: performance.now(), eventTimeStamp: event.timeStamp, trusted: event.isTrusted,
+          timeOrigin: performance.timeOrigin, visibilityState: document.visibilityState,
+          hasFocus: document.hasFocus(), activeElementId: document.activeElement?.id ?? "",
+          beforeHandlerState: window.attitudeDemo.experiment.batchState(),
+        };
+      }, { capture: true, once: true });
+    });
+    const button = await pg.$("#btn-batch");
+    const box = await button?.boundingBox();
+    if (!box) throw new Error("SW-10 取消按钮不可见；没有发出真实输入");
+    await pg.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await pg.mouse.down();
+    const nodeInputSentEpochMs = nodePerformance.timeOrigin + nodePerformance.now();
+    await pg.mouse.up(); // 这一真实 mouseup 产生 click；移动/按下的 CDP 往返不混入点击排队时延。
+    diagnostic.nodeInput = { viewport: pg.viewport(), kind: "click-producing mouseup dispatch", sentEpochMs: nodeInputSentEpochMs,
+      clickReturnedEpochMs: nodePerformance.timeOrigin + nodePerformance.now(), position: { x: box.x + box.width / 2, y: box.y + box.height / 2 } };
+    let cancelledSeen = false, runnerSettled = false;
     try {
       await pg.waitForFunction(() => (document.getElementById("batch-status")?.textContent ?? "").startsWith("已取消"), { timeout: SLOW_MS(5000) });
-    } catch { cancelledSeen = false; }
-    // 「下一片即停」是可观察事实：等降级循环真的丢掉那个半成品种子并记下时延再取样，
-    // 否则读到的是"按钮文案已经变了、计算还在最后一片里"的中间态。
+      cancelledSeen = true;
+    } catch (e) { diagnostic.waitFailures.push({ phase: "cancelled status", reason: String(e) }); }
     try {
-      await pg.waitForFunction(() => window.attitudeDemo.experiment.batchState().partialSeeds >= 1, { timeout: 3000 });
-    } catch { /* 下面按未记录判定并给出可读的失败原因 */ }
+      await pg.waitForFunction(() => {
+        const state = window.attitudeDemo.experiment.batchState();
+        return !state.running && state.partialSeeds >= 1 && state.cancelTiming?.postAwaitAt != null;
+      }, { timeout: SLOW_MS(5000) });
+      runnerSettled = true;
+    } catch (e) { diagnostic.waitFailures.push({ phase: "runner/post-await settlement", reason: String(e) }); }
     const after = await pg.evaluate(() => ({
       state: window.attitudeDemo.experiment.batchState(),
+      input: window.__sw10.input,
+      pointerEvents: window.__sw10.pointerEvents ?? [],
+      observedAt: performance.now(),
       status: document.getElementById("batch-status")?.textContent ?? "",
       body: document.getElementById("batch-body")?.innerHTML ?? "",
       result: window.attitudeDemo.experiment.batchResult(),
       clock: parseFloat((document.getElementById("clock")?.textContent ?? "0").replace(/[^\d.]/g, "")) || 0,
     }));
-    // 取消后状态是否真的干净、界面是否还活着（时钟继续推进 + 控件可点）
+    diagnostic.afterCancellation = { ...await snapshot(), ...after };
+    const timing = after.state.cancelTiming;
+    const input = after.input;
+    /**
+     * 「停下」时刻的两种合法来源：
+     *  · 主线程 runner 已经开始分片（slices.count > 0）→ 必须有 runnerStoppedAt；
+     *  · 取消落在**准备阶段**（一次分片都还没跑）→ 没有 runner 可停，等价口径是取消结算（postAwaitAt）。
+     * 第二种不许被当成「缺失即通过」：它同样受 200 ms 硬约束，且单独记录来源，便于事后区分。
+     */
+    const runnerExisted = (diagnostic.beforeCancellation?.state?.slices?.count ?? 0) > 0;
+    const stopAt = timing?.runnerStoppedAt ?? (runnerExisted ? null : timing?.postAwaitAt ?? null);
+    const stopSource = timing?.runnerStoppedAt != null ? "runner-stop" : stopAt != null ? "prepare-time-settle" : null;
+    diagnostic.cancellation = {
+      nodeInputToHandlerMs: input ? input.timeOrigin + input.handlerAt - nodeInputSentEpochMs : null,
+      eventToHandlerMs: input ? input.handlerAt - input.eventTimeStamp : null,
+      stopSource,
+      runnerExisted,
+      handlerToRunnerStopMs: input && stopAt != null ? stopAt - input.handlerAt : null,
+      requestToRunnerStopMs: timing?.requestedAt != null && stopAt != null ? stopAt - timing.requestedAt : null,
+      runnerStopToPostAwaitMs: timing?.runnerStoppedAt != null && timing?.postAwaitAt != null ? timing.postAwaitAt - timing.runnerStoppedAt : null,
+      requestToPostAwaitMs: after.state.cancelLatencyMs,
+      eventToRunnerStopMs: input && stopAt != null ? stopAt - input.eventTimeStamp : null,
+      nodeInputToRunnerStopMs: input && stopAt != null ? input.timeOrigin + stopAt - nodeInputSentEpochMs : null,
+      observedAfterStopMs: stopAt != null ? after.observedAt - stopAt : null,
+      rawTiming: timing ?? null,
+      clockNote: "Node/browser epoch uses timeOrigin+performance.now; event/runner/await use page monotonic time",
+      cancelledSeen, runnerSettled,
+    };
     await new Promise((r) => setTimeout(r, 700));
-    const settled = await pg.evaluate(() => ({
+    const settled = diagnostic.settled = await pg.evaluate(() => ({
       clock: parseFloat((document.getElementById("clock")?.textContent ?? "0").replace(/[^\d.]/g, "")) || 0,
       status: document.getElementById("batch-status")?.textContent ?? "",
       running: window.attitudeDemo.experiment.batchState().running,
     }));
-    // 快速「启动 → 取消 → 再启动」：新一批必须能正常跑完并写表
-    /**
-     * 取消后再启动：click 之后**在 Node 侧轮询**，而不是在一个 evaluate 里循环等到超时。
-     * 旧写法把 270 s 的预算塞进单个 `page.evaluate`，在慢 runner 上会先撞 CDP 的 protocolTimeout
-     * （实测 `Runtime.callFunctionOn timed out`），于是"等得久"被记成了"通讯失联"。
-     */
+    let restart;
+    if (runnerSettled) {
     const restartStartedAt = Date.now();
     await pg.evaluate(() => {
       const sel = document.getElementById("batch-runs");
@@ -2153,72 +2340,59 @@ try {
       sel.dispatchEvent(new Event("change"));
       document.getElementById("btn-batch").click();
     });
-    let restartDeadline = Date.now() + SLOW_MS(90000);
+    const restartDeadline = Date.now() + SLOW_MS(90000);
     let restartText = "";
     for (;;) {
       restartText = await pg.evaluate(() => document.getElementById("batch-status")?.textContent ?? "");
-      if (restartText.startsWith("完成") || restartText.startsWith("已取消")) break;
-      if (Date.now() > restartDeadline) break;
+      if (restartText.startsWith("完成") || restartText.startsWith("已取消") || Date.now() > restartDeadline) break;
       await new Promise((r) => setTimeout(r, 250));
     }
-    const restart = await pg.evaluate((text) => ({
+    restart = diagnostic.restart = await pg.evaluate((text) => ({
       text,
       rows: document.querySelectorAll("#batch-body tr").length,
       state: window.attitudeDemo.experiment.batchState(),
       result: window.attitudeDemo.experiment.batchResult(),
     }), restartText);
     restart.elapsedMs = Date.now() - restartStartedAt;
+    } else {
+      // 挂起的旧任务不能因新批次重置遥测而被吞掉；继续记录后续 check 为失败，不假装重启过。
+      diagnostic.waitFailures.push({ phase: "restart", reason: "runner/post-await 尚未落定，未启动新世代" });
+      restart = diagnostic.restart = { text: "未重启：旧 runner 未落定", rows: 0, state: after.state, result: null, elapsedMs: 0 };
+    }
+    diagnostic.final = await snapshot();
     await pg.close();
-    return { during, idleLatency, responsiveness, after, settled, restart, cancelledSeen, errs };
-  })();
-  const cancelLatency = mainCancel.after.state.cancelLatencyMs;
-  /**
-   * 阈值口径（**环境相关，必须说清**）：
-   *   · 绝对目标：参考环境（普通桌面）取消 ≤200 ms、交互 p95 ≤200 ms——本机实测 11~17 ms / 5 ms；
-   *   · 慢环境（2 vCPU + 软件 WebGL、或本机同时跑着五轮稳定性）里，连"空闲时一次 setTimeout(0) 往返"
-   *     都能到 150 ms 量级；绝对 200 ms 此时描述的是机器负载，不是协作取消的优劣。
-   * 所以断言用三层，**都不放松产品性质**：
-   *   ① 取消 ≤ max(200 ms, 3×空闲 p95)——等一次事件循环抖动的量级；
-   *   ② 取消 ≤ 0.8×**整枚种子的实测耗时**——这一条直接编码"在种子跑完之前就停下"，
-   *      与机器快慢无关（退化成长等待、等整枚种子跑完的实现必然超标）；
-   *   ③ 运行期交互 p95 ≤ max(200 ms, 4×空闲 p95)。
-   * 绝对 200 ms 仍是参考环境的验收目标，报告里照常打印绝对值与"是否参考环境（空闲 p95 ≤ 50 ms）"。
-   */
-  const idleP95 = mainCancel.idleLatency.p95;
-  const perSeedMs = mainCancel.restart.elapsedMs / 10;
-  const cancelBudget = Math.min(Math.max(200, idleP95 * 3), Math.max(200, perSeedMs * 0.8));
-  const cancelBudgetIdle = Math.max(200, idleP95 * 3);
-  const cancelBudgetSeed = perSeedMs * 0.8;
-  const responseBudget = Math.max(200, idleP95 * 4);
-  const referenceEnv = idleP95 <= 50;
+    return { during, idleLatency, responsiveness, after, settled, restart, cancelledSeen, runnerSettled, errs };
+  });
+  const cancelMetrics = diagnostics.sw10.cancellation;
+  const withinTarget = (value) => Number.isFinite(value) && value >= 0 && value <= 200;
+  const cancelName = "SW-10 主线程降级：真实 GUI 取消未完成种子，浏览器事件到 runner 停止 ≤200 ms（命令传输与 post-await 单记）";
+  const responseName = "SW-10 主线程降级：运行期 timer 响应 ≥40 样本且 p95 ≤200 ms，取消后界面继续可用";
+  diagnostics.sw10.checks = [cancelName, responseName, "SW-10 主线程降级：取消后再启动能跑完，且旧世代不回写"];
   check(
-    "SW-10 主线程降级：真实点击取消在首个种子中途生效，下一片即停（参考环境 ≤200 ms；慢环境按空闲基线 3× 且必须早于整枚种子）",
-    mainCancel.during.state.running &&
-      mainCancel.during.state.button.includes("取消") &&
-      mainCancel.during.state.workerDisabled === true &&
-      mainCancel.cancelledSeen &&
-      typeof cancelLatency === "number" && cancelLatency <= cancelBudget &&
-      mainCancel.after.state.partialSeeds >= 1 &&
-      mainCancel.after.state.running === false,
-    `运行中 running=${mainCancel.during.state.running}、按钮「${mainCancel.during.state.button}」、` +
-      `强制降级=${mainCancel.during.state.workerDisabled}；取消时延 ${cancelLatency === null ? "未记录" : `${cancelLatency.toFixed(0)} ms`}` +
-      `（额度 ${cancelBudget.toFixed(0)} ms = min(max(200, 3×空闲 ${idleP95.toFixed(0)} ms)=${cancelBudgetIdle.toFixed(0)}, ` +
-      `0.8×种子 ${perSeedMs.toFixed(0)} ms=${cancelBudgetSeed.toFixed(0)}）；参考环境=${referenceEnv}）；` +
-      `被丢弃的半成品种子 ${mainCancel.after.state.partialSeeds} 个；状态「${mainCancel.after.status.slice(0, 16)}」`,
+    "SW-10 主线程降级：真实 GUI 取消未完成种子，浏览器事件到 runner 停止 ≤200 ms（命令传输与 post-await 单记）",
+    mainCancel.during.state.running && mainCancel.during.state.button.includes("取消") &&
+      mainCancel.during.state.workerDisabled === true && mainCancel.after.input?.trusted === true &&
+      mainCancel.after.input?.beforeHandlerState.running === true && mainCancel.cancelledSeen && mainCancel.runnerSettled &&
+      withinTarget(cancelMetrics.eventToRunnerStopMs) && withinTarget(cancelMetrics.requestToRunnerStopMs) &&
+      mainCancel.after.state.partialSeeds >= 1 && mainCancel.after.state.running === false &&
+      mainCancel.after.state.activeJob === 0 && diagnostics.sw10.waitFailures.length === 0,
+    `命令传输+输入等待→handler ${cancelMetrics.nodeInputToHandlerMs?.toFixed(1) ?? "缺失"} ms（仅诊断）；` +
+      `浏览器事件→handler ${cancelMetrics.eventToHandlerMs?.toFixed(1) ?? "缺失"} ms；handler→runner ${cancelMetrics.handlerToRunnerStopMs?.toFixed(1) ?? "缺失"} ms；` +
+      `runner→post-await ${cancelMetrics.runnerStopToPostAwaitMs?.toFixed(1) ?? "缺失"} ms；事件→runner ${cancelMetrics.eventToRunnerStopMs?.toFixed(1) ?? "缺失"} ms（固定200，来源 ${cancelMetrics.stopSource ?? "缺失"}）；` +
+      `取消前「${mainCancel.during.status}」；丢弃 ${mainCancel.after.state.partialSeeds} 个；等待失败 ${diagnostics.sw10.waitFailures.length}`,
   );
   check(
-    "SW-10 主线程降级：运行期交互响应不劣于空闲基线（参考环境 p95 ≤200 ms；本机实测 5~13 ms），取消后界面继续可用",
-    mainCancel.responsiveness.p95 <= responseBudget &&
-      mainCancel.after.body.trim() === "" &&
-      mainCancel.after.result === null &&
-      mainCancel.settled.running === false &&
-      mainCancel.settled.status.startsWith("已取消") &&
-      mainCancel.settled.clock > mainCancel.after.clock &&
-      errsEmpty(mainCancel.errs),
-    `响应样本 p95=${mainCancel.responsiveness.p95.toFixed(1)} ms（额度 ${responseBudget.toFixed(0)} ms = max(200, 4×空闲 ${idleP95.toFixed(0)} ms)；` +
-      `逐次 ${mainCancel.responsiveness.samples.map((n) => n.toFixed(0)).join("/")}）；` +
-      `取消后表格为空=${mainCancel.after.body.trim() === ""}、无半成品结果=${mainCancel.after.result === null}；` +
-      `时钟仍推进 ${mainCancel.after.clock.toFixed(1)}→${mainCancel.settled.clock.toFixed(1)} s`,
+    "SW-10 主线程降级：运行期 timer 响应 ≥40 样本且 p95 ≤200 ms，取消后界面继续可用",
+    mainCancel.idleLatency.count >= 40 && mainCancel.responsiveness.allDuringBatch &&
+      withinTarget(mainCancel.responsiveness.p95) &&
+      mainCancel.during.state.slices?.count > 0 && mainCancel.during.frameTiming?.count > 0 &&
+      mainCancel.after.body.trim() === "" && mainCancel.after.result === null &&
+      mainCancel.settled.running === false && mainCancel.settled.status.startsWith("已取消") &&
+      mainCancel.settled.clock > mainCancel.after.clock && errsEmpty(mainCancel.errs),
+    `timer基线 p95=${mainCancel.idleLatency.p95?.toFixed(1)} ms（仅诊断）；运行 ${mainCancel.responsiveness.count} 样本、` +
+      `p95=${mainCancel.responsiveness.p95?.toFixed(1)} ms（固定200）、均运行中=${mainCancel.responsiveness.allDuringBatch}；` +
+      `slice最长 ${mainCancel.during.state.slices?.maxComputeMs?.toFixed(1) ?? "缺失"} ms；frame最长 ${mainCancel.during.frameTiming?.max?.frame?.toFixed(1) ?? "缺失"} ms；` +
+      `取消后时钟 ${mainCancel.after.clock.toFixed(1)}→${mainCancel.settled.clock.toFixed(1)} s；原始数据见 diagnostics.sw10`,
   );
   check(
     "SW-10 主线程降级：取消后再启动能跑完，且旧世代不回写",
@@ -3793,18 +3967,154 @@ try {
     // 「样本不够」是 toast 提示（不是面板里的 note），所以读 toast 层
     out.settleTooEarly = document.getElementById("toast-layer")?.innerText ?? "";
 
-    // ③ 公式复制：每块公式都有按钮，且点击后有反馈（剪贴板可能被拒，允许「已选中」）
-    out.formulaCopyButtons = document.querySelectorAll(".formula-copy").length;
-    const btn = document.querySelector(".doc-page .formula .formula-copy");
-    document.getElementById("btn-docs").click();
-    await sleep(400);
-    btn.click();
-    await sleep(300);
-    out.formulaCopyFeedback = btn.textContent;
-    document.getElementById("btn-docs-close").click();
-    await sleep(300);
     return out;
   });
+  // ③ 明确打开数学页，前置页/可见按钮/真实输入都留痕；反馈不是复制载荷的替代品。
+  const formulaCopy = diagnostics.formulaCopy = { waitFailures: [], targetPage: "math", before: {},
+    after: { selectedText: "", clipboardText: null, label: "" } };
+  const formulaPageSelector = '#docs-overlay .doc-page[data-doc-page="math"]';
+  const formulaNavSelector = '#docs-overlay .docs-toc .module-link[data-doc="math"]';
+  // #math 确为 article；visible:true 不校验折叠 details 或点击命中，不能只换 id/延长等待。
+  const readFormulaDom = () => page.evaluate((pageSelector, navSelector) => {
+    const describe = (el) => {
+      if (!el) return null;
+      const r = el.getBoundingClientRect(), s = getComputedStyle(el);
+      const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+      return { tag: el.tagName, id: el.id, docPage: el.dataset.docPage, role: el.getAttribute("role"),
+        hidden: el.hidden, hiddenAttr: el.getAttribute("hidden"), display: s.display,
+        visibility: s.visibility, opacity: s.opacity,
+        rect: { x: r.x, y: r.y, width: r.width, height: r.height },
+        rendered: el.getClientRects().length > 0 && r.width > 0 && r.height > 0 &&
+          s.display !== "none" && s.visibility !== "hidden" && !el.closest("[hidden]"),
+        hit: hit ? { tag: hit.tagName, id: hit.id, className: String(hit.className) } : null,
+        hitInside: Boolean(hit && el.contains(hit)) };
+    };
+    const overlay = document.getElementById("docs-overlay");
+    const targets = [...document.querySelectorAll(pageSelector)];
+    const nav = document.querySelector(navSelector), details = nav?.closest("details");
+    return { overlay: describe(overlay), targetPages: targets.map(describe),
+      currentDoc: [...document.querySelectorAll("#docs-overlay .doc-page:not([hidden])")].map((el) => el.dataset.docPage),
+      activeModule: document.querySelector("#docs-overlay .module-link.active")?.dataset.doc,
+      nav: describe(nav), details: details ? { id: details.id, open: details.open } : null,
+      button: describe(targets[0]?.querySelector(".formula .formula-copy")),
+      navigationInput: window.__formulaNavInput ?? null,
+      viewport: { width: innerWidth, height: innerHeight }, overlayScrollTop: overlay?.scrollTop,
+      docScrollTop: document.querySelector("#docs-overlay .doc-pages")?.scrollTop,
+      hasFocus: document.hasFocus(), visibilityState: document.visibilityState,
+      activeElementId: document.activeElement?.id ?? "", secureContext: isSecureContext,
+      clipboard: { readText: typeof navigator.clipboard?.readText, writeText: typeof navigator.clipboard?.writeText } };
+  }, formulaPageSelector, formulaNavSelector);
+  // Node 计时采样，不依赖页面 rAF；原有 STATE_MS/3000 ms 额度不变。
+  const waitFormulaState = async (phase, read, predicate, timeout) => {
+    const start = nodePerformance.now();
+    let state;
+    do {
+      state = await read();
+      if (predicate(state)) return state;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    } while (nodePerformance.now() - start < timeout);
+    formulaCopy.waitFailures.push({ phase, timeout, elapsedMs: nodePerformance.now() - start, state });
+    throw new Error(`formula ${phase} 未满足（${timeout} ms）`);
+  };
+  // 只给测试 browser context 读剪贴板权限，实际写入仍由用户激活的原生 API 完成；不替换 clipboard。
+  try {
+    await browser.defaultBrowserContext().overridePermissions(new URL(APP_URL).origin, ["clipboard-read", "clipboard-write"]);
+    formulaCopy.clipboardReadPermission = "granted in test browser context";
+  } catch (e) { formulaCopy.clipboardReadPermission = String(e); }
+  let formulaButton = null;
+  try {
+  await page.bringToFront();
+  formulaCopy.navigationBefore = await readFormulaDom();
+  await page.click("#btn-docs");
+  const opened = await waitFormulaState("文档对话框打开", readFormulaDom,
+    (s) => s.overlay?.hidden === false && s.overlay.rendered && s.overlay.role === "dialog", STATE_MS);
+  if (opened.details?.open === false) await page.click("#toc-disclosure > summary");
+  const navButton = await page.$(formulaNavSelector);
+  if (!navButton) throw new Error("数学模块导航缺失");
+  await navButton.evaluate((button) => button.scrollIntoView({ block: "center" }));
+  formulaCopy.navigationReady = await waitFormulaState("数学模块导航可命中", readFormulaDom,
+    (s) => s.nav?.rendered && s.nav.hitInside && s.details?.open !== false, STATE_MS);
+  await navButton.evaluate((button) => {
+    window.__formulaNavInput = null;
+    button.addEventListener("click", (event) => { window.__formulaNavInput = { trusted: event.isTrusted,
+      x: event.clientX, y: event.clientY, targetTag: event.target.tagName,
+      targetDoc: event.target.closest(".module-link")?.dataset.doc, handlerAt: performance.now() }; },
+    { capture: true, once: true });
+  });
+  await navButton.click();
+  await navButton.dispose();
+  formulaCopy.navigationAfter = await waitFormulaState("唯一当前数学页及公式按钮", readFormulaDom,
+    (s) => s.navigationInput?.trusted === true && s.navigationInput.targetDoc === "math" &&
+      s.currentDoc.length === 1 && s.currentDoc[0] === "math" && s.activeModule === "math" &&
+      s.targetPages.length === 1 && s.targetPages[0].hidden === false && s.targetPages[0].rendered && s.button?.rendered, STATE_MS);
+  formulaButton = await page.$(`${formulaPageSelector}:not([hidden]) .formula .formula-copy`);
+  if (!formulaButton) throw new Error("当前数学页公式按钮缺失");
+  await formulaButton.evaluate((button) => button.scrollIntoView({ block: "center" }));
+  await formulaButton.hover();
+  formulaCopy.buttonReady = await waitFormulaState("公式按钮悬停可见且可命中", readFormulaDom,
+    (s) => s.currentDoc.length === 1 && s.currentDoc[0] === "math" &&
+      s.button?.rendered && Number(s.button.opacity) > 0 && s.button.hitInside, 3000);
+  formulaCopy.before = await formulaButton.evaluate((button) => {
+    const blocks = [...document.querySelectorAll(".doc-page .formula")];
+    const body = button?.parentElement.querySelector(".formula-body");
+    const rect = button?.getBoundingClientRect();
+    const style = button ? getComputedStyle(button) : null;
+    return {
+      formulaCount: blocks.length, buttonCount: document.querySelectorAll(".doc-page .formula-copy").length,
+      oneButtonPerFormula: blocks.every((block) => block.querySelectorAll(".formula-copy").length === 1),
+      bodiesExcludeButtons: blocks.every((block) => block.querySelector(".formula-body") && !block.querySelector(".formula-body .formula-copy")),
+      expectedText: (body?.innerText || body?.textContent || "").replace(/\n{3,}/g, "\n\n").trim(),
+      state: button?.dataset.copyState, label: button?.textContent ?? "",
+      visible: Boolean(rect?.width && rect?.height && style?.visibility !== "hidden" && Number(style?.opacity) > 0),
+      bodyContainsButton: Boolean(body?.querySelector("button")),
+      mathHidden: button.closest('.doc-page[data-doc-page="math"]')?.hidden,
+      visibilityState: document.visibilityState, hasFocus: document.hasFocus(), activeElementId: document.activeElement?.id ?? "",
+    };
+  });
+  await formulaButton.evaluate((button) => {
+    window.__formulaCopyInput = null;
+    button.addEventListener("click", (event) => { window.__formulaCopyInput = { trusted: event.isTrusted,
+      x: event.clientX, y: event.clientY,
+      handlerAt: performance.now(), eventTimeStamp: event.timeStamp, hasFocus: document.hasFocus() }; }, { capture: true, once: true });
+  });
+  await formulaButton.click();
+  try {
+    await waitFormulaState("copy terminal state", () => formulaButton.evaluate((button) => ({
+      state: button.dataset.copyState, label: button.textContent, input: window.__formulaCopyInput })),
+    (s) => ["copied", "selected", "manual"].includes(s.state), 3000);
+  } catch (e) { formulaCopy.terminalWaitError = String(e); }
+  formulaCopy.after = await formulaButton.evaluate(async (button) => {
+    const body = button?.parentElement.querySelector(".formula-body");
+    const state = button?.dataset.copyState;
+    const selection = window.getSelection();
+    const selectedText = selection?.toString() ?? "";
+    const selectionInsideBody = Boolean(selection?.rangeCount && body &&
+      body.contains(selection.getRangeAt(0).startContainer) && body.contains(selection.getRangeAt(0).endContainer));
+    let clipboardText = null, clipboardReason = null;
+    if (state === "copied") {
+      try {
+        clipboardText = await Promise.race([navigator.clipboard.readText(),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("clipboard read exceeded 1000 ms")), 1000))]);
+      } catch (e) { clipboardReason = String(e); }
+    }
+    return { state, label: button?.textContent ?? "", selectedText, selectionInsideBody, clipboardText, clipboardReason,
+      input: window.__formulaCopyInput, hasFocus: document.hasFocus(), visibilityState: document.visibilityState,
+      bodyContainsButton: Boolean(body?.querySelector("button")),
+      style: { opacity: button ? getComputedStyle(button).opacity : null, ariaLive: button?.getAttribute("aria-live") } };
+  });
+  } catch (e) {
+    formulaCopy.error = String(e);
+    formulaCopy.waitFailures.push({ phase: "navigation/copy", reason: String(e) });
+    try { formulaCopy.failureDom = await readFormulaDom(); }
+    catch (snapshotError) { formulaCopy.failureDomError = String(snapshotError); }
+  } finally {
+    await formulaButton?.dispose();
+    try { await page.screenshot({ path: join(shots, "formula-copy-feedback.png") }); }
+    catch (e) { formulaCopy.screenshotError = String(e); }
+    // 导航失败仍报原公式断言并继续套件；Esc 不依赖滚动后关闭按钮的坐标。
+    if (await page.evaluate(() => document.getElementById("docs-overlay")?.hidden === false)) await page.keyboard.press("Escape");
+    await browser.defaultBrowserContext().clearPermissionOverrides();
+  }
   check(
     "惯性导航面板：画布有内容 + 读数表 + 摘要",
     extras.insCanvas.paintedPixels > 200 &&
@@ -3823,11 +4133,27 @@ try {
     `${extras.challengeItems} 题；装载后 β=${extras.challengeLoaded.beta} / 剧本=${extras.challengeLoaded.scenario} / 来源=${extras.challengeLoaded.source}；` +
       `样本不足时结算提示「${extras.settleTooEarly.trim().slice(0, 16)}…」`,
   );
+  const copyState = formulaCopy.after.state;
+  const copyPayloadCorrect = copyState === "copied"
+    ? formulaCopy.after.label === "已复制" && formulaCopy.after.clipboardText === formulaCopy.before.expectedText
+    : copyState === "selected"
+      ? formulaCopy.after.label === "已选中，请按 Ctrl+C" && formulaCopy.after.selectionInsideBody &&
+        formulaCopy.after.selectedText.replace(/\n{3,}/g, "\n\n").trim() === formulaCopy.before.expectedText
+      : copyState === "manual" && formulaCopy.after.label === "请手动选中并按 Ctrl+C" &&
+        formulaCopy.after.selectedText === "";
+  formulaCopy.payloadCorrect = copyPayloadCorrect;
+  formulaCopy.reason = formulaCopy.error ?? (copyState === "manual" ? "自动复制/选中不可用，明确提示手动操作，未声称复制成功"
+    : copyPayloadCorrect ? "真实载荷与公式正文一致" : formulaCopy.after.clipboardReason ?? "终态标签或真实 selection/clipboard 与正文不一致");
+  formulaCopy.checkName = "公式一键复制：数学页可见按钮真实点击，状态与真实载荷一致且正文无按钮污染";
   check(
-    "公式一键复制：按钮齐备且点击有反馈",
-    extras.formulaCopyButtons > 20 &&
-      (extras.formulaCopyFeedback === "已复制" || extras.formulaCopyFeedback === "已选中"),
-    `${extras.formulaCopyButtons} 个公式块都有复制按钮；点击后按钮显示「${extras.formulaCopyFeedback}」`,
+    "公式一键复制：数学页可见按钮真实点击，状态与真实载荷一致且正文无按钮污染",
+    formulaCopy.before.formulaCount > 20 && formulaCopy.before.oneButtonPerFormula &&
+      formulaCopy.before.bodiesExcludeButtons && formulaCopy.before.buttonCount === formulaCopy.before.formulaCount &&
+      formulaCopy.before.visible && formulaCopy.before.mathHidden === false &&
+      (formulaCopy.before.expectedText?.length ?? 0) > 0 && !formulaCopy.after.bodyContainsButton &&
+      formulaCopy.after.input?.trusted === true && formulaCopy.waitFailures.length === 0 && copyPayloadCorrect,
+    `${formulaCopy.before.formulaCount} 个公式均一个按钮；状态 ${copyState ?? "缺失"} /「${formulaCopy.after.label}」；` +
+      `真实selection ${formulaCopy.after.selectedText.length} 字、clipboard ${formulaCopy.after.clipboardText?.length ?? "不可读"} 字；${formulaCopy.reason}`,
   );
 
   // A/B + 挑战的组合语义：基线会关掉 A/B，但必须明说（否则「参数对比中」的实验语义含混）
@@ -3944,76 +4270,134 @@ try {
   // ⑤ 引导课程：走完全部 13 步（用界面上的真实按钮，不走调试接口）。
   //    每一步都会装载实验 / 切视图 / 展开面板，所以这条用例同时覆盖了
   //    「实验库的 id 在课程里没写错」「视图确实切过去了」「走完能正常收尾」。
-  const tourCase = await page.evaluate(async () => {
-    const sec = document.getElementById("sec-tour");
-    if (sec.classList.contains("collapsed")) sec.querySelector(".panel-toggle").click();
-    document.getElementById("tour-start").click();
-    // 课程模块是按需 chunk（首屏不背 19 KB 文案）：等它加载完成、卡片出现再逐步点击。
-    // 旧实现同步挂载，这里若不等待会把「点击后无反应」误判成课程坏了。
-    for (let k = 0; k < 100 && document.getElementById("tour-card").classList.contains("hidden"); k++) {
-      await new Promise((r) => setTimeout(r, 30));
-    }
-    const steps = [];
-    const snap = () => ({
-      counter: document.getElementById("tour-counter").textContent,
-      title: document.getElementById("tour-title").textContent,
-      body: document.getElementById("tour-body").textContent.length,
-      view: document.body.dataset.view,
-      source: document.getElementById("source-select").value,
-      scenario: document.getElementById("scenario-select").value,
-      cardVisible: !document.getElementById("tour-card").classList.contains("hidden"),
-      introHidden: document.getElementById("tour-intro").classList.contains("hidden"),
-      next: document.getElementById("tour-next").textContent,
-    });
-    steps.push(snap());
-    /**
-     * 每步之后**等 UI 落定**再取快照，而不是"点完立刻读"。
-     * CI 的 2 vCPU runner 实测过"第 2 步读到的还是第 1 步的设置"：步骤应用里有会跨帧完成的
-     * UI 同步（视图分段控件过渡、面板展开、实验参数落到控件），点完立刻读就取到上一帧。
-     * 这里的等待有明确的判别依据：计数器（render 里同步写）先变，再让出两帧给跨帧的那部分。
-     */
-    const settle = async () => {
-      await new Promise((r) => setTimeout(r, 0));
-      await new Promise((r) => requestAnimationFrame(() => r(null)));
-      await new Promise((r) => requestAnimationFrame(() => r(null)));
-    };
-    for (let k = 0; k < 13; k++) {
-      const before = document.getElementById("tour-counter").textContent;
-      document.getElementById("tour-next").click();
-      // 计数器变化 = 这一步的 render 已经跑过；最多等 3 s（慢 runner 上一帧可能上百毫秒）
-      for (let w = 0; w < 60 && document.getElementById("tour-counter").textContent === before; w++) {
-        await new Promise((r) => setTimeout(r, 50));
+  const tourCase = diagnostics.tourCase = { steps: [], waits: [], waitFailures: [], done: false,
+    restored: false, restarted: "", closed: false };
+  // 宿主 applyExperiment(id): void → applyExperiment(spec): void、applyView 及 render 都是同步的。
+  // 真正异步的是首次 ensureTour()；静态 HTML 的 counter 已写「第 1 / 13 步」，但标题/正文为空。
+  // 旧用例冷加载等待耗尽仍 push 空快照、点未绑定的 next，13 个 unique 可包含空标题，整列错位一格。
+  const tourTargets = [
+    { view: "attitude", panel: "scenario" },
+    { view: "attitude", source: "pure", scenario: "hover", exp: "drift" },
+    { view: "attitude", source: "pure", scenario: "hover", exp: "drift" },
+    { view: "attitude", source: "mahony", scenario: "violent", exp: "gate", panel: "algo", gate: true },
+    { view: "attitude", source: "mahony", scenario: "composite", exp: "magnetic", mag: true },
+    { view: "attitude", source: "mahony", scenario: "composite", exp: "margFull", mag: true, magMode: "full" },
+    { view: "attitude", source: "kalman", scenario: "hover", exp: "kalman-tuning", panel: "telemetry" },
+    { view: "gimbal", source: "kalman", scenario: "hover", exp: "gimbal" },
+    { view: "attitude", source: "comp", scenario: "pitchHold", exp: "lockAlgo" },
+    { view: "quat", source: "comp", scenario: "hover", exp: "slerp", quatMode: "interp", pair: "combo" },
+    { view: "quat", source: "comp", scenario: "hover", exp: "proj", quatMode: "proj" },
+    { view: "quat", source: "comp", scenario: "hover", exp: "proj", quatMode: "proj", panel: "ins" },
+    { view: "quat", source: "comp", scenario: "hover", exp: "proj", quatMode: "proj", panel: "challenge" },
+  ];
+  const readTourDom = () => page.evaluate(() => ({
+    counter: document.getElementById("tour-counter").textContent,
+    title: document.getElementById("tour-title").textContent,
+    body: document.getElementById("tour-body").textContent.length,
+    view: document.body.dataset.view,
+    activeView: document.querySelector("#view-seg .seg-btn.active")?.dataset.view,
+    source: document.getElementById("source-select").value,
+    scenario: document.getElementById("scenario-select").value,
+    imuMode: document.body.dataset.imuMode,
+    scenarioDisabled: document.getElementById("scenario-select").disabled,
+    exp: document.querySelector("#experiment-list button.active")?.dataset.exp,
+    gate: document.getElementById("gate-toggle").checked,
+    mag: document.getElementById("mag-enable").checked,
+    magMode: document.getElementById("mag-mode").value,
+    quatMode: document.getElementById("quat-mode").value,
+    pair: document.getElementById("quat-pair-select").value,
+    panels: Object.fromEntries([...document.querySelectorAll("#panel .panel-section")].map((sec) =>
+      [sec.dataset.section, !sec.classList.contains("collapsed") &&
+        sec.querySelector(".panel-toggle")?.getAttribute("aria-expanded") === "true"])),
+    cardVisible: !document.getElementById("tour-card").classList.contains("hidden"),
+    introHidden: document.getElementById("tour-intro").classList.contains("hidden"),
+    startRowHidden: document.getElementById("tour-start-row").classList.contains("hidden"),
+    next: document.getElementById("tour-next").textContent,
+    prevDisabled: document.getElementById("tour-prev").disabled,
+    controller: window.attitudeDemo?.tour?.info,
+    visibilityState: document.visibilityState,
+  }));
+  // 页面状态使用3秒预算，命令传输采用既有STATE_MS，并分别记录。
+  const boundTour = async (phase, operation, timeout = STATE_MS) => {
+    let timer;
+    try {
+      return await Promise.race([operation(), new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`tour ${phase} 超过 ${timeout} ms`)), timeout);
+      })]);
+    } finally { clearTimeout(timer); }
+  };
+  const waitTourState = async (phase, predicate) => {
+    const start = nodePerformance.now(), timeout = 3000;
+    let state;
+    try {
+      while (nodePerformance.now() - start < timeout) {
+        const readingAt = nodePerformance.now();
+        state = await boundTour(phase, readTourDom);
+        const receivedAt = nodePerformance.now();
+        tourCase.waits.push({ phase: `${phase} CDP读取`, elapsedMs: receivedAt - readingAt, state });
+        if (predicate(state)) return state;
+        await new Promise((resolve) => setTimeout(resolve, Math.min(25, Math.max(0, timeout - (nodePerformance.now() - start)))));
       }
-      await settle();
-      steps.push(snap());
+      throw new Error(`tour ${phase} 未满足（${timeout} ms）`);
+    } catch (e) {
+      tourCase.waitFailures.push({ phase, timeout, elapsedMs: nodePerformance.now() - start, state, error: String(e) });
+      throw e;
     }
-    const done = document.getElementById("tour-card").classList.contains("hidden");
-    const restored = !document.getElementById("tour-intro").classList.contains("hidden");
-    // 再按一次「开始」应能重新开课（上次走到底已经退出）
-    document.getElementById("tour-start").click();
-    const restarted = document.getElementById("tour-counter").textContent;
-    document.getElementById("tour-close").click();
-    const closed = document.getElementById("tour-card").classList.contains("hidden");
-    return { steps, done, restored, restarted, closed };
-  });
-  const walked = tourCase.steps.slice(0, 13);
+  };
+  const matchesTourStep = (s, k) => {
+    const match = /^第 (\d+) \/ 13 步 · 约 \d+ s$/.exec(s.counter);
+    const target = tourTargets[k];
+    return Number(match?.[1]) === k + 1 && s.title.trim().length > 0 && s.body > 80 &&
+      s.cardVisible && s.introHidden && s.startRowHidden && s.imuMode === "sim" && !s.scenarioDisabled &&
+      s.activeView === target.view && s.next === (k === 12 ? "完成" : "下一步") && s.prevDisabled === (k === 0) &&
+      Object.entries(target).every(([key, value]) => key === "panel" ? s.panels[value] === true : s[key] === value);
+  };
+  const clickTour = (id) => boundTour(`点击 ${id}`, () => page.evaluate((buttonId) => {
+    document.getElementById(buttonId).click();
+  }, id));
+  const tourExited = (s) => !s.cardVisible && !s.introHidden && !s.startRowHidden;
+  try {
+    tourCase.before = await boundTour("起始现场", readTourDom);
+    await boundTour("展开课程面板", () => page.evaluate(() => {
+      const sec = document.getElementById("sec-tour");
+      if (sec.classList.contains("collapsed")) sec.querySelector(".panel-toggle").click();
+    }));
+    await clickTour("tour-start");
+    for (let k = 0; k < 13; k++) {
+      // 只有精确第 k+1 步与该步目标现场同时成立才计入；不因超时补点或沿用旧快照。
+      tourCase.steps.push(await waitTourState(`第 ${k + 1}/13 步现场`, (s) => matchesTourStep(s, k)));
+      if (k < 12) await clickTour("tour-next");
+    }
+    // 最后一次点的是「完成」：exit 不改 counter，不能再等 counter 变化。
+    await clickTour("tour-next");
+    tourCase.finished = await waitTourState("完成后收起与入口恢复", tourExited);
+    tourCase.done = !tourCase.finished.cardVisible;
+    tourCase.restored = !tourCase.finished.introHidden && !tourCase.finished.startRowHidden;
+    await clickTour("tour-start");
+    tourCase.restartState = await waitTourState("重开精确第 1 步", (s) => matchesTourStep(s, 0));
+    tourCase.restarted = tourCase.restartState.counter;
+    await clickTour("tour-close");
+    tourCase.closeState = await waitTourState("关闭后收起与入口恢复", tourExited);
+    tourCase.closed = !tourCase.closeState.cardVisible;
+  } catch (e) {
+    // 原断言必须 FAIL，完整现场留 diagnostics；清理不能补成 done/restored/closed=true。
+    tourCase.error = String(e);
+    try { await clickTour("tour-close"); }
+    catch (cleanupError) { tourCase.cleanupError = String(cleanupError); }
+  }
+  const walked = tourCase.steps;
   check(
     "引导课程：13 步逐条装载现场（实验/视图/面板）并正常收尾",
-    walked.length === 13 &&
+    !tourCase.error && tourCase.waitFailures.length === 0 &&
+      walked.length === 13 &&
       new Set(walked.map((s) => s.title)).size === 13 &&
-      walked.every((s) => s.cardVisible && s.body > 80) &&
-      walked.every((s, k) => s.counter.startsWith(`第 ${k + 1} / 13 步`)) &&
-      walked[0].introHidden &&
-      walked[7].view === "gimbal" && // 第 8 步：万向节锁几何
-      walked[10].view === "quat" && // 第 11 步：4D 投影
-      walked[1].source === "pure" && // 第 2 步：零偏漂移实验把来源切到纯积分
-      tourCase.done &&
-      tourCase.restored &&
-      tourCase.restarted.startsWith("第 1 / 13 步") &&
-      tourCase.closed,
+      walked.every(matchesTourStep) &&
+      tourCase.done && tourCase.restored &&
+      tourCase.restarted.startsWith("第 1 / 13 步") && tourCase.closed,
     `${walked.length} 步；标题去重 ${new Set(walked.map((s) => s.title)).size}；` +
-      `第 2 步来源=${walked[1].source}（应 pure）；第 8/11 步视图=${walked[7].view}/${walked[10].view}（应 gimbal/quat）；` +
-      `走完自动收起=${tourCase.done}、开始入口恢复=${tourCase.restored}；✕ 可退出=${tourCase.closed}`,
+      `第 2 步来源=${walked[1]?.source}（应 pure）；第 8/11 步视图=${walked[7]?.view}/${walked[10]?.view}（应 gimbal/quat）；` +
+      `走完自动收起=${tourCase.done}、开始入口恢复=${tourCase.restored}；✕ 可退出=${tourCase.closed}；` +
+      `等待失败=${tourCase.waitFailures.length}${tourCase.error ? `；${tourCase.error}` : ""}`,
   );
 
   // ⑥ 应用界面里的「见文档·…」链接（a[data-doc-open]）：从面板直接跳进文档对应页。
@@ -5637,6 +6021,7 @@ try {
     /* ignore */
   }
 } finally {
+  shuttingDown = true; // 收尾关闭不是「基础设施事件」
   try {
     await browser.close();
   } catch {
@@ -5653,6 +6038,11 @@ try {
 if (browserRestarts > 0) {
   failures++;
   console.error(`[FAIL] 浏览器进程被回收 ${browserRestarts} 次 — 基础设施失败，本轮不能判通过（请重跑）`);
+  // 现场用驱动器的续行格式（`       · `）而不是 `[FAIL] `：判据把 `[FAIL] xxx — yyy` 当成
+  // 「用例级失败」，续行再用同一前缀会被读成「仅日志可见的产品缺陷」（实测误报过一次）。
+  console.error(`       · 现场：最后一次用例「${infraDiag.lastCheck}」；断开记录 ${JSON.stringify(infraDiag.disconnects)}；` +
+    `堆采样最近 ${infraDiag.samples.length} 个：${JSON.stringify(infraDiag.samples.slice(-4))}；` +
+    `Chrome 工作集峰值 ${infraDiag.peakChromeMb ?? "缺失"} MB`);
 }
 console.log(failures === 0 ? `\n浏览器冒烟通过 ✅（${passes} 项）` : `\n${failures} 项失败 ❌`);
 if (SHARD !== "all") console.log(`（分片 SMOKE_SHARD=${SHARD}）`);
@@ -5672,6 +6062,7 @@ const structured = {
   aborted,
   abortReason: abortReason || null,
   infraRestarts: browserRestarts,
+  infraDiag,
   executed: checkResults.length,
   passed: passes,
   failed: failures,
@@ -5679,6 +6070,7 @@ const structured = {
   duplicateIds,
   identity: { localBuildId: identity.localBuildId, pageBuildId: identity.pageBuildId, available: identity.available, reason: identity.reason },
   results: checkResults,
+  diagnostics,
 };
 const resultPath = process.env.SMOKE_RESULT ? resolve(process.env.SMOKE_RESULT) : null;
 if (resultPath) {

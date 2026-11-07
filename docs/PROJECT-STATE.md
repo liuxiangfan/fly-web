@@ -2,7 +2,8 @@
 
 <!-- current:begin -->
 
-> 文档更新：2026-11-05 · 当前分支：`master` · HEAD：`830e4e3786bcf4dddbada7514fed05a8fd3a83ad`（工作树改动尚未提交）。
+> 文档更新：2026-11-07 · 修复分支：`fix/smoke-interaction-release` · 已发布 [v0.2.0-rc.1 预发行](https://github.com/liuxiangfan/fly-web/releases/tag/v0.2.0-rc.1)，提交 `c7d353b0605e`；正式 v0.2.0 仍未发布，PR #2 未合并。
+> 2026-11-07 按 [`WINDOWS-PERFORMANCE-OPTIMIZATION-PLAN.md`](WINDOWS-PERFORMANCE-OPTIMIZATION-PLAN.md) 的 WP-01/WP-03 做了**软件渲染画质档**与课程冷加载反馈：SwiftShader/llvmpipe 等无 GPU 环境自动关闭 MSAA/阴影/IBL、像素比封顶 1，正常 GPU 仍走原画质。提交 `2640153` 的 Windows CI：`gate`、`smoke-shards (app)` 87/87、`smoke-shards (devices)` 20/20 全绿；完整 `smoke-suite` 重跑后 **107 PASS / 0 FAIL / 0 warn**。SW-10 事件→handler 0.3 ms、事件→runner 14.7 ms、timer p95 39.6 ms（修复前 302.5／314.4／326.2 ms）；课程 13 步全过。
 > 最新软件质量复核：见 [`QUALITY-SOFTWARE-ONLY.md`](QUALITY-SOFTWARE-ONLY.md)（本轮按软件工单实施后重新评分，含"未做到"的逐条说明）。
 > 顺序与状态看 [`ROADMAP.md`](ROADMAP.md)，具体方法与反例看 [`SOFTWARE-IMPROVEMENT-PLAN.md`](SOFTWARE-IMPROVEMENT-PLAN.md)。
 
@@ -10,7 +11,7 @@
 
 纯前端四元数姿态解算教学软件：多数据源与离线回放、五算法数字对照、Three.js 姿态／万向节／四元数视图、校准数学、INS、批量评测与应用内教材。
 
-- 在线入口：<https://fly_web.070616.xyz>；本轮已部署，线上构建 `95a804131d78`（部署后 smoke 实测通过）。
+- 在线入口：<https://fly_web.070616.xyz>；2026-11-06 核对线上提交 `58a11ba09a91` 与远端 master 一致；本次 v0.2.0 修复尚未部署。
 - 坐标：世界 NED、机体 FRD，四元数 `q` 为机体系→世界系；显示 X=北、Y=上、Z=东。
 - 技术栈：Vite + TypeScript（无框架）+ Three.js；KaTeX 字体；手写 Canvas 图表。
 - **本阶段范围**：只支持 Windows 本机运行（不追求跨平台），硬件部分不在范围内。
@@ -18,32 +19,27 @@
 ## 当前机器口径
 
 <!-- baseline: 54d85f57600ff09cc7b5f6c137bd65daf1f292e3 -->
-<!-- 基线口径：上一行是**本轮证据采集时**的提交；此后只有文档与证据登记改动，产品源码摘要未变（777bf037…）。 -->
+<!-- 基线口径：上一行是**本轮证据采集时**的提交；此后只有文档与证据登记改动，产品源码摘要未变（2bb7ea30…）。 -->
 <!-- counts: experiments=19 demos=8 selftest=126 smoke=107 docpages=15 -->
 <!-- verify: check=155 contracts=yes status=yes smoke=107 budget=14 evidence=yes -->
 数值自检 126 + 场景几何 10 + HTML 契约 15 + 文档基准 4
 
 - `npm run check` = selftest（126）+ scenecheck（10）+ htmlcheck（15）+ doccheck（4），共 **155 项**；随后执行 contracts、statuscheck 与 evidencecheck。
-- `contracts` 链（每个文件都是独立反例集）：time / schema / doc-search / archive-ui / lifecycle / worker / trace，以及 node:test 的 soak / evidence / smoke-verdict / status / budget 契约。
-- `npm run budget` = **14 项**产物预算；判定已抽成纯函数（`scripts/budget-core.mjs`），报告同时给出**名义上限 / 有效门槛（90%）/ 剩余字节 / 相对冻结基线（830e4e3）增量**，修法提示只指向减重。主包 JS 当前 282.4 KB（有效门槛 283.5 KB，剩 1.1 KB）——**余量很薄，是已知待办**。
+- `contracts` 链（每个文件都是独立反例集）：time / schema / doc-search / formula-copy / archive-ui / lifecycle / worker / trace，以及 node:test 的 soak / evidence / smoke-verdict / status / budget 契约。
+- `npm run budget` = **14 项**产物预算；判定在 `scripts/budget-core.mjs`，报告名义上限／有效门槛／剩余／基线增量。v0.2.0 修复通过复用重复代码减下 1763 字节；2026-11-07 的软件渲染画质档再加约 0.7 KiB，主包 283.2 KiB，门槛仍为 283.5 KiB，余量仅 0.3 KiB，未抬上限。
 - 浏览器冒烟声明 **107 项**（app 87 + devices 20）；驱动器比对的是**完整集合**（清单 `scripts/smoke-manifest.json`，由契约测试守着不漂移），不是 PASS 行数。
-- 产品源码摘要（本轮冻结构建）：`d97bbbafb374…`（83 个构建输入文件）；构建标识 `d97bbbafb374-4ace2bc8a8795108`。**构建可复现**（`builtAt` 取提交时间，两次构建 `distHash` 相同）——证据不会因"重建一次"而失效。
-- 全部 JS gzip 约 266 KiB（名义上限 300 KiB，有效门槛 270 KiB，剩约 4 KiB）。
+- 产品源码摘要（2026-11-07 软件渲染画质档）：`2bb7ea308692fcecbe6f5384b9618229`（84 个构建输入文件）；本地验收构建 `2bb7ea308692-e791bb9d179928b1`（提交 `e9b1edd`，工作树干净）。仅同一提交、依赖与构建环境下产物可复现；提交戳改变仍会改变产物，不能沿用旧 buildId。
+- 全部 JS gzip 约 268 KiB（名义上限 300 KiB，有效门槛 270 KiB，剩约 1.9 KiB）。
 
-本轮证据（同一份冻结构建，均在本机 Windows 采集并已登记进索引）：
+本轮证据（同一份冻结构建 `2bb7ea30` / `e791bb9d`，均在本机 Windows 采集并已登记进索引）：
 
-- 长稳 **600 s ×2**：批量（3/3 批、水位 +3.6 MB、峰值 23.7、趋势 9.8、末段与采样覆盖 PASS）与重连（66/66 恢复、水位 +7.4、峰值 25.7、趋势 15.5）——`generated/soak-*-600-d97bbbaf.json`。
-- 稳定性 **5×(app+devices)**：每轮 **107 项完整集合**、零失败零 warning 零重启——`generated/stability-local-windows-d97bbbaf.json`。
-- 视觉 11 张（含 200% 页面缩放与打印）——`generated/visual-evidence.json`；性能与体积归因——`generated/perf-report.json`、`generated/size-report.json`。
+- 稳定性 **5×(app+devices)**：每轮 **107 项完整集合**、零失败零 warning 零重启——`generated/stability-local-windows-2bb7ea30.json`。
+- 长稳 **600 s ×2**：批量（常驻水位 0.9 MB、峰值增量 26.4 MB、趋势 6.0 MB、116 样本）与软件替身重连（4.6 MB、27.8 MB、16.7 MB、122 样本）——`generated/soak-*-600-2bb7ea30.json`。
+- 视觉 11 张（320/390/768/1440 视口、200% 文字缩放、打印与三视图，控制台零错误）——`generated/visual-evidence-2bb7ea30.json`；性能 `generated/perf-report-2bb7ea30.json`（墙钟 58.9 fps、真实输入 p95 1.3 ms、运行期 timer p95 13.4 ms、取消 11.9 ms、堆峰值 20.9 MB）；体积归因 `generated/size-report-2bb7ea30.json`。
 - 严格验收通过：`npm run evidence:verify`（源码摘要 + 产物摘要 + buildId 三层绑定）。
-- **线上部署已通过**（run 42040828875 / 提交 95a80413）：部署后 smoke 第 1 次即过——页脚构建标识与提交一致、
-  产物 buildId `a7077ce19adc-…`、时钟推进、评测表 5 行、canvas、控制台零错误（证据 `generated/postdeploy-2026-11-05-95a8041-live.json`）。
-- CI 口径（本轮实测后定）：**部署闸门 = 静态门禁 + 部署后对线上产物的 smoke**；完整的 107 项浏览器套件在
-  `ci.yml`（PR/分支）与部署后的 `smoke-suite` 作业里跑，结果如实记录。原因：windows-latest 只有 2 vCPU，
-  软件 WebGL 下"同一浏览器进程开第二个 WebGL 页面"可超过 180 s，属**容量**而非产品缺陷——把容量红灯
-  当部署闸门会让每次部署都红，红灯也就失去意义。判定由 `scripts/smoke-verdict.mjs` 分四类，
-  **只有用例级失败才算产品问题**（那类失败仍会让作业红）。
-- 判据自身的两次校准与一次既存用例的时序修正，如实记录在 `VERIFICATION-EVIDENCE.md` §4.1。
+- **Windows CI**：提交 `2640153` 的 `gate`、`smoke-shards (app)` 87/87、`smoke-shards (devices)` 20/20 全绿，完整 `smoke-suite` 重跑后 107 PASS / 0 FAIL / 0 warn（SW-10 事件→handler 0.3 ms、事件→runner 14.7 ms、timer p95 39.6 ms，修复前 302.5／314.4／326.2 ms）。提交 `e9b1edd` 的 `smoke-suite` 也已全绿；同轮 CI 的 app 分片仍遇到一次 Chrome 进程被回收（87 项本身全 PASS），现场记录显示当时 JS 堆仅 12 MB、DOM 1 个文档——**不是应用内存泄漏**，是 2 vCPU + SwiftShader 环境下的进程级回收，已加工作集采样继续观察。
+- **提交 `b12b832` 两条工作流首轮即全绿**：`CI`（gate、app 87/87、devices 20/20）与 `Deploy`（verify、smoke-suite）均一次通过，未靠重跑；SW-10 事件→handler 0.2 ms、事件→runner 18.8 ms（来源 runner-stop）。软件渲染下关闭 GPU watchdog 后进程回收未再出现；工作集趋势约 2.5→2.8 GB，增长平缓（非泄漏）。
+- 历史（保留不删）：线上部署 `95a80413`（run 42040828875）曾通过部署后 smoke；`42074606433` 那轮 smoke-suite 两项断言失败，已由画质档修复覆盖。smoke-suite 仍是 `continue-on-error: true`，工作流总览成功不代表套件通过，发布验收必须单独看该作业。
 
 代码修改后的验证顺序：
 

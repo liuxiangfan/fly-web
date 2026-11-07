@@ -2,7 +2,8 @@
 import assert from "node:assert/strict";
 import { Worker } from "node:worker_threads";
 import { defaultExperimentConfig, type ExperimentConfig } from "../src/core/experiment-config";
-import { runExperiment, runExperimentAsync, runExperimentDetailed, runExperimentDetailedAsync, runTrace, RUN_H } from "../src/core/runner";
+import { MetricAccumulator, percentileTask, runExperiment, runExperimentAsync, runExperimentDetailed, runExperimentDetailedAsync, runTrace, RUN_H } from "../src/core/runner";
+import { percentile } from "../src/core/stats";
 import type { BatchRequest, BatchResponse } from "../src/core/batch-protocol";
 
 let passed = 0, failed = 0;
@@ -97,7 +98,8 @@ await test("实际Worker：连续新job有序替代，迟到cancel/start和旧�
     const response = await waitFor(terminal(12));
     assert.equal(response.type, "done");
     await new Promise(resolve => setTimeout(resolve, 20));
-    assert.deepEqual(messages.map(m => `${m.jobId}:${m.type}`), ["10:cancelled", "11:cancelled", "12:progress", "12:progress", "12:done"]);
+    assert.ok(messages.filter(m => m.type === "heartbeat").every(m => m.jobId === 12), "旧job的心跳也必须沉默");
+    assert.deepEqual(messages.filter(m => m.type !== "heartbeat").map(m => `${m.jobId}:${m.type}`), ["10:cancelled", "11:cancelled", "12:progress", "12:progress", "12:done"]);
     if (response.type === "done") {
       assert.deepEqual(response.metricsList, [41, 42].map(seed => runExperiment({ ...latest, seed }).metrics));
     }
@@ -232,6 +234,252 @@ await test("协作取消：取消在下一片生效，片预算有界且只影�
   const coerced = await runExperimentAsync(one, { stepsPerSlice: 100000 as unknown as number });
   assert.equal(coerced.termination.reason, "completed");
   assert.deepEqual(await runExperimentAsync(one), runExperiment(one), "片预算只影响调度，不允许影响数值结果");
+});
+
+await test("墙钟预算先于步数上限让出，完整数值不变，停止回调在异步返回之前", async () => {
+  const config = { ...defaultExperimentConfig(), durationSec: 0.1 };
+  const slices: Array<{ steps: number; computeMs: number; completed: boolean }> = [];
+  let clock = 0;
+  let stopped = false;
+  const result = await runExperimentAsync(config, {
+    stepsPerSlice: 512, maxSliceMs: 4,
+    sliceClock: () => clock++,
+    onSlice: slice => slices.push(slice),
+    onStop: () => { stopped = true; },
+  });
+  assert.ok(stopped);
+  assert.ok(slices.length > 1);
+  assert.ok(slices.filter(s => !s.completed).every(s => s.steps <= 4), "时钟预算必须实际触发，而不是只声明字段");
+  assert.deepEqual(result, runExperiment(config));
+  let cancelled = false;
+  let stoppedAfterCancel = false;
+  const partial = await runExperimentAsync({ ...config, durationSec: 30 }, {
+    maxSliceMs: 4, sliceClock: () => clock++,
+    onSlice: () => { cancelled = true; },
+    shouldCancel: () => cancelled,
+    onStop: () => { stoppedAfterCancel = cancelled; },
+  });
+  assert.equal(partial.termination.reason, "cancelled");
+  assert.ok(stoppedAfterCancel);
+});
+
+await test("30s/15000步收尾按4ms/128步预算合并checkpoint，onStop早于扫描且原样本/完整结果逐位一致", async () => {
+  const config = { ...defaultExperimentConfig(), durationSec: 30 };
+  const sync = runExperimentDetailed(config);
+  // 独立原生排序 oracle；同步与异步共用新实现不能充当彼此唯一的正确性证据。
+  for (const [i, series] of sync.series.entries()) {
+    assert.ok(Object.is(sync.metrics[i].p50, percentile(series.errDeg, 0.5)));
+    assert.ok(Object.is(sync.metrics[i].p95, percentile(series.errDeg, 0.95)));
+  }
+  const nativeSort = Array.prototype.sort, nativeSummary = MetricAccumulator.prototype.summaryTask;
+  const tailSlices: Array<{ steps: number; computeMs: number; completed: boolean }> = [];
+  let stopped = false, stopCount = 0, turns = 0, summaries = 0, scans = 0;
+  let progressAtStop = 0, progress = 0, stoppedAt = 0, timerAt = performance.now(), checkpoints = 0;
+  const timerDelays: number[] = [];
+  const runTimer = setInterval(() => {
+    const now = performance.now();
+    timerDelays.push(now - timerAt); timerAt = now;
+  }, 10);
+  Array.prototype.sort = function<T>(this: T[], compareFn?: (a: T, b: T) => number): T[] {
+    if (stopped && this.length >= 15000) assert.fail("正常有限样本不得退回不可抢占全排序");
+    return nativeSort.call(this, compareFn) as T[];
+  };
+  MetricAccumulator.prototype.summaryTask = function*(...args) {
+    assert.ok(stopped, "onStop必须在任何summary扫描之前");
+    assert.equal(turns, tailSlices.length, "首扫描前及每个工作片间必须真实处理计时器");
+    summaries++;
+    let reads = 0;
+    const errors = this.errors;
+    Object.defineProperty(this, "errors", {
+      configurable: true,
+      value: new Proxy(errors, { get(target, key, receiver) {
+        if (typeof key === "string" && /^\d+$/.test(key)) reads++;
+        return Reflect.get(target, key, receiver);
+      } }),
+    });
+    const task = nativeSummary.apply(this, args);
+    try {
+      for (;;) {
+        reads = 0;
+        const step = task.next();
+        assert.ok(reads <= 128, `样本复制片不能超过128项：${reads}`);
+        scans += reads;
+        if (step.done) return step.value;
+        if (step.value === undefined) checkpoints++;
+        yield step.value;
+      }
+    } finally { Object.defineProperty(this, "errors", { configurable: true, value: errors }); }
+  };
+  try {
+    const asyncResult = await runExperimentDetailedAsync(config, {
+      stepsPerSlice: 128, maxSliceMs: 4,
+      onProgress: () => { assert.ok(!stopped, "onStop之后不得继续积分/发进度"); progress++; },
+      onStop: () => {
+        stopped = true; stopCount++; progressAtStop = progress;
+        stoppedAt = performance.now();
+      },
+      onSlice: slice => {
+        if (!stopped) return;
+        assert.equal(turns, tailSlices.length, "工作片之间必须有macrotask，不是微任务");
+        tailSlices.push(slice);
+        if (!slice.completed) setTimeout(() => { turns++; }, 0);
+      },
+    });
+    assert.equal(stopCount, 1);
+    assert.equal(progress, progressAtStop);
+    assert.equal(summaries, 5, "五算法P50/P95必须全部保留");
+    assert.equal(scans, 75000, "两分位数共用一次副本；样本数不许削减");
+    assert.ok(checkpoints > 5 * Math.floor(15000 / 128));
+    assert.ok(tailSlices.length < checkpoints / 4, "有限checkpoint必须按预算合并，不得逐checkpoint等timer");
+    assert.equal(turns, tailSlices.length - 1, "最后一个分位数终点之后也要处理取消消息");
+    assert.ok(tailSlices.slice(1).every(slice => slice.steps <= 128));
+    assert.ok(tailSlices.some(slice => slice.steps > 1), "统计checkpoint必须实际合并");
+    assert.deepEqual(tailSlices.map(slice => slice.completed), [...Array(tailSlices.length - 1).fill(false), true]);
+    assert.ok(asyncResult.metrics.every(metric => metric.n === 15000));
+    assert.deepEqual(asyncResult, sync, "metrics/事件次序/终止口径/姿态/完整samples逐位相等");
+    const wall = performance.now() - stoppedAt;
+    clearInterval(runTimer);
+    const peak = Math.max(...tailSlices.slice(1, -1).map(slice => slice.computeMs));
+    assert.ok(peak <= 200, `收尾单片不得越过固定200ms目标：${peak}ms`);
+    const delays = timerDelays.sort((a, b) => a - b), p95 = delays[Math.ceil(delays.length * 0.95) - 1];
+    assert.ok(delays.length >= 40, `响应采样不得削减：${delays.length}`);
+    assert.ok(p95 <= 200, `计时器p95不得越过固定200ms目标：${p95}ms`);
+    const compute = tailSlices.reduce((sum, slice) => sum + slice.computeMs, 0);
+    console.log(`  收尾 ${tailSlices.length} 片；计算总${compute.toFixed(1)}ms/峰值${peak.toFixed(1)}ms；墙钟${wall.toFixed(1)}ms；timer ${delays.length}样本/p95 ${p95.toFixed(1)}ms；五算法各15000样本`);
+  } finally {
+    clearInterval(runTimer);
+    Array.prototype.sort = nativeSort;
+    MetricAccumulator.prototype.summaryTask = nativeSummary;
+  }
+});
+
+await test("收尾首/中/末片计时器取消：onStop单次、终止时刻不漂移、全部指标统一early-stop", async () => {
+  const config = { ...alignmentConfig, durationSec: 4 };
+  const sync = runExperimentDetailed(config);
+  let tailCount = 0, countingTail = false;
+  assert.deepEqual(await runExperimentDetailedAsync(config, {
+    stepsPerSlice: 128, maxSliceMs: 4,
+    onStop: () => { countingTail = true; },
+    onSlice: slice => { if (countingTail && !slice.completed) tailCount++; },
+  }), sync);
+  for (const cancelAfterSlice of [0, Math.floor(tailCount / 2), tailCount - 1]) {
+    let stopped = false, stopCount = 0, cancelled = false, tailSlice = 0, progressAtStop = 0, progress = 0;
+    const result = await runExperimentDetailedAsync(config, {
+      stepsPerSlice: 128, maxSliceMs: 4,
+      shouldCancel: () => cancelled,
+      onProgress: () => { assert.ok(!stopped); progress++; },
+      onStop: () => { stopped = true; stopCount++; progressAtStop = progress; },
+      onSlice: slice => {
+        if (stopped && tailSlice++ === cancelAfterSlice) {
+          assert.equal(slice.completed, false, "取消必须在返回前的收尾片触发");
+          setTimeout(() => { cancelled = true; }, 0);
+        }
+      },
+    });
+    assert.ok(cancelled);
+    assert.equal(stopCount, 1);
+    assert.equal(progress, progressAtStop);
+    assert.equal(result.termination.reason, "cancelled");
+    assert.equal(result.termination.cancelledAtSec, sync.termination.endSec);
+    assert.equal(result.metrics.length, 5, "收尾取消不得返回半组算法指标");
+    assert.ok(result.metrics.every(metric => metric.steadyMode === "early-stop"));
+    assert.deepEqual(result, {
+      ...sync,
+      termination: { ...sync.termination, reason: "cancelled", cancelledAtSec: sync.termination.endSec },
+      metrics: sync.metrics.map(metric => ({ ...metric, steadyMode: "early-stop" })),
+    }, "取消只改显式终止口径；完整samples/事件次序/数值与积分末态保持不变");
+  }
+});
+
+function drain<T>(task: Generator<true | void, T, void>): T {
+  for (;;) {
+    const step = task.next();
+    if (step.done) return step.value;
+    assert.ok(step.value === undefined || step.value === true, "checkpoint或分位数终点必须使用共享调度协议");
+  }
+}
+
+await test("精确分位数：原生sort逐位oracle，大量随机/重复/边界/非有限值，输入不变", async () => {
+  let seed = 0x12345678;
+  const random = (): number => {
+    seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5;
+    return (seed >>> 0) / 0x100000000;
+  };
+  const ps = [0.5, 0.95, 0, 1, -1, 2, 0.01, 0.99, 0.25, NaN, Infinity, -Infinity];
+  const cases: number[][] = [
+    [], [NaN], [Infinity], [-Infinity], [-0], [0], [-0, 0, -0, 0],
+    [Number.MAX_VALUE, -Number.MAX_VALUE], [Number.MIN_VALUE, -Number.MIN_VALUE],
+    [NaN, 2, Infinity, 1, -Infinity], [3, NaN, 1, NaN, -0, 0, Infinity, -Infinity],
+    [Infinity, Infinity, -Infinity, -Infinity, 0, -0],
+  ];
+  for (const n of [...Array.from({ length: 65 }, (_, i) => i), 127, 128, 129, 255, 256, 257, 15000, 20000, 60000]) {
+    const values = Array.from({ length: n }, () => (random() - 0.5) * 1e6);
+    cases.push(values, values.map(v => Math.floor(v / 1e5)), Array(n).fill(3));
+    const sorted = [...values].sort((a, b) => a - b);
+    cases.push(sorted, [...sorted].reverse(), Array.from({ length: n }, (_, i) => Math.min(i, n - i)));
+  }
+  for (let i = 0; i < 200; i++) {
+    cases.push(Array.from({ length: Math.floor(random() * 2048) }, () => {
+      const r = random();
+      return r < 0.05 ? -0 : r < 0.1 ? 0 : r < 0.15 ? Infinity : r < 0.2 ? -Infinity : Math.floor(r * 64);
+    }));
+  }
+  for (const values of cases) {
+    const original = [...values], probabilities = [...ps, random()];
+    const expected = probabilities.map(p => percentile(values, p));
+    const result = drain(percentileTask(values, probabilities));
+    result.forEach((value, i) => assert.ok(Object.is(value, expected[i]), `n=${values.length}, p=${probabilities[i]}: ${value} ≠ ${expected[i]}`));
+    assert.deepEqual(values, original, "精确选择不得改动输入samples");
+  }
+  console.log(`  ${cases.length}组输入，${cases.length * (ps.length + 1)}项分位数逐位等价`);
+});
+
+await test("分区工作量有界：复制/三路比较/邻秩扫描每次next至多256次数值比较", async () => {
+  for (const duplicate of [false, true]) {
+    let comparisons = 0, slices = 0;
+    const values = Array.from({ length: 60000 }, (_, i) => ({
+      valueOf: () => { comparisons++; return duplicate ? 3 : (i * 7919) % 60000; },
+    })) as unknown as number[];
+    const task = percentileTask(values, [0.5, 0.95]);
+    for (;;) {
+      comparisons = 0;
+      const step = task.next();
+      // 盒装数仅用于观测：一次 a < pivot 会转换两个操作数；最多512次转换=256次比较。
+      assert.ok(comparisons <= 512, `不可抢占工作超过256次数值比较：${comparisons}次转换`);
+      slices++;
+      if (step.done) break;
+      assert.ok(step.value === undefined || step.value === true);
+    }
+    assert.ok(slices > Math.floor(values.length / 128));
+  }
+});
+
+await test("MetricAccumulator原分位数口径保留：空样本/非有限数/重复值/有界蓄水池", async () => {
+  const estimator = { id: "pure", label: "test" } as Parameters<MetricAccumulator["summary"]>[0];
+  for (const values of [[], [3], [3, 1, 3, -0, 0, 2], [NaN, 2, Infinity, 1, -Infinity]]) {
+    const acc = new MetricAccumulator();
+    for (const [i, value] of values.entries()) acc.add(value, { w: 1, x: 0, y: 0, z: 0 }, i);
+    const original = [...acc.errors];
+    const summary = acc.summary(estimator);
+    assert.ok(Object.is(summary.p50, percentile(original, 0.5)));
+    assert.ok(Object.is(summary.p95, percentile(original, 0.95)));
+    assert.deepEqual(acc.errors, original, "排序不得原地修改保留samples");
+    assert.deepEqual(drain(acc.summaryTask(estimator)), summary);
+  }
+  const acc = new MetricAccumulator({ capOverride: 10, plannedEndSec: 50 });
+  for (let i = 0; i < 25000; i++) acc.add(3 + Math.sin(i), { w: 1, x: 0, y: 0, z: 0 }, i / 500);
+  assert.ok(acc.diagnostics().truncated);
+  assert.equal(acc.diagnostics().reservoirErr, 20000);
+  const samples = [...acc.errors], times = [...acc.times];
+  const reservoir = [...(acc as unknown as { resErr: number[] }).resErr];
+  const summary = acc.summary(estimator);
+  assert.ok(Object.is(summary.p50, percentile(reservoir, 0.5)));
+  assert.ok(Object.is(summary.p95, percentile(reservoir, 0.95)));
+  assert.ok(summary.percentileApprox);
+  assert.deepEqual(drain(acc.summaryTask(estimator)), summary);
+  assert.deepEqual(acc.errors, samples);
+  assert.deepEqual(acc.times, times);
+  assert.deepEqual((acc as unknown as { resErr: number[] }).resErr, reservoir);
 });
 
 console.log(`worker-contract: ${passed} PASS / ${failed} FAIL`);
