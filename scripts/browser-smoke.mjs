@@ -112,6 +112,18 @@ const skippedChecks = [];
 const duplicateIds = [];
 // 原始测量不能挤进会截断的 check.detail；即使等待失败也要随最终结果保留现场。
 const diagnostics = { checkOutcomes: [] };
+/**
+ * 基础设施诊断：浏览器被系统回收时，「最后跑过哪个用例 + 当时的堆/DOM 有多大」是唯一能
+ * 区分「容量到极限」与「别的原因」的证据。采样放进有界环形（最多 24 个），不逐用例堆积。
+ */
+const infraDiag = { lastCheck: "(未开始)", samples: [], disconnects: [] };
+const samplePageMemory = async (pg) => {
+  try {
+    const m = await pg.metrics();
+    infraDiag.samples.push({ at: Date.now(), nodes: m.Nodes, docs: m.Documents, heapMb: Math.round(m.JSHeapUsedSize / 1048576) });
+    if (infraDiag.samples.length > 24) infraDiag.samples.shift();
+  } catch { /* 页面可能已经随进程消失，采样失败本身不是用例失败 */ }
+};
 const check = (name, cond, detail) => {
   if (/^SW-10 主线程降级|^公式一键复制/.test(name)) {
     diagnostics.checkOutcomes.push({ name, pass: Boolean(cond), reason: String(detail ?? "") });
@@ -128,6 +140,10 @@ const check = (name, cond, detail) => {
   checkResults.push({ id: name, shard: SHARD, status: cond ? "pass" : "fail", detail: String(detail ?? "").slice(0, 300) });
   console.log(`[${cond ? "PASS" : "FAIL"}] ${name} — ${detail}`);
   cond ? passes++ : failures++;
+  // 顺手记一个「最近跑过哪个用例」：浏览器被系统回收时，日志只能说明崩溃发生在两条 PASS 之间，
+  // 结合这里的名字与下面的堆/DOM 采样才能回答「是不是内存耗到极限」。
+  infraDiag.lastCheck = name;
+  if (checkResults.length % 10 === 0) void samplePageMemory(page);
 };
 /** 明确的跳过登记口：跳过的用例必须留痕（"没跑"不许伪装成"通过"）。 */
 const skip = (name, reason) => {
@@ -143,6 +159,8 @@ const skip = (name, reason) => {
 // 逐个尝试候选浏览器：某些 Windows 环境下 Edge 的 crashpad 会启动失败，直接换 Chrome 即可，
 // 而不是让整条冒烟因为「第一个存在的可执行文件打不开」而红掉。
 let browser = null;
+/** 正常收尾期间不计入「进程被回收」：那是我们自己关的 */
+let shuttingDown = false;
 let profileDir = process.env.SMOKE_PROFILE ?? "";
 const launchBrowser = async () => {
   for (const [i, exe] of candidates.entries()) {
@@ -173,6 +191,13 @@ const launchBrowser = async () => {
         ],
       });
       profileDir = dir;
+      // 进程消失（被系统回收/崩溃）时留现场：正常收尾关闭不算一次基础设施事件
+      browser.on("disconnected", () => {
+        if (shuttingDown) return;
+        infraDiag.disconnects.push({
+          at: Date.now(), lastCheck: infraDiag.lastCheck, lastSample: infraDiag.samples.at(-1) ?? null,
+        });
+      });
       console.log(`[INFO] 使用浏览器：${exe}`);
       // 版本要能被驱动脚本解析出来写进稳定性摘要（证据要能回答"用哪个浏览器跑的"）
       browserVersion = await browser.version();
@@ -5951,6 +5976,7 @@ try {
     /* ignore */
   }
 } finally {
+  shuttingDown = true; // 收尾关闭不是「基础设施事件」
   try {
     await browser.close();
   } catch {
@@ -5967,6 +5993,9 @@ try {
 if (browserRestarts > 0) {
   failures++;
   console.error(`[FAIL] 浏览器进程被回收 ${browserRestarts} 次 — 基础设施失败，本轮不能判通过（请重跑）`);
+  // 把现场一起打出来：不是「机器慢」四个字，而是最后用例、断开时刻与当时的堆/DOM
+  console.error(`[FAIL]   现场：最后一次用例「${infraDiag.lastCheck}」；断开记录 ${JSON.stringify(infraDiag.disconnects)}；` +
+    `堆采样最近 ${infraDiag.samples.length} 个：${JSON.stringify(infraDiag.samples.slice(-4))}`);
 }
 console.log(failures === 0 ? `\n浏览器冒烟通过 ✅（${passes} 项）` : `\n${failures} 项失败 ❌`);
 if (SHARD !== "all") console.log(`（分片 SMOKE_SHARD=${SHARD}）`);
@@ -5986,6 +6015,7 @@ const structured = {
   aborted,
   abortReason: abortReason || null,
   infraRestarts: browserRestarts,
+  infraDiag,
   executed: checkResults.length,
   passed: passes,
   failed: failures,
