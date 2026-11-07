@@ -12,14 +12,19 @@
 | 2026-11-07 | WP-01 | 新增 `scripts/perf-probe.mjs`：同一页面、同一批量负载下单变量切换阴影／环境贴图／像素比／是否渲染，采 rAF 间隔、`render()` 同步耗时、运行期 timer、真实鼠标 event→handler／event→runner，并可用 CDP 采样分析器按函数自耗时排序 | `.audit-current/perf-probe-*.json` |
 | 2026-11-07 | WP-03 | 软件渲染画质档：SwiftShader／llvmpipe／基础显示驱动下无 MSAA、无阴影贴图、无 IBL、像素比封顶 1；`attitudeDemo.renderQuality()` 可断言 | 本机 800×600 单帧 JS 峰值 22.4→8.2 ms，`scene` 21.5→5.0 ms |
 | 2026-11-07 | WP-04 | 课程首次点击即时反馈（冷 chunk 下载期间不再像没点上） | 本地完整集合课程 13 步全过 |
-| 待办 | WP-02 | ESKF `matMul`/`matTranspose` 仍是最大 JS 单项（约 14% 墙钟），但预算只剩 0.4 KiB，需先腾出字节 | — |
-| 待办 | WP-05/06 | Windows CI 完整套件、连续 5 轮、长稳与证据重采 | — |
+| 待办 | WP-02 | ESKF `matMul`/`matTranspose` 仍是最大 JS 单项（约 14% 墙钟），但预算只剩 0.3 KiB，需先腾出字节 | — |
+| 2026-11-07 | WP-05 | Windows CI（提交 `2640153`）：gate + app 87/87 + devices 20/20 全绿；完整 `smoke-suite` 首轮 87 项本身全 PASS，仅 Chrome 进程被回收 1 次被判基础设施失败，按工具提示重跑后 **107/107、零 warning**。SW-10 事件→handler 0.3 ms、事件→runner 14.7 ms、timer p95 39.6 ms、切片最长 15.4 ms、单帧最长 27.7 ms | run 42341623467（gate/shards）、42341623466 attempt 3（suite） |
+| 待办 | WP-06 | 连续 5 轮、两份 600 s 长稳、视觉证据重采与证据冻结 | — |
 
-本机（SwiftShader，800×600，Edge，CI 同档 `SMOKE_SLOW=1`）完整集合 **107/107、零 warning**；SW-10 事件→handler 0.3 ms、事件→runner 13.7 ms、运行期 timer p95 10.9 ms、切片最长 4.4 ms、单帧最长 4.9 ms。这是**本机**结果，不能替代 Windows runner 的结论。
+Windows runner 实测（提交 `2640153`）：事件→handler 302.5→**0.3 ms**、事件→runner 314.4→**14.7 ms**、timer p95 326.2→**39.6 ms**、切片最长 216.9→**15.4 ms**、单帧最长 172.7→**27.7 ms**，课程首状态不再超时。
+
+本机（SwiftShader，800×600，Edge，CI 同档 `SMOKE_SLOW=1`）完整集合 **107/107、零 warning**；SW-10 事件→handler 0.3 ms、事件→runner 13.7 ms、运行期 timer p95 10.9 ms、切片最长 4.4 ms、单帧最长 4.9 ms。本机与 runner 两条证据互相独立。
 
 ## 1. 为什么还要继续优化
 
 ### 1.1 当前可核实的失败
+
+> 下表是**修复前的基线**（提交 `c7d353b`），保留是为了对照；提交 `2640153` 在同一个 Windows runner 上已把这些指标压到 200 ms 以内（见 §0 执行记录）。保留原始失败数字，避免「修好之后把当时的红抹掉」。
 
 最新候选提交的 Windows 完整套件：[run 42220118480](https://github.com/liuxiangfan/fly-web/actions/runs/42220118480)。
 

@@ -14,7 +14,8 @@
 - 产品修复：`createScene()` 读 `WEBGL_debug_renderer_info`，识别到 SwiftShader／llvmpipe／基础显示驱动时降为「性能优先」画质——无 MSAA、无阴影贴图、无 IBL、像素比封顶 1；有 GPU 的机器不受影响。控制台说明降档原因，自动化可用 `attitudeDemo.renderQuality()` 断言档位。
 - 效果（同机 800×600）：单帧 JS 峰值 22.4 → **8.2 ms**，`scene` 21.5 → **5.0 ms**，帧间隔稳定在 16.7 ms。按 CI 同档配置跑完整集合：**107/107、零 warning**，SW-10 事件→handler 0.3 ms、事件→runner 13.7 ms、timer p95 10.9 ms、切片最长 4.4 ms；引导课程 13 步全过。
 - 课程首次点击先给「正在加载引导课程…」即时反馈，避免冷 chunk 下载期间点击像没生效。
-- 预算未放宽：主包 283.2 KiB（有效门槛 283.5 KiB，余量 0.3 KiB），14 项全部通过。最终产物 `358be02fe263-bda8e3827e249687` 上重跑本机完整集合仍为 107/107、零 warning。CI 实际结果另行核对，未通过就继续按方案优化，不靠 `continue-on-error` 说成功。
+- 预算未放宽：主包 283.2 KiB（有效门槛 283.5 KiB，余量 0.3 KiB），14 项全部通过。最终产物 `358be02fe263-bda8e3827e249687` 上重跑本机完整集合仍为 107/107、零 warning。
+- Windows CI（提交 `2640153`，PR #2）：`gate`、`smoke-shards (app)` 87/87、`smoke-shards (devices)` 20/20 全绿；完整 `smoke-suite` 首轮 87 项全 PASS 但 Chrome 进程被回收 1 次被工具判为基础设施失败，按其提示重跑后 **107 PASS / 0 FAIL / 0 warn，判定全绿**。SW-10 事件→handler 0.3 ms、事件→runner 14.7 ms、timer p95 39.6 ms、切片最长 15.4 ms、单帧最长 27.7 ms（修复前 302.5／314.4／326.2／216.9／172.7 ms）；课程 13 步全过。
 
 ## 2026-11-06 · v0.2.0-rc.1 预发行与后续性能方案
 

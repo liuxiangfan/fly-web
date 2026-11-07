@@ -3,7 +3,7 @@
 <!-- current:begin -->
 
 > 文档更新：2026-11-07 · 修复分支：`fix/smoke-interaction-release` · 已发布 [v0.2.0-rc.1 预发行](https://github.com/liuxiangfan/fly-web/releases/tag/v0.2.0-rc.1)，提交 `c7d353b0605e`；正式 v0.2.0 仍未发布，PR #2 未合并。
-> 2026-11-07 按 [`WINDOWS-PERFORMANCE-OPTIMIZATION-PLAN.md`](WINDOWS-PERFORMANCE-OPTIMIZATION-PLAN.md) 的 WP-01/WP-03 做了**软件渲染画质档**与课程冷加载反馈：SwiftShader/llvmpipe 等无 GPU 环境自动关闭 MSAA/阴影/IBL、像素比封顶 1，正常 GPU 仍走原画质。本机 800×600 全量 **107/107、零 warning**，SW-10 事件→runner 13.7 ms、timer p95 10.9 ms、单帧 4.9 ms；CI 结果待验，尚不能宣称已通过。
+> 2026-11-07 按 [`WINDOWS-PERFORMANCE-OPTIMIZATION-PLAN.md`](WINDOWS-PERFORMANCE-OPTIMIZATION-PLAN.md) 的 WP-01/WP-03 做了**软件渲染画质档**与课程冷加载反馈：SwiftShader/llvmpipe 等无 GPU 环境自动关闭 MSAA/阴影/IBL、像素比封顶 1，正常 GPU 仍走原画质。提交 `2640153` 的 Windows CI：`gate`、`smoke-shards (app)` 87/87、`smoke-shards (devices)` 20/20 全绿；完整 `smoke-suite` 重跑后 **107 PASS / 0 FAIL / 0 warn**。SW-10 事件→handler 0.3 ms、事件→runner 14.7 ms、timer p95 39.6 ms（修复前 302.5／314.4／326.2 ms）；课程 13 步全过。
 > 最新软件质量复核：见 [`QUALITY-SOFTWARE-ONLY.md`](QUALITY-SOFTWARE-ONLY.md)（本轮按软件工单实施后重新评分，含"未做到"的逐条说明）。
 > 顺序与状态看 [`ROADMAP.md`](ROADMAP.md)，具体方法与反例看 [`SOFTWARE-IMPROVEMENT-PLAN.md`](SOFTWARE-IMPROVEMENT-PLAN.md)。
 
