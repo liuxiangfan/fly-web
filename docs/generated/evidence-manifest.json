@@ -670,11 +670,11 @@
       "runnerOs": "win32 x64",
       "result": "PASS",
       "provenanceComplete": true,
-      "localOnly": false,
+      "localOnly": true,
       "current": true,
       "supersedes": [],
       "runs": null,
-      "notes": "本机采集（2026-11-07）：由 scripts/register-local-evidence.mjs 从报告正文读取事实后登记；同类型同平台的旧 current 已自动让位为历史观测。完整集合/判据由 visual-screenshot 的解析器复核。"
+      "notes": "本机采集（2026-11-07，提交 f74d2a8 / 源码摘要 358be02f）：报告正文随仓库，PNG 留在本机 screenshots/visual-358be02f/（被 gitignore），报告里逐张记录尺寸与 sha256，可据此定位到具体图片。断言逻辑与失败现场不做任何削弱。"
     }
   ]
 }
