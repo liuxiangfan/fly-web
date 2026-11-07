@@ -1789,16 +1789,27 @@ try {
     const src = document.getElementById("source-select");
     src.value = "truth";
     src.dispatchEvent(new Event("change"));
-    await sleep(250);
+    // 等**统计表真的出现样本**，而不是固定 250 ms：浏览器刚被回收、页面重新编译着色器时，
+    // 这 250 ms 可能一步都没推进，表格四列全是「—」——那是时序，不是产品缺陷。
+    // 有界等待同时保留区分能力：若真的一直没有样本，这里会超时并把现场交回断言。
+    const mahonyCells = () => {
+      const row = [...document.querySelectorAll("#metrics-body tr")].find((tr) => tr.textContent.includes("Mahony"));
+      const cells = row ? [...row.querySelectorAll("td")].map((td) => td.textContent.trim()) : [];
+      return { cells, finite: cells.length > 2 && Number.isFinite(parseFloat(cells[2])) };
+    };
+    let st = mahonyCells();
+    const metricsDeadline = performance.now() + 8000;
+    while (!st.finite && performance.now() < metricsDeadline) { await sleep(50); st = mahonyCells(); }
     const chip = document.getElementById("readout-true")?.textContent ?? "";
     const legend0 = document.querySelector("#att-legend .legend-chip")?.textContent ?? "";
     const info = window.attitudeDemo.replay.info;
-    const row = [...document.querySelectorAll("#metrics-body tr")].find((tr) => tr.textContent.includes("Mahony"));
-    const cells = row ? [...row.querySelectorAll("td")].map((td) => td.textContent.trim()) : [];
+    const cells = st.cells;
     const mean = parseFloat(cells[2]);
+    const playing = window.attitudeDemo.state.playing;
+    const simTime = window.attitudeDemo.state.simTime;
     window.attitudeDemo.replay.stop();
     await sleep(120);
-    return { disabled, chip, legend0, info, imported, mean, cells };
+    return { disabled, chip, legend0, info, imported, mean, cells, playing, simTime };
   });
   check(
     "外部真值回放：基准切到外部真值，且长间隔按子步插值（完美日志平均误差接近 0）",
@@ -1807,7 +1818,8 @@ try {
       Number.isFinite(truthReplay.mean) && truthReplay.mean < 5,
     `truth 选项 disabled=${truthReplay.disabled}；读数「${truthReplay.chip.slice(0, 60)}」；` +
       `图例「${truthReplay.legend0.slice(0, 40)}」；导入=${truthReplay.imported}；` +
-      `Mahony 当前/均值/峰值=${JSON.stringify(truthReplay.cells.slice(1, 5))}（均值应 < 5°）`,
+      `Mahony 当前/均值/峰值=${JSON.stringify(truthReplay.cells.slice(1, 5))}（均值应 < 5°）；` +
+      `playing=${truthReplay.playing}、simTime=${truthReplay.simTime?.toFixed?.(2)}`,
   );
   await page.evaluate(() => {
     const sel = document.getElementById("scenario-select");
