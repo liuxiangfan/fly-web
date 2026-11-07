@@ -6,6 +6,13 @@
 >
 > 新增一轮里程碑时：在本文件顶部加一节（倒序），同步 PROJECT-STATE 的当前状态与验证入口。
 
+## 2026-11-07 · 取消停止时刻口径修正与二次证据冻结
+
+- CI 的 `smoke-suite` 出现过一次**用例级**失败：取消时 runner 已在分片（163 片、单片最长 31.4 ms），219.9 ms 内确实停下，但 `runnerStoppedAt` 缺失。根因是 `onStop` 用 `batchGeneration === myGen + 1` 当判据——世代号只应防止旧批次回写界面，不该决定「停止时刻」。改为「有取消在等且批量已不在运行」即记录。
+- 测试侧区分两种合法来源并各自保留 200 ms 硬约束：`runner-stop`（已有分片，必须有真实停止时刻）与 `prepare-time-settle`（一次分片都没跑，用取消结算时刻），来源写进断言明细；`perf-report.mjs` 同口径。本机复验 `来源 runner-stop`、事件→runner 14.5 ms。
+- 浏览器回收的诊断补上 Chrome 工作集峰值（`tasklist`）与「最后用例」；同时修正诊断续行误用 `[FAIL] ` 前缀被判定成产品缺陷的问题。CI 现场显示回收时 JS 堆仅 12 MB、DOM 1 个文档——排除应用内存泄漏，属 2 vCPU + SwiftShader 的进程级回收。
+- 新构建 `2bb7ea30` / `e791bb9d` 上重采全部证据：5 轮 107/107×5（零 warning、零重启）；两份 600 s 长稳（批量常驻 0.9 MB、趋势 6.0 MB；重连 4.6 MB、16.7 MB）；视觉 11 张零控制台错误；性能墙钟 58.9 fps、真实输入 p95 1.3 ms、运行期 timer p95 13.4 ms、取消 11.9 ms、堆峰值 20.9 MB；`evidence:verify` 三层绑定通过。
+
 ## 2026-11-07 · 五轮稳定性与证据冻结
 
 - 本机（Windows，Edge，SwiftShader，CI 同档 800×600 + SMOKE_SLOW）：连续 **5 轮 × 107 项全过、零 FAIL、零 warning、零重启**——`generated/stability-local-windows-358be02f.json`。

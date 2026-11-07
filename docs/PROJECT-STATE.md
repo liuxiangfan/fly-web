@@ -19,7 +19,7 @@
 ## 当前机器口径
 
 <!-- baseline: 54d85f57600ff09cc7b5f6c137bd65daf1f292e3 -->
-<!-- 基线口径：上一行是**本轮证据采集时**的提交；此后只有文档与证据登记改动，产品源码摘要未变（358be02f…）。 -->
+<!-- 基线口径：上一行是**本轮证据采集时**的提交；此后只有文档与证据登记改动，产品源码摘要未变（2bb7ea30…）。 -->
 <!-- counts: experiments=19 demos=8 selftest=126 smoke=107 docpages=15 -->
 <!-- verify: check=155 contracts=yes status=yes smoke=107 budget=14 evidence=yes -->
 数值自检 126 + 场景几何 10 + HTML 契约 15 + 文档基准 4
@@ -28,17 +28,17 @@
 - `contracts` 链（每个文件都是独立反例集）：time / schema / doc-search / formula-copy / archive-ui / lifecycle / worker / trace，以及 node:test 的 soak / evidence / smoke-verdict / status / budget 契约。
 - `npm run budget` = **14 项**产物预算；判定在 `scripts/budget-core.mjs`，报告名义上限／有效门槛／剩余／基线增量。v0.2.0 修复通过复用重复代码减下 1763 字节；2026-11-07 的软件渲染画质档再加约 0.7 KiB，主包 283.2 KiB，门槛仍为 283.5 KiB，余量仅 0.3 KiB，未抬上限。
 - 浏览器冒烟声明 **107 项**（app 87 + devices 20）；驱动器比对的是**完整集合**（清单 `scripts/smoke-manifest.json`，由契约测试守着不漂移），不是 PASS 行数。
-- 产品源码摘要（2026-11-07 软件渲染画质档）：`358be02fe263c91dbba776aa5bf18031`（84 个构建输入文件）；本地验收构建 `358be02fe263-bfd523554742eeb8`（提交 `f74d2a8`，工作树干净）。仅同一提交、依赖与构建环境下产物可复现；提交戳改变仍会改变产物，不能沿用旧 buildId。
+- 产品源码摘要（2026-11-07 软件渲染画质档）：`2bb7ea308692fcecbe6f5384b9618229`（84 个构建输入文件）；本地验收构建 `2bb7ea308692-e791bb9d179928b1`（提交 `e9b1edd`，工作树干净）。仅同一提交、依赖与构建环境下产物可复现；提交戳改变仍会改变产物，不能沿用旧 buildId。
 - 全部 JS gzip 约 268 KiB（名义上限 300 KiB，有效门槛 270 KiB，剩约 1.9 KiB）。
 
-本轮证据（同一份冻结构建 `358be02f` / `bfd52355`，均在本机 Windows 采集并已登记进索引）：
+本轮证据（同一份冻结构建 `2bb7ea30` / `e791bb9d`，均在本机 Windows 采集并已登记进索引）：
 
-- 稳定性 **5×(app+devices)**：每轮 **107 项完整集合**、零失败零 warning 零重启——`generated/stability-local-windows-358be02f.json`。此前一轮曾出现「外部真值回放」在真值切换后 250 ms 内没攒到统计样本（浏览器刚被回收、页面在重编译着色器）；改成有界状态等待后单跑复验通过（Mahony 均值 0.40°），失败现场保留在本地日志。
-- 长稳 **600 s ×2**：批量（常驻水位 5.6 MB、趋势 4.7 MB、末段与采样覆盖通过）与软件替身重连（常驻 3.5 MB、趋势 17.2 MB、122 样本）——`generated/soak-*-600-358be02f.json`。
-- 视觉 11 张（含 320/390/768/1440 视口、200% 文字缩放、打印与三视图，控制台零错误）——`generated/visual-evidence-358be02f.json`；性能 `generated/perf-report-358be02f.json`（墙钟 58.7 fps、真实输入 p95 3.7 ms、运行期 timer p95 12.4 ms、取消 10.7 ms）；体积归因 `generated/size-report-358be02f.json`。
+- 稳定性 **5×(app+devices)**：每轮 **107 项完整集合**、零失败零 warning 零重启——`generated/stability-local-windows-2bb7ea30.json`。
+- 长稳 **600 s ×2**：批量（常驻水位 0.9 MB、峰值增量 26.4 MB、趋势 6.0 MB、116 样本）与软件替身重连（4.6 MB、27.8 MB、16.7 MB、122 样本）——`generated/soak-*-600-2bb7ea30.json`。
+- 视觉 11 张（320/390/768/1440 视口、200% 文字缩放、打印与三视图，控制台零错误）——`generated/visual-evidence-2bb7ea30.json`；性能 `generated/perf-report-2bb7ea30.json`（墙钟 58.9 fps、真实输入 p95 1.3 ms、运行期 timer p95 13.4 ms、取消 11.9 ms、堆峰值 20.9 MB）；体积归因 `generated/size-report-2bb7ea30.json`。
 - 严格验收通过：`npm run evidence:verify`（源码摘要 + 产物摘要 + buildId 三层绑定）。
-- **Windows CI（提交 `2640153`，PR #2）**：`gate`、`smoke-shards (app)` 87/87、`smoke-shards (devices)` 20/20 全绿；完整 `smoke-suite` 首轮 87 项本身全 PASS、仅 Chrome 进程被回收 1 次被判基础设施失败，按其提示重跑后 **107 PASS / 0 FAIL / 0 warn、判定全绿**。SW-10 事件→handler 0.3 ms、事件→runner 14.7 ms、timer p95 39.6 ms、切片最长 15.4 ms、单帧最长 27.7 ms（修复前 302.5／314.4／326.2／216.9／172.7 ms）。
-- 历史（保留不删）：线上部署 `95a80413`（run 42040828875）曾通过部署后 smoke；`42074606433` 那轮的 smoke-suite 两项断言失败，已由上面的修复覆盖。smoke-suite 仍是 `continue-on-error: true`，工作流总览成功不代表套件通过，发布验收必须单独看该作业。
+- **Windows CI**：提交 `2640153` 的 `gate`、`smoke-shards (app)` 87/87、`smoke-shards (devices)` 20/20 全绿，完整 `smoke-suite` 重跑后 107 PASS / 0 FAIL / 0 warn（SW-10 事件→handler 0.3 ms、事件→runner 14.7 ms、timer p95 39.6 ms，修复前 302.5／314.4／326.2 ms）。提交 `e9b1edd` 的 `smoke-suite` 也已全绿；同轮 CI 的 app 分片仍遇到一次 Chrome 进程被回收（87 项本身全 PASS），现场记录显示当时 JS 堆仅 12 MB、DOM 1 个文档——**不是应用内存泄漏**，是 2 vCPU + SwiftShader 环境下的进程级回收，已加工作集采样继续观察。
+- 历史（保留不删）：线上部署 `95a80413`（run 42040828875）曾通过部署后 smoke；`42074606433` 那轮 smoke-suite 两项断言失败，已由画质档修复覆盖。smoke-suite 仍是 `continue-on-error: true`，工作流总览成功不代表套件通过，发布验收必须单独看该作业。
 
 代码修改后的验证顺序：
 
