@@ -125,14 +125,23 @@ const infraDiag = { lastCheck: "(未开始)", samples: [], disconnects: [] };
  */
 const sampleChromeWorkingSet = () => {
   if (process.platform !== "win32") return;
-  execFile("tasklist", ["/FI", "IMAGENAME eq chrome.exe", "/FO", "CSV", "/NH"], { timeout: 20000, windowsHide: true }, (err, stdout) => {
-    if (err || !stdout) return;
+  // 不按镜像名过滤（那会返回本地化的「没有运行的任务」提示，解析不到就只剩一句看不懂的噪声）：
+  // 列全部进程，再按名称挑 Chromium 家族——本机用 Edge、CI 用 Chrome，两处口径一致。
+  execFile("tasklist", ["/FO", "CSV", "/NH"], { timeout: 20000, windowsHide: true }, (err, stdout) => {
+    // 取不到就留原因：CI 上这条曾经是「缺失」，只有原因能说明是 PATH、权限还是解析问题
+    if (err) { infraDiag.chromeProbe = String(err.message).slice(0, 120); return; }
     let totalKb = 0;
     for (const line of String(stdout).split(/\r?\n/)) {
-      const m = /"chrome\.exe","\d+","[^"]*","\d+","([\d,]+) K"/.exec(line);
-      if (m) totalKb += Number(m[1].replace(/,/g, "")) || 0;
+      const m = /^"?(chrome|msedge)\.exe"?,\s*"\d+"[^,]*,[^,]*,[^,]*,\s*"([\d,.]+)\s*K"/i.exec(line.trim());
+      if (m) totalKb += Number(m[2].replace(/[,.]/g, "")) || 0;
     }
-    if (totalKb > 0) infraDiag.peakChromeMb = Math.max(infraDiag.peakChromeMb ?? 0, Math.round(totalKb / 1024));
+    if (totalKb > 0) {
+      const mb = Math.round(totalKb / 1024);
+      infraDiag.peakChromeMb = Math.max(infraDiag.peakChromeMb ?? 0, mb);
+      // 曲线比峰值有用：单调上升=泄漏/未归还，锯齿=正常回收。有界保存，够画一条趋势。
+      (infraDiag.wsSamples ??= []).push({ at: Date.now(), check: infraDiag.lastCheck.slice(0, 24), mb });
+      if (infraDiag.wsSamples.length > 32) infraDiag.wsSamples.shift();
+    }
   });
 };
 const samplePageMemory = async (pg) => {
@@ -209,6 +218,10 @@ const launchBrowser = async () => {
           "--disable-background-timer-throttling",
           "--disable-backgrounding-occluded-windows",
           "--disable-renderer-backgrounding",
+          // SwiftShader 软光栅天生慢：GPU 进程 watchdog 会把「慢」当「挂起」处理并杀掉进程，
+          // 表现为浏览器会话消失（Target.createTarget: Session not found）。这是**测试环境**开关，
+          // 不影响产品；被测页面照常渲染，不降低任何断言。
+          "--disable-gpu-watchdog",
         ],
       });
       profileDir = dir;
