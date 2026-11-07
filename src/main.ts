@@ -562,6 +562,13 @@ $("kalman-reset-cov")?.addEventListener("change", () => {
 
 // ---------- 场景 ----------
 const sceneHandles = createScene($("viewport"));
+// 软件光栅化（无 GPU）自动降档时明确说出来：用户能解释「为什么没有阴影」，
+// 自动化也能断言当前档位；不静默改变画面。
+if (sceneHandles.quality === "software") {
+  console.info("[render] 检测到软件渲染（无 GPU 加速），已启用性能优先画质：关闭抗锯齿/阴影/环境贴图");
+  const hint = document.getElementById("viewport-hint");
+  if (hint) hint.textContent += " · 性能模式（无 GPU）";
+}
 
 // ---------- 图表 ----------
 const truthSeries = { label: "真实", color: "#e6edf3" };
@@ -5097,6 +5104,8 @@ function ensureTour(): Promise<TourApi> {
 document.getElementById("tour-start")?.addEventListener("click", (ev) => {
   if (tour) return; // 已加载：交给 mountTour 的处理器，行为与旧实现一致
   ev.stopImmediatePropagation();
+  // 冷加载要下载 chunk：先给即时反馈，避免点击后一两秒没反应被当成没点上
+  toast("正在加载引导课程…");
   void ensureTour().then((t) => t.start()).catch(() => {});
 }, true);
 
@@ -7294,6 +7303,8 @@ resetSim(); // 统一时钟/统计/曲线起点（不改变已还原的深链参
 // 控制台调试入口（教学/自动化验收用）：不参与 UI，不影响性能
 (window as unknown as { attitudeDemo: unknown }).attitudeDemo = {
   scene: sceneHandles.scene,
+  /** 当前画质档（"software" = 检测到软件光栅化，已关 MSAA/阴影/IBL） */
+  renderQuality: (): "high" | "software" => sceneHandles.quality,
   camera: sceneHandles.camera,
   renderer: sceneHandles.renderer,
   controls,

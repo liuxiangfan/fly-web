@@ -1,0 +1,267 @@
+# Windows 性能优化实施方案（v0.2.0-rc.1 之后）
+
+> 更新：2026-11-06。性质：**下一阶段实施方案，不是已完成的优化或通过声明**。
+> 范围：软件、Windows、本机与 GitHub Windows runner；不安排 Ubuntu、真实硬件验证或新教学功能。
+> 起点：预发行 [v0.2.0-rc.1](https://github.com/liuxiangfan/fly-web/releases/tag/v0.2.0-rc.1)，提交 `c7d353b0605e22982a0c3dca8c5bae3e2335a840`。
+> [PR #2](https://github.com/liuxiangfan/fly-web/pull/2) 保持未合并。预发行不等于正式验收，不改变线上 master。
+
+## 0. 执行记录（滚动更新）
+
+| 日期 | 工单 | 做了什么 | 证据 |
+|---|---|---|---|
+| 2026-11-07 | WP-01 | 新增 `scripts/perf-probe.mjs`：同一页面、同一批量负载下单变量切换阴影／环境贴图／像素比／是否渲染，采 rAF 间隔、`render()` 同步耗时、运行期 timer、真实鼠标 event→handler／event→runner，并可用 CDP 采样分析器按函数自耗时排序 | `.audit-current/perf-probe-*.json` |
+| 2026-11-07 | WP-03 | 软件渲染画质档：SwiftShader／llvmpipe／基础显示驱动下无 MSAA、无阴影贴图、无 IBL、像素比封顶 1；`attitudeDemo.renderQuality()` 可断言 | 本机 800×600 单帧 JS 峰值 22.4→8.2 ms，`scene` 21.5→5.0 ms |
+| 2026-11-07 | WP-04 | 课程首次点击即时反馈（冷 chunk 下载期间不再像没点上） | 本地完整集合课程 13 步全过 |
+| 待办 | WP-02 | ESKF `matMul`/`matTranspose` 仍是最大 JS 单项（约 14% 墙钟），但预算只剩 0.4 KiB，需先腾出字节 | — |
+| 待办 | WP-05/06 | Windows CI 完整套件、连续 5 轮、长稳与证据重采 | — |
+
+本机（SwiftShader，800×600，Edge，CI 同档 `SMOKE_SLOW=1`）完整集合 **107/107、零 warning**；SW-10 事件→handler 0.3 ms、事件→runner 13.7 ms、运行期 timer p95 10.9 ms、切片最长 4.4 ms、单帧最长 4.9 ms。这是**本机**结果，不能替代 Windows runner 的结论。
+
+## 1. 为什么还要继续优化
+
+### 1.1 当前可核实的失败
+
+最新候选提交的 Windows 完整套件：[run 42220118480](https://github.com/liuxiangfan/fly-web/actions/runs/42220118480)。
+
+| 项目 | 实测 | 当前判据 | 结论 |
+|---|---:|---:|---|
+| 真实浏览器 click 事件到 runner 停止 | 314.4 ms | ≤200 ms | 未通过 |
+| 批量运行期 timer 40 样本 p95 | 326.2 ms | ≤200 ms | 未通过 |
+| 引导课程首次目标状态 | 超过 3 s | 3 s 内成为真实第 1 步 | 未通过 |
+| 公式复制 | 正文选区与载荷一致 | 可见页真实点击、诚实反馈、正文无按钮污染 | 通过 |
+| 软件设备分片 | 20 项通过 | 完整集合、零失败 | 通过 |
+
+同一软件在此前 Windows 运行中出现过分片全过、完整套件仍失败的情况；本地也有全部断言通过但浏览器会话回收导致整轮失败的记录。**不能挑选一次绿灯替代稳定性证据，也不能从波动直接推出“全是 runner 容量”。**
+
+### 1.2 已有修复与真实边界
+
+已实现：4 ms 墙钟计算预算、可恢复的精确分位数选择、统计收尾切片、真实输入与 timer 分开测量、共享测试页冻结／恢复、公式复制回退及窄屏导航命中检查。
+
+尚未保证：
+
+- 4 ms 是调度器在检查点处让出的预算，**不是操作系统抢占保证**。初始化、单步积分、原生 API、GC、渲染或线程被调度出去，都可能使实测片长超标。
+- `framePerformance.max` 只有分段最大值；不能知道某个输入长延迟恰好对应哪一帧、哪次 GC 或哪段 UI 更新。
+- 含 NaN／负零的异常分位数输入仍走原生稳定排序；不要假设所有输入路径都完全可抢占。
+- 当前 UI 的 FPS 用夹到 50 ms 的 `dt` 计算，**不是实际墙钟帧率**。
+- `smoke-suite` 的 `continue-on-error: true` 可令工作流总览成功；必须读取作业结论和完整报告。
+
+## 2. 不可退让的规则
+
+1. 保持 timer p95 与真实事件到停止的 **200 ms 绝对验收线**；空闲基线只解释环境，不乘倍率放宽阈值。
+2. 不删除慢样本、失败项、种子或算法，不缩短实验来躲开收尾，不关闭**被测页面**渲染来制造交互通过。
+3. 不增加一套积分或统计内核。同步／异步继续共用 generator，结果、事件、终止口径、完整序列与原生排序 oracle 保持等价。
+4. 所有 deadline 都有限，失败保留阶段与现场。远程命令超时不是默认产品失败，也不是默认容量豁免。
+5. 当前 14 项预算不放宽；拆 lazy chunk 不等于总量减少，新增 chunk 必须计入聚合预算。
+6. 不循环重跑直到偶然全绿；预先确定运行次数和通过条件，失败保留、改动后重新验证。
+7. Release、PR、线上提交、产品摘要、被测 buildId 分别记录。后续文档提交不会修改已发布 RC 标签或附件。
+
+## 3. 执行顺序与工单
+
+| 工单 | 优先级 | 工作 | 前置条件 | 完成证据 |
+|---|---|---|---|---|
+| WP-01 | P0 | 固定实验与建立时间线诊断 | 无 | 可定位长延迟发生在哪个阶段，原始样本与环境齐全 |
+| WP-02 | P1 | 数值工作与初始化／收尾调度 | WP-01 指向计算热点 | 同步／异步等价、单片诊断、取消回归、吞吐对照 |
+| WP-03 | P1 | 降低渲染与重复 UI 工作 | WP-01 指向渲染／UI热点 | 正常画面下延迟下降，三视图／相机／读数无回归 |
+| WP-04 | P1 | 引导课程冷加载与启动反馈 | 可并行诊断 | 冷／热加载、正确首步、错误恢复与完整13步验证 |
+| WP-05 | P1 | 统一量具与 Windows CI 验收 | WP-01 已固定口径 | 分片／完整套件同提交、完整状态、零跳过／重启 |
+| WP-06 | P0 | 发布收敛与证据冻结 | WP-02～WP-05 完成 | 当前构建的全门禁、固定五轮、长稳、线上核验 |
+
+每个工单单独做小提交。先诊断再选择优化，不同时更改算法、ANGLE 后端、视口、刷新策略和测试阈值。
+
+## 4. WP-01：固定对照条件，补足因果时间线
+
+### 修改入口
+
+- `src/main.ts`：`frame()`、`framePerformance`、批量 `batchState()` / `batchCancelTiming`。
+- `scripts/browser-smoke.mjs`：`measureLoopLatency()`、`diagnostics.sw10`、`withIndependentPage()`、`diagnostics.reconnectBoot`。
+- `scripts/perf-report.mjs`：真实鼠标样本、timer 样本、longtask 与取消时序。
+
+### 具体方法
+
+1. 固定 Node 主版本、依赖锁、Chrome／Edge版本、ANGLE模式、viewport、DPR、实验配置与种子。报告记录 Windows版本、CPU逻辑核心数、内存、浏览器启动参数、runner标签与执行命令；没有资源记录就不写“2 vCPU必然是根因”。
+2. 把首次就绪、空闲、批量运行、取消、统计收尾、课程冷加载划为不同窗口。每个窗口起止用**页面同一单调时钟**记录，longtask 按发生时间归入窗口，不把首屏开销混入运行期结果。
+3. 分段数据从“只有 max”扩为有界环形时间线：开始／结束、阶段、compute duration、运行世代、模拟时间与累积完成种子数。建议上限 512 条；非诊断模式不逐帧分配大对象。
+4. 将输入分成 `pointerdown → pointerup → click → cancel request → runner stop → post-await → 下一次呈现`。记录 trusted、focus、visibility。浏览器事件／runner 用同页 `performance.now()`；Node发送到handler另列为传输诊断，不与浏览器输入延迟混称。
+5. Chromium独立实测已确认 `click.timeStamp` 对应释放事件，不包含人工按住鼠标；因此不能把现有长输入等待改起点抹掉。若增加键盘取消测试，另列指标，不替代鼠标路径。
+6. 保留现有40样本最小值。诊断对照可提高到100样本，统一 nearest-rank p95并保存全部样本；不得采用不同分位数算法只为变绿。确认每个运行期样本前后批量都仍在运行。
+7. 进行短而受控的浏览器 Performance trace，关联长输入与 JavaScript栈、layout/style、GC及渲染时间；trace只采诊断窗口，避免录制自身长期成为负载。仅凭JavaScript墙钟不能区分计算和被系统暂停。
+
+### 对照矩阵
+
+固定一份构建，各做预定3次诊断，不因结果选择性补跑：
+
+- 单独性能用例／完整 app 用例集合。
+- 800×600（当前CI）／1440×900（桌面）；分别评价，不混用结果。
+- 空闲／Worker批量／主线程降级批量。
+- 课程首次冷加载／已加载后重启。
+
+“关闭渲染”“禁阴影”等只可作为**定位热点的诊断对照**，不能作为正常产品性能验收。导出原始JSON与trace，并在表格列出每次值、最坏值和失败原因。
+
+### 验收
+
+异常样本能映射到实际阶段；缺失字段或窗口失效明确失败；环形容器封顶；诊断模式关闭时无明显额外分配。建立基线后才进入下一工单。
+
+## 5. WP-02：让每个计算阶段都能交还主线程
+
+### 复用入口
+
+`src/core/runner.ts` 的 `prepareRun()`、`runExperimentAsync()`、`exhaustTaskAsync()`、`MetricAccumulator.summaryTask()`、`percentileTask()`；`src/main.ts` 的主线程降级分支；`src/workers/batch.worker.ts` 的 job 状态机。
+
+### 具体方法
+
+1. **先拆阶段**：测 `prepareRun`、估计器初始化、每步SolveLoop、分位数复制／分区、汇总对象创建、跨种子聚合。不要因 `slice.maxComputeMs` 大就认定全是排序。
+2. 若初始化确为热点，在共同generator里按对象／算法组设置初始化检查点；同步出口照旧耗尽。避免一次 `task.next()` 隐含整个初始化。修改之前确认构造顺序与随机数消耗不会改变。
+3. 保留精确quickselect和有限工作checkpoint；由4 ms墙钟预算决定真正macrotask，让出不只使用 `Promise.resolve()`。不要再将每128项都强制等待Windows timer；这曾导致计算约183 ms而收尾墙钟61.5秒。
+4. 对调度出口做小实验：默认 `setTimeout(0)` 与浏览器支持的调度API（例如 `scheduler.yield`）分别记录计算总量、让出等待、输入延迟和吞吐。特性检测与 Node／不支持浏览器的回退不可省；不要将 MessageChannel 的高优先级消息洪泛当成“更快的可交互调度”。
+5. 有取消时优先结束当前数值工作，尽快恢复按钮；如果继续收尾用于返回完整终止结果，独立报告“积分停止”和“统计完成”。不得把正在收尾的种子计入完成列表，旧 generation 不得回写新任务。
+6. 如果特定异常输入仍进入原生排序，先确认输入可达性与规模，再决定采用兼容的分片稳定排序或明确异常输入处理；不能改变 NaN、Infinity、±0、重复值和插值口径以省代码。
+7. 优化跨种子聚合只在 trace 指向它时开展。结果列表、样本容量与蓄水池不削减；抽样分位数仍如实标 approximate。
+
+### 永久测试
+
+- 原生排序 oracle：随机、重复、升降序、空数组、极值、NaN／Infinity／±0及乱序概率输入；输入数组不被修改。
+- 同步／异步完整metrics、姿态、events、termination和series深等价。
+- 4 ms预算实际触发的可控时钟测试；checkpoint工作量有界；macrotask计时器能执行。
+- 初始化、运行、首／中／末收尾取消；快速启动／取消／新job；所有五算法指标完整、部分种子不计入。
+- 记录收尾 compute total／max、实际片数、yield wait、总墙钟和吞吐，避免把延迟改善换成几倍计算时长却不说明。
+
+验收：固定200 ms指标通过，同时完整数值等价和预算通过；单片超标保留原trace，不删除样本或只输出均值。
+
+## 6. WP-03：渲染和 UI 更新按可见性与变化付费
+
+### A. 先消除确定重复工作
+
+- `src/ui/chart.ts` 的 `push()` 与 `render()` 已分离，可增加 dirty／revision；数据、范围、通道、游标、颜色、尺寸变化才绘制。保持展开图的25 Hz数据采样，不把显示节流改成丢数据。
+- `ResizeObserver` 仅在实际bitmap尺寸变化时重设 canvas 宽高；否则重设会清画布并造成重复绘制。
+- `src/main.ts:drawIns()` 关闭时目前仍周期清屏、绘制“已关闭”。缓存状态和尺寸，只在开关／resize／主题变化时画占位；开启、轨迹更新和视口恢复及时刷新。
+- 2 Hz校准、评测表、摘要等不要每次 `innerHTML` 整块重建。先比版本／状态是否变化，再更新必要文本节点；保留单次提示消费和回滚事务语义。
+- 避免同一帧先写布局再立刻多次读几何尺寸；分批读尺寸与写DOM。不得因延后更新破坏键盘焦点、aria-live或错误提示。
+
+### B. 对 trace 证实的 WebGL 热点优化
+
+入口：`src/scene/setup.ts:createScene()`（抗锯齿、DPR≤2、软阴影、1024阴影贴图、RoomEnvironment→PMREM）及 `src/main.ts:frame()` 的 render调用。
+
+1. 验证隐藏视图组是否只隐藏网格，却仍每帧执行各视图动画更新；仅更新活动视图和正在退出的过渡，保留万向节、四元数播放、阻尼与相机过渡的墙钟时序。
+2. 将“数值推进”“UI文本刷新”“3D呈现”独立排程。对无变化画面使用dirty呈现，但相机拖拽、阻尼、播放、螺旋桨、resize必须主动触发；不能把暂停仿真等同于没有动画。
+3. 若需节流，优先在产品明确支持的质量档中限制**呈现频率**，例如节能档30 fps，不改500 Hz积分网格。过渡／输入反馈及时呈现，报告真实rAF间隔而非夹紧dt的FPS。
+4. 阴影、DPR、抗锯齿或环境贴图质量仅在证实是热点后作单变量对照；若采用可见的低质量档，界面、文档及报告必须注明，不能仅在CI偷偷降低产品配置来给正常画面打勾。
+5. 每个视图截图检查轴线、标签、阴影、四元数轨迹和叠加读数；测GPU资源是否释放、上下文是否丢失。截图生成成功不替代视觉判定。
+
+### 验收
+
+三视图、相机交互、暂停／继续、插值播放、曲线展开／收起、游标、INS及错误恢复无退化；采样数据／回放不丢失；正常画面下200 ms指标达标。原14项体积预算不回退，最坏帧与输入呈现延迟同报。
+
+## 7. WP-04：课程冷加载要快、反馈要真、失败能恢复
+
+入口：`src/main.ts:ensureTour()` / `tour-start` 首次点击监听，`src/ui/tour.ts:mountTour()` / `start()` / `apply()` / `render()`；`scripts/browser-smoke.mjs:tourCase`。
+
+1. 首次点击立即给“正在加载课程”反馈，防止静态 `第1/13步` 与空标题被当成已开始；加载失败显示具体错误并允许显式重试。
+2. 复用一个 `tourLoad` Promise，避免快速连点重复导入／重复监听或自动多走步骤；请求序号隔离关闭后迟到启动。
+3. 先分解冷耗时：请求chunk、下载、解析／执行、mount、首step实验装载、实际呈现。必要时在用户展开课程面板、hover或focus开始按钮时预取；不得预取就自动 `start()` 或改变当前实验现场。
+4. 冷加载与热加载分开测试。预取不能被当成冷启动通过的唯一证据；首屏主包与聚合gzip继续受预算约束。
+5. 保持当前**3秒首状态**目标。若固定环境实测无法满足，应保留失败并优化，不仅增大sleep／deadline。CDP命令通信采用有限通讯预算，页面内状态时间单独测量，不把通信与业务状态混称。
+6. 等真实第一步：可见card、非空标题与正文、准确counter、实验／source／scenario／view与面板状态一致。完整13次next、最后退出、重开与关闭均验证；不能用“标题去重13”接受含空标题的错位序列。
+7. 注入离线、chunk404、同步mount异常、永不落定、加载后关闭／再次开始等反例；失败后共享演示可继续，不留下挂起Promise或重复监听。
+
+## 8. WP-05：量具与 CI 不再混用证明范围
+
+1. 视口参数应贯穿独立性能页；报告实际viewport/DPR，检查是否被某用例覆盖。布局测试专用大视口独立注明，不混入800×600性能对照。
+2. 复用 `withIndependentPage()` 管理无关共享页的生命周期，`finally` 恢复。停止的是**无关测试页**，被测页持续正常运行；恢复后的数据源、按钮、generation、绘制必须验证。无关页冻结不是“真实多标签性能通过”。
+3. 将纯数值／DOM测试与需要WebGL的用例分组，仅在验证页面／资源生命周期确有问题时继续细分分片。清单保持固定test id、完整并集、无交叉／遗漏；拆片是改善量具隔离，不自动降低产品输入延迟。
+4. `roundVerdict()` 必须拒绝非零退出、未完成、warning、重启、跳过、重复、结果文件缺失或任一断言失败。通用 `Waiting failed` 只能表明等待失败，不能单凭字符串宣称容量根因。
+5. 改进artifact：上传完整逐项JSON、diagnostics、失败页截图及资源记录；点目录显式允许隐藏文件。记录workflow/run/job/attempt/commit，避免从不同attempt拼“完整通过”。
+6. 运行workflow时核对现有触发条件。当前 `smoke-suite` 与deploy都 `needs: verify`，可能并行，不是真正“部署后串行套件”；PR不部署。修改依赖关系需要明确发布策略决定，不偷偷让错误不阻断。
+7. Windows不同作业是否共享物理负载只能据资源记录判断。减少重复的同时运行可以节省配额，但不能假定它必定消除输入延迟。
+
+## 9. 验证命令与产物命名
+
+### 9.1 每次产品改动的门禁顺序
+
+```bash
+npx tsc --noEmit
+npm run check
+npm run build
+npm run budget
+npx tsx scripts/doccheck.ts --recompute
+```
+
+`check` 当前基础计数155，另有独立契约；浏览器当前107项。增删测试时必须同步清单、status与README，不直接手填总数。
+
+### 9.2 定向性能与完整套件
+
+Windows PowerShell中按实际环境设置；这里使用当前CI同档视口，不提高阈值：
+
+```powershell
+$env:SMOKE_VIEWPORT = "800x600"
+$env:SMOKE_SLOW = "1"  # 仅通讯/就绪等待额度，不改变200ms断言
+node scripts/ci-run-smoke.mjs --shard=both --runs=1 --out=.audit-current/wp-candidate
+```
+
+独立窗口启动预览后跑性能测量；不要与完整套件同时占同一端口或并行录trace干扰指标：
+
+```bash
+npm run preview -- --host 127.0.0.1 --port 4173 --strictPort
+node scripts/perf-report.mjs --url=http://127.0.0.1:4173/ --out=.audit-current/wp-perf.json
+```
+
+### 9.3 固定正式验收批次
+
+完成诊断与优化后，提前声明**连续5轮**，任何失败使该批未通过：
+
+```bash
+node scripts/ci-run-smoke.mjs --shard=both --runs=5 --out=.audit-current/wp-final-stability
+node scripts/soak.mjs --batch --seconds=600 --output=.audit-current/wp-soak-batch.json
+node scripts/soak.mjs --reconnect --seconds=600 --drop-every=8 --output=.audit-current/wp-soak-reconnect.json
+node scripts/visual-evidence.mjs --out=screenshots/wp-final --report=.audit-current/wp-visual.json
+```
+
+soak与visual需要事先build和独立预览；按顺序执行，不与其他浏览器负载并行。失败重跑前必须说明改变了什么；旧失败报告不能覆盖，目录名带提交／buildId／attempt。
+
+## 10. 证据冻结与正式版解除阻塞
+
+### 10.1 五种身份分别约束
+
+- `sourceCommit`：实际采集提交；不伪造为之后的文档提交。
+- `sourceDigest`：产品输入摘要。src、入口、package／锁、构建配置改变都须更新；scripts作为量具改变另记脚本摘要、命令与判据版本。
+- `distHash/buildId`：实际被测产物，不给旧结果贴新的buildId。提交戳、依赖、Node版本等可能改变产物。
+- 被测服务／页面身份：采集前核对、结束后检查漂移。
+- workflow/job/attempt：当前提交的实际完整运行，不拼接几个失败轮的片段。
+
+复用 `scripts/build-provenance.mjs`、`served-build.mjs`、`evidence-report.mjs`、`register-local-evidence.mjs` 与 `evidencecheck.mjs`。按新路径新增报告，旧原件保留并标历史；覆盖某个固定路径前先归档旧原件与哈希。
+
+```bash
+npm run evidence:verify
+```
+
+严格绑定只约束声明为current的证据；不能通过把所有证据降成历史或清空条目来宣称当前产物验收成功。截图不随仓库分发时明确localOnly和artifact获取方式。
+
+### 10.2 正式版结案条件
+
+- [ ] 同一候选提交的全部静态门禁、14项原预算、数值等价与失败反例通过。
+- [ ] 当前Windows CI的app/devices完整清单通过；`smoke-suite` **自身success**，不是仅工作流总览success。
+- [ ] 预定连续5轮全部通过，零FAIL/warning/重启/跳过/缺项，原始timer和真实输入指标达200ms。
+- [ ] 冷课程首状态达3秒目标，热重开、错误恢复、13步与退出状态正确。
+- [ ] 两份连续600秒软件长稳通过水位、峰值、趋势、末段及覆盖判据；控制台零错误，资源封顶。
+- [ ] 三视图、文档公式、复制反馈、相机、表格与打印有实际视觉确认；不把PNG生成等同验收。
+- [ ] 当前产物证据可核、脚本/环境身份明确；修改后不复用旧摘要。
+- [ ] 正式合并／部署／Release绑定明确提交，线上构建标识一致；发布前确认，不改写RC标签。
+
+若仍只有本地通过、CI失败，保持RC状态；若决定换专用Windows runner或调整产品性能承诺，必须另获明确决策并保留原目标与实际差值，不能由本方案暗中生效。
+
+## 11. 每个优化实验的交付模板
+
+```text
+工单：WP-xx
+提交、sourceDigest、buildId、量具摘要、命令：
+环境与实际viewport/DPR/浏览器/Node/资源：
+预先声明的实验条件与次数：
+热点证据：trace时间窗口、栈与diagnostics，哪些只是推测：
+单一改动：
+before/after：每次timer p95、事件到停止、输入呈现、最坏帧、compute/yield总量、吞吐、堆与体积：
+数值/功能等价测试、失败与未测项：
+回滚提交/开关：
+结论：通过 / 未通过 / 证据不足
+下一步：
+```
+
+该模板先填失败和边界，再决定是否保留优化。评分不是测试或发布证据；本方案不预先承诺性能满分。

@@ -26,6 +26,7 @@ Windows CI on each push to `master` runs type-check → 126 numeric + 10 scene-g
 - Separate diagnostics for event-loop waiting, real input, compute slices, rendering and UI work; the 200 ms acceptance target is not raised with the baseline.
 - Formula copying falls back to manual selection when Clipboard API is missing, fails or times out. Button feedback is excluded from the copied text.
 - Release versions, deployed commits and full-suite results are reported separately; deployment success is not a claim that every test passed.
+- Without GPU acceleration (SwiftShader / llvmpipe / basic display driver) the app switches to a "performance" quality tier: no MSAA, no shadow map, no environment map, pixel ratio capped at 1. Those environments used to take hundreds of milliseconds per frame (3 fps, unresponsive to clicks); GPU machines keep the full quality. The console explains the downgrade and `attitudeDemo.renderQuality()` reports the active tier.
 
 [Releases](https://github.com/liuxiangfan/fly-web/releases) · [Changelog](docs/CHANGELOG.md) · [Verification evidence](docs/VERIFICATION-EVIDENCE.md)
 

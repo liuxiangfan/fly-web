@@ -12,6 +12,8 @@ import type { UiView } from "../ui/mode";
 export interface SceneHandles {
   /** WebGL 渲染器；环境不支持 WebGL 时为 null（场景对象仍在，只是不渲染） */
   renderer: THREE.WebGLRenderer | null;
+  /** 画质档：软件光栅化（无 GPU）自动降到 "software"（无 MSAA/阴影/IBL），其余为 "high" */
+  quality: "high" | "software";
   scene: THREE.Scene;
   camera: THREE.PerspectiveCamera;
   controls: OrbitControls;
@@ -50,6 +52,25 @@ const VIEW_FRAMING: Record<UiView, { target: [number, number, number]; pos: [num
   quat: { target: [0, 0.95, 0], pos: [0, 1.75, 3.75] },
 };
 
+/**
+ * 是否是「软件光栅化」环境（无 GPU 加速）：SwiftShader / llvmpipe / 基础显示驱动。
+ *
+ * 为什么要降档而不是照常画：这些环境里 800×600 的 MSAA + 1024² 阴影贴图 + IBL
+ * 每帧要几百毫秒，实测（CI 2 vCPU、SwiftShader）单帧 JS 172 ms、timer p95 326 ms、
+ * 点击到 handler 302 ms——真实用户在无 GPU 的机器上就是 3 fps 且点不动。
+ * 降档只关「像素成本」项（MSAA/阴影/IBL/像素比），几何、动画、数据、交互全部不变。
+ * 用刚创建的上下文读渲染器名称，命中就换一个无 MSAA 的渲染器（一次性开销）。
+ */
+function softwareGl(r: THREE.WebGLRenderer): boolean {
+  try {
+    const gl = r.getContext();
+    const dbg = gl.getExtension("WEBGL_debug_renderer_info");
+    return /swiftshader|llvmpipe|softpipe|software|basic render/i.test(dbg ? String(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)) : "");
+  } catch {
+    return false;
+  }
+}
+
 export function createScene(container: HTMLElement): SceneHandles {
   /**
    * WebGL 兜底：拿不到上下文时 `new WebGLRenderer()` 会抛异常。
@@ -57,15 +78,22 @@ export function createScene(container: HTMLElement): SceneHandles {
    * ArrowHelper 都不需要 GL 上下文），只把 renderer 置空：渲染调用被跳过，
    * 曲线、统计、文档演示、面板交互全部照常运转。
    */
+  let lowEnd = false;
   let renderer: THREE.WebGLRenderer | null = null;
   let canvasEl: HTMLElement;
   try {
     renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    lowEnd = softwareGl(renderer);
+    if (lowEnd) {
+      renderer.forceContextLoss();
+      renderer.dispose();
+      renderer = new THREE.WebGLRenderer({ antialias: false });
+    }
+    renderer.setPixelRatio(lowEnd ? 1 : Math.min(window.devicePixelRatio, 2));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.08;
-    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.enabled = !lowEnd;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     container.appendChild(renderer.domElement);
     canvasEl = renderer.domElement;
@@ -88,8 +116,8 @@ export function createScene(container: HTMLElement): SceneHandles {
 
   // 环境光照（IBL）：程序化房间环境 → PMREM。所有 MeshStandard/Physical 材质
   // 自动获得反射与 ambient，金属件立刻有了「质感」——无需外部 HDR 文件。
-  // 无渲染器时跳过（PMREMGenerator 必须有 GL 上下文）
-  if (renderer) {
+  // 无渲染器时跳过（PMREMGenerator 必须有 GL 上下文）；软件光栅化下 IBL 是纯像素成本，同样跳过
+  if (renderer && !lowEnd) {
     const pmrem = new THREE.PMREMGenerator(renderer);
     const envScene = new RoomEnvironment();
     scene.environment = pmrem.fromScene(envScene, 0.04).texture;
@@ -275,7 +303,7 @@ export function createScene(container: HTMLElement): SceneHandles {
   new ResizeObserver(resize).observe(container);
 
   return {
-    renderer, scene, camera, controls, quad, ghost, gimbal, quatView, gravityArrows, headingArrow, axisArrow,
+    renderer, quality: lowEnd ? "software" : "high", scene, camera, controls, quad, ghost, gimbal, quatView, gravityArrows, headingArrow, axisArrow,
     covEllipsoid, covWire, toDisplay, setView, syncVisibility,
   };
 }

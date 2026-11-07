@@ -6,6 +6,23 @@
 >
 > 新增一轮里程碑时：在本文件顶部加一节（倒序），同步 PROJECT-STATE 的当前状态与验证入口。
 
+## 2026-11-07 · 软件渲染画质档（WP-01/WP-03 第一轮）
+
+- 起点是 CI 的一条因果链：`smoke-suite` 在 Windows 2 vCPU 上「事件→handler 302.5 ms、运行中 timer p95 326.2 ms、单帧 172.7 ms、切片 216.9 ms」，而 handler→runner 只要 11.9 ms——点击不是处理慢，是主线程被整段占住。
+- 新增 `scripts/perf-probe.mjs` 单变量对照工具（诊断用，不是门禁）：同页同一批量负载下分别切换阴影／环境贴图／像素比／是否渲染，采 rAF 间隔、`render()` 同步耗时、运行期 timer、真实鼠标 event→handler／event→runner，并可挂 CDP 采样分析器报 JS 自耗时。
+- 本机 SwiftShader 800×600 实测：帧间隔 p50 33.3 ms、`scene` 峰值 21.5 ms；去掉环境贴图或半分辨率即回到一个 vsync。分析器显示主线程 JS 大头是 ESKF 的 `applyUpdate`／`matMul`（约 14% 墙钟）。
+- 产品修复：`createScene()` 读 `WEBGL_debug_renderer_info`，识别到 SwiftShader／llvmpipe／基础显示驱动时降为「性能优先」画质——无 MSAA、无阴影贴图、无 IBL、像素比封顶 1；有 GPU 的机器不受影响。控制台说明降档原因，自动化可用 `attitudeDemo.renderQuality()` 断言档位。
+- 效果（同机 800×600）：单帧 JS 峰值 22.4 → **8.2 ms**，`scene` 21.5 → **5.0 ms**，帧间隔稳定在 16.7 ms。按 CI 同档配置跑完整集合：**107/107、零 warning**，SW-10 事件→handler 0.3 ms、事件→runner 13.7 ms、timer p95 10.9 ms、切片最长 4.4 ms；引导课程 13 步全过。
+- 课程首次点击先给「正在加载引导课程…」即时反馈，避免冷 chunk 下载期间点击像没生效。
+- 预算未放宽：主包 283.2 KiB（有效门槛 283.5 KiB，余量 0.3 KiB），14 项全部通过。最终产物 `358be02fe263-bda8e3827e249687` 上重跑本机完整集合仍为 107/107、零 warning。CI 实际结果另行核对，未通过就继续按方案优化，不靠 `continue-on-error` 说成功。
+
+## 2026-11-06 · v0.2.0-rc.1 预发行与后续性能方案
+
+- 已发布 [v0.2.0-rc.1](https://github.com/liuxiangfan/fly-web/releases/tag/v0.2.0-rc.1)，标签绑定 `c7d353b0605e22982a0c3dca8c5bae3e2335a840`，附静态构建 ZIP 与 SHA256SUMS；GitHub 附件摘要与本地校验一致。
+- 这是非草稿预发行，不取代正式版；PR #2 未合并，master 和线上部署未改变。发布说明明确保留 Windows CI 的取消／timer 200 ms超标与课程首状态失败。
+- 新增独立 [`WINDOWS-PERFORMANCE-OPTIMIZATION-PLAN.md`](WINDOWS-PERFORMANCE-OPTIMIZATION-PLAN.md)：按时间线诊断、数值调度、渲染/UI、课程冷加载、量具隔离与正式证据冻结六项工单继续，保留原阈值与预算，列出对照矩阵、永久反例、运行命令与回滚模板。
+- 本次只发布已确认候选产物与编写方案，不继续改产品代码、不运行 Ubuntu、不把文档计划当成已完成优化。
+
 ## 2026-11-06 · v0.2.0 修复与发布准备
 
 - 以真实 Windows CI 的两项断言失败为起点，不把完整执行后的交互响应和复制反馈失败归为纯容量问题。

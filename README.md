@@ -22,6 +22,7 @@ Windows CI 在每次推送到 `master` 后执行：类型检查 → 数值自检
 - 交互诊断分别记录事件循环等待、真实输入、计算片、渲染和 UI 耗时；200 ms 验收线不随基线抬高。
 - 公式复制支持 Clipboard API 缺失、失败或超时后的手动选区回退；正文不再包含按钮反馈。
 - 发布版本、线上部署提交与完整测试结论分别记录，不把部署成功当成所有测试通过。
+- 无 GPU 加速（SwiftShader / llvmpipe / 基础显示驱动）时自动切「性能优先」画质：关闭 MSAA、阴影贴图与环境贴图，像素比封顶 1。这些环境原本每帧要几百毫秒（3 fps 且点不动），现在与正常 GPU 一样流畅；有 GPU 的机器画质不变。降档会在控制台说明原因，`attitudeDemo.renderQuality()` 可查当前档位。
 
 [发布记录](https://github.com/liuxiangfan/fly-web/releases) · [变更日志](docs/CHANGELOG.md) · [验证证据](docs/VERIFICATION-EVIDENCE.md)
 

@@ -2,8 +2,8 @@
 
 <!-- current:begin -->
 
-> 文档更新：2026-11-06 · 修复分支：`fix/smoke-interaction-release` · 发布目标：`v0.2.0`（尚未发布）。以 Git 当前 HEAD 为准。
-> 本次正在修复实际 CI 的交互响应与公式复制失败；旧版长稳／稳定性是历史证据，不能证明本次修复已通过。
+> 文档更新：2026-11-07 · 修复分支：`fix/smoke-interaction-release` · 已发布 [v0.2.0-rc.1 预发行](https://github.com/liuxiangfan/fly-web/releases/tag/v0.2.0-rc.1)，提交 `c7d353b0605e`；正式 v0.2.0 仍未发布，PR #2 未合并。
+> 2026-11-07 按 [`WINDOWS-PERFORMANCE-OPTIMIZATION-PLAN.md`](WINDOWS-PERFORMANCE-OPTIMIZATION-PLAN.md) 的 WP-01/WP-03 做了**软件渲染画质档**与课程冷加载反馈：SwiftShader/llvmpipe 等无 GPU 环境自动关闭 MSAA/阴影/IBL、像素比封顶 1，正常 GPU 仍走原画质。本机 800×600 全量 **107/107、零 warning**，SW-10 事件→runner 13.7 ms、timer p95 10.9 ms、单帧 4.9 ms；CI 结果待验，尚不能宣称已通过。
 > 最新软件质量复核：见 [`QUALITY-SOFTWARE-ONLY.md`](QUALITY-SOFTWARE-ONLY.md)（本轮按软件工单实施后重新评分，含"未做到"的逐条说明）。
 > 顺序与状态看 [`ROADMAP.md`](ROADMAP.md)，具体方法与反例看 [`SOFTWARE-IMPROVEMENT-PLAN.md`](SOFTWARE-IMPROVEMENT-PLAN.md)。
 
@@ -26,12 +26,14 @@
 
 - `npm run check` = selftest（126）+ scenecheck（10）+ htmlcheck（15）+ doccheck（4），共 **155 项**；随后执行 contracts、statuscheck 与 evidencecheck。
 - `contracts` 链（每个文件都是独立反例集）：time / schema / doc-search / formula-copy / archive-ui / lifecycle / worker / trace，以及 node:test 的 soak / evidence / smoke-verdict / status / budget 契约。
-- `npm run budget` = **14 项**产物预算；判定在 `scripts/budget-core.mjs`，报告名义上限／有效门槛／剩余／基线增量。v0.2.0 修复通过复用重复代码减下 1763 字节；主包约 282.9 KiB，门槛仍为 283.5 KiB，余量约 0.6 KiB，未抬上限。
+- `npm run budget` = **14 项**产物预算；判定在 `scripts/budget-core.mjs`，报告名义上限／有效门槛／剩余／基线增量。v0.2.0 修复通过复用重复代码减下 1763 字节；2026-11-07 的软件渲染画质档再加约 0.7 KiB，主包 283.2 KiB，门槛仍为 283.5 KiB，余量仅 0.3 KiB，未抬上限。
 - 浏览器冒烟声明 **107 项**（app 87 + devices 20）；驱动器比对的是**完整集合**（清单 `scripts/smoke-manifest.json`，由契约测试守着不漂移），不是 PASS 行数。
-- 产品源码摘要（v0.2.0 修复）：`63cd97bf0bf234009a816a841699303f`（84 个构建输入文件）；本地验收构建 `63cd97bf0bf2-afbbb5d7696c5008`。仅同一提交、依赖与构建环境下产物可复现；提交戳改变仍会改变产物，不能沿用旧 buildId。
-- 全部 JS gzip 约 266 KiB（名义上限 300 KiB，有效门槛 270 KiB，剩约 4 KiB）。
+- 产品源码摘要（2026-11-07 软件渲染画质档）：`358be02fe263c91dbba776aa5bf18031`（84 个构建输入文件）；本地验收构建 `358be02fe263-bda8e3827e249687`。仅同一提交、依赖与构建环境下产物可复现；提交戳改变仍会改变产物，不能沿用旧 buildId。
+- 全部 JS gzip 约 268 KiB（名义上限 300 KiB，有效门槛 270 KiB，剩约 1.9 KiB）。
 
 本轮证据（同一份冻结构建，均在本机 Windows 采集并已登记进索引）：
+
+> 注意：下面这批长稳／稳定性／视觉证据对应**上一版源码** `63cd97bf…`。2026-11-07 的画质档与课程反馈改变了构建输入，严格验收（`evidence:verify --require-source`）需要重采；未重采前不得把这些报告说成当前构建的结论。
 
 - 长稳 **600 s ×2**：批量（3/3 批、水位增量约 4.4 MB、末段与采样覆盖通过）及软件替身重连（66/66 恢复、水位增量约 4.4 MB）——`generated/soak-*-600-63cd97bf.json`。
 - 稳定性 **5×(app+devices)**：每轮 **107 项完整集合**、零失败零 warning 零重启——`generated/stability-local-windows-63cd97bf.json`。首次测试的焦点时序失败留在本地日志，修正目标等待后重新跑满五轮。
