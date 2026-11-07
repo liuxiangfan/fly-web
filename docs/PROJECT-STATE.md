@@ -38,6 +38,7 @@
 - 视觉 11 张（320/390/768/1440 视口、200% 文字缩放、打印与三视图，控制台零错误）——`generated/visual-evidence-2bb7ea30.json`；性能 `generated/perf-report-2bb7ea30.json`（墙钟 58.9 fps、真实输入 p95 1.3 ms、运行期 timer p95 13.4 ms、取消 11.9 ms、堆峰值 20.9 MB）；体积归因 `generated/size-report-2bb7ea30.json`。
 - 严格验收通过：`npm run evidence:verify`（源码摘要 + 产物摘要 + buildId 三层绑定）。
 - **Windows CI**：提交 `2640153` 的 `gate`、`smoke-shards (app)` 87/87、`smoke-shards (devices)` 20/20 全绿，完整 `smoke-suite` 重跑后 107 PASS / 0 FAIL / 0 warn（SW-10 事件→handler 0.3 ms、事件→runner 14.7 ms、timer p95 39.6 ms，修复前 302.5／314.4／326.2 ms）。提交 `e9b1edd` 的 `smoke-suite` 也已全绿；同轮 CI 的 app 分片仍遇到一次 Chrome 进程被回收（87 项本身全 PASS），现场记录显示当时 JS 堆仅 12 MB、DOM 1 个文档——**不是应用内存泄漏**，是 2 vCPU + SwiftShader 环境下的进程级回收，已加工作集采样继续观察。
+- **提交 `b12b832` 两条工作流首轮即全绿**：`CI`（gate、app 87/87、devices 20/20）与 `Deploy`（verify、smoke-suite）均一次通过，未靠重跑；SW-10 事件→handler 0.2 ms、事件→runner 18.8 ms（来源 runner-stop）。软件渲染下关闭 GPU watchdog 后进程回收未再出现；工作集趋势约 2.5→2.8 GB，增长平缓（非泄漏）。
 - 历史（保留不删）：线上部署 `95a80413`（run 42040828875）曾通过部署后 smoke；`42074606433` 那轮 smoke-suite 两项断言失败，已由画质档修复覆盖。smoke-suite 仍是 `continue-on-error: true`，工作流总览成功不代表套件通过，发布验收必须单独看该作业。
 
 代码修改后的验证顺序：

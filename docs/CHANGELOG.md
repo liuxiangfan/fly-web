@@ -6,6 +6,12 @@
 >
 > 新增一轮里程碑时：在本文件顶部加一节（倒序），同步 PROJECT-STATE 的当前状态与验证入口。
 
+## 2026-11-07 · CI 首轮双绿
+
+- 软件渲染下关闭 GPU watchdog（SwiftShader 慢会被 watchdog 当挂起杀掉），并让工作集探针记录趋势；提交 `b12b832` 的 `CI`（gate、app 87/87、devices 20/20）与 `Deploy`（verify、smoke-suite）**首轮全部通过**，未使用重跑。
+
+- 实测工作集约 2.5→2.8 GB、增长平缓；回收时 JS 堆仅 12 MB，排除应用内存泄漏。
+
 ## 2026-11-07 · 取消停止时刻口径修正与二次证据冻结
 
 - CI 的 `smoke-suite` 出现过一次**用例级**失败：取消时 runner 已在分片（163 片、单片最长 31.4 ms），219.9 ms 内确实停下，但 `runnerStoppedAt` 缺失。根因是 `onStop` 用 `batchGeneration === myGen + 1` 当判据——世代号只应防止旧批次回写界面，不该决定「停止时刻」。改为「有取消在等且批量已不在运行」即记录。
