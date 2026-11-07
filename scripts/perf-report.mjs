@@ -198,19 +198,24 @@ if (workerSettled) {
     input: window.__perf.input, observedAt: performance.now(),
     result: window.attitudeDemo.experiment.batchResult(), body: document.getElementById("batch-body")?.innerHTML ?? "" })) };
   const timing = after.state.cancelTiming, input = after.input;
-  mainCancelLatencyMs = timing?.requestedAt != null && timing?.runnerStoppedAt != null ? timing.runnerStoppedAt - timing.requestedAt : null;
+  // 与 browser-smoke 同一口径：runner 已在分片就要求真实的 runnerStoppedAt；
+  // 取消落在准备阶段（一次分片都没跑）时用取消结算时刻，来源单独记录。
+  const runnerExisted = (diagnostics.beforeCancellation?.state?.slices?.count ?? 0) > 0;
+  const stopAt = timing?.runnerStoppedAt ?? (runnerExisted ? null : timing?.postAwaitAt ?? null);
+  mainCancelLatencyMs = timing?.requestedAt != null && stopAt != null ? stopAt - timing.requestedAt : null;
   partialSeeds = after.state.partialSeeds;
   diagnostics.cancellation = {
-    rawTiming: timing ?? null, cancelledSeen, runnerSettled,
+    rawTiming: timing ?? null, cancelledSeen, runnerSettled, runnerExisted,
+    stopSource: timing?.runnerStoppedAt != null ? "runner-stop" : stopAt != null ? "prepare-time-settle" : null,
     nodeInputToHandlerMs: input ? input.timeOrigin + input.handlerAt - node.sentEpochMs : null,
     eventToHandlerMs: input ? input.handlerAt - input.eventTimeStamp : null,
-    handlerToRunnerStopMs: input && timing?.runnerStoppedAt != null ? timing.runnerStoppedAt - input.handlerAt : null,
+    handlerToRunnerStopMs: input && stopAt != null ? stopAt - input.handlerAt : null,
     requestToRunnerStopMs: mainCancelLatencyMs,
     runnerStopToPostAwaitMs: timing?.runnerStoppedAt != null && timing?.postAwaitAt != null ? timing.postAwaitAt - timing.runnerStoppedAt : null,
     requestToPostAwaitMs: after.state.cancelLatencyMs,
-    eventToRunnerStopMs: input && timing?.runnerStoppedAt != null ? timing.runnerStoppedAt - input.eventTimeStamp : null,
-    nodeInputToRunnerStopMs: input && timing?.runnerStoppedAt != null ? input.timeOrigin + timing.runnerStoppedAt - node.sentEpochMs : null,
-    observedAfterStopMs: timing?.runnerStoppedAt != null ? after.observedAt - timing.runnerStoppedAt : null,
+    eventToRunnerStopMs: input && stopAt != null ? stopAt - input.eventTimeStamp : null,
+    nodeInputToRunnerStopMs: input && stopAt != null ? input.timeOrigin + stopAt - node.sentEpochMs : null,
+    observedAfterStopMs: stopAt != null ? after.observedAt - stopAt : null,
     clockNote: "Node/browser epoch uses timeOrigin+performance.now; event/runner/await use page monotonic time",
   };
 } else diagnostics.waitFailures.push({ phase: "main cancellation measurement", reason: "Worker 批量未完成，未假装启动新批量或吞掉挂起任务" });

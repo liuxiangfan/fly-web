@@ -2266,16 +2266,27 @@ try {
     diagnostic.afterCancellation = { ...await snapshot(), ...after };
     const timing = after.state.cancelTiming;
     const input = after.input;
+    /**
+     * 「停下」时刻的两种合法来源：
+     *  · 主线程 runner 已经开始分片（slices.count > 0）→ 必须有 runnerStoppedAt；
+     *  · 取消落在**准备阶段**（一次分片都还没跑）→ 没有 runner 可停，等价口径是取消结算（postAwaitAt）。
+     * 第二种不许被当成「缺失即通过」：它同样受 200 ms 硬约束，且单独记录来源，便于事后区分。
+     */
+    const runnerExisted = (diagnostic.beforeCancellation?.state?.slices?.count ?? 0) > 0;
+    const stopAt = timing?.runnerStoppedAt ?? (runnerExisted ? null : timing?.postAwaitAt ?? null);
+    const stopSource = timing?.runnerStoppedAt != null ? "runner-stop" : stopAt != null ? "prepare-time-settle" : null;
     diagnostic.cancellation = {
       nodeInputToHandlerMs: input ? input.timeOrigin + input.handlerAt - nodeInputSentEpochMs : null,
       eventToHandlerMs: input ? input.handlerAt - input.eventTimeStamp : null,
-      handlerToRunnerStopMs: input && timing?.runnerStoppedAt != null ? timing.runnerStoppedAt - input.handlerAt : null,
-      requestToRunnerStopMs: timing?.requestedAt != null && timing?.runnerStoppedAt != null ? timing.runnerStoppedAt - timing.requestedAt : null,
+      stopSource,
+      runnerExisted,
+      handlerToRunnerStopMs: input && stopAt != null ? stopAt - input.handlerAt : null,
+      requestToRunnerStopMs: timing?.requestedAt != null && stopAt != null ? stopAt - timing.requestedAt : null,
       runnerStopToPostAwaitMs: timing?.runnerStoppedAt != null && timing?.postAwaitAt != null ? timing.postAwaitAt - timing.runnerStoppedAt : null,
       requestToPostAwaitMs: after.state.cancelLatencyMs,
-      eventToRunnerStopMs: input && timing?.runnerStoppedAt != null ? timing.runnerStoppedAt - input.eventTimeStamp : null,
-      nodeInputToRunnerStopMs: input && timing?.runnerStoppedAt != null ? input.timeOrigin + timing.runnerStoppedAt - nodeInputSentEpochMs : null,
-      observedAfterStopMs: timing?.runnerStoppedAt != null ? after.observedAt - timing.runnerStoppedAt : null,
+      eventToRunnerStopMs: input && stopAt != null ? stopAt - input.eventTimeStamp : null,
+      nodeInputToRunnerStopMs: input && stopAt != null ? input.timeOrigin + stopAt - nodeInputSentEpochMs : null,
+      observedAfterStopMs: stopAt != null ? after.observedAt - stopAt : null,
       rawTiming: timing ?? null,
       clockNote: "Node/browser epoch uses timeOrigin+performance.now; event/runner/await use page monotonic time",
       cancelledSeen, runnerSettled,
@@ -2333,7 +2344,7 @@ try {
       mainCancel.after.state.activeJob === 0 && diagnostics.sw10.waitFailures.length === 0,
     `命令传输+输入等待→handler ${cancelMetrics.nodeInputToHandlerMs?.toFixed(1) ?? "缺失"} ms（仅诊断）；` +
       `浏览器事件→handler ${cancelMetrics.eventToHandlerMs?.toFixed(1) ?? "缺失"} ms；handler→runner ${cancelMetrics.handlerToRunnerStopMs?.toFixed(1) ?? "缺失"} ms；` +
-      `runner→post-await ${cancelMetrics.runnerStopToPostAwaitMs?.toFixed(1) ?? "缺失"} ms；事件→runner ${cancelMetrics.eventToRunnerStopMs?.toFixed(1) ?? "缺失"} ms（固定200）；` +
+      `runner→post-await ${cancelMetrics.runnerStopToPostAwaitMs?.toFixed(1) ?? "缺失"} ms；事件→runner ${cancelMetrics.eventToRunnerStopMs?.toFixed(1) ?? "缺失"} ms（固定200，来源 ${cancelMetrics.stopSource ?? "缺失"}）；` +
       `取消前「${mainCancel.during.status}」；丢弃 ${mainCancel.after.state.partialSeeds} 个；等待失败 ${diagnostics.sw10.waitFailures.length}`,
   );
   check(

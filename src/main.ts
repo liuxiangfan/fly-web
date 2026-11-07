@@ -3643,7 +3643,10 @@ async function runBatch(): Promise<void> {
         progressEverySec: 0.5,
         shouldCancel: cancelledNow,
         onStop: () => {
-          if (batchGeneration === myGen + 1 && !batchRunning) batchCancelTiming.runnerStoppedAt = performance.now();
+          // 时刻的语义是「**这一次取消请求**之后 runner 停下」，所以判据是「有取消在等」+「批量已不在运行」，
+          // 不能用 `batchGeneration === myGen + 1`：世代只负责防止旧回写，实测它会在取消与停止之间被
+          // 别处推进（CI 上出现过 runner 明明在 219.9 ms 内停下、时间戳却缺失，整条断言因此判失败）。
+          if (!batchRunning && batchCancelRequestedAt !== null) batchCancelTiming.runnerStoppedAt = performance.now();
         },
         onProgress: () => !cancelledNow(),
       },
