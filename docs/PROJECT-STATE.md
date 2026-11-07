@@ -2,10 +2,9 @@
 
 <!-- current:begin -->
 
-> 文档更新：2026-11-07 · 修复分支：`fix/smoke-interaction-release` · 已发布 [v0.2.0-rc.1 预发行](https://github.com/liuxiangfan/fly-web/releases/tag/v0.2.0-rc.1)，提交 `c7d353b0605e`；正式 v0.2.0 仍未发布，PR #2 未合并。
-> 2026-11-07 按 [`WINDOWS-PERFORMANCE-OPTIMIZATION-PLAN.md`](WINDOWS-PERFORMANCE-OPTIMIZATION-PLAN.md) 的 WP-01/WP-03 做了**软件渲染画质档**与课程冷加载反馈：SwiftShader/llvmpipe 等无 GPU 环境自动关闭 MSAA/阴影/IBL、像素比封顶 1，正常 GPU 仍走原画质。提交 `2640153` 的 Windows CI：`gate`、`smoke-shards (app)` 87/87、`smoke-shards (devices)` 20/20 全绿；完整 `smoke-suite` 重跑后 **107 PASS / 0 FAIL / 0 warn**。SW-10 事件→handler 0.3 ms、事件→runner 14.7 ms、timer p95 39.6 ms（修复前 302.5／314.4／326.2 ms）；课程 13 步全过。
-> 最新软件质量复核：见 [`QUALITY-SOFTWARE-ONLY.md`](QUALITY-SOFTWARE-ONLY.md)（本轮按软件工单实施后重新评分，含"未做到"的逐条说明）。
-> 顺序与状态看 [`ROADMAP.md`](ROADMAP.md)，具体方法与反例看 [`SOFTWARE-IMPROVEMENT-PLAN.md`](SOFTWARE-IMPROVEMENT-PLAN.md)。
+> 文档更新：2026-11-07 · 分支已合并（PR #2 → master `db1a93f`）· 正式版 [v0.2.0](https://github.com/liuxiangfan/fly-web/releases/tag/v0.2.0) 已发布并部署。
+> 线上 <https://fly_web.070616.xyz> 的 `build-provenance.json` 指向合并提交 `db1a93f`，`sourceDigest` 与冻结证据一致（`2bb7ea30…`）。旧预发行 `v0.2.0-rc.1` 保留，不再更新。
+> 性能工作（软件渲染画质档、取消停止时刻口径、公式复制回退）的方法与后续工单见 [`WINDOWS-PERFORMANCE-OPTIMIZATION-PLAN.md`](WINDOWS-PERFORMANCE-OPTIMIZATION-PLAN.md)。
 
 ## 一句话
 
