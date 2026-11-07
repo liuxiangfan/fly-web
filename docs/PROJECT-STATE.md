@@ -17,8 +17,8 @@
 
 ## 当前机器口径
 
-<!-- baseline: 54d85f57600ff09cc7b5f6c137bd65daf1f292e3 -->
-<!-- 基线口径：上一行是**本轮证据采集时**的提交；此后只有文档与证据登记改动，产品源码摘要未变（2bb7ea30…）。 -->
+<!-- baseline: bc95b96db048ef13e5952ee76200e911331368c8 -->
+<!-- 基线口径：上一行是本轮 CI 证据（run 42384961739 的 head）的提交；本机长稳/视觉/性能报告采集于 e9b1edd，两者产品源码摘要同为 2bb7ea30（其间只有 scripts 与文档改动），所以证据仍然有效。 -->
 <!-- counts: experiments=19 demos=8 selftest=126 smoke=107 docpages=15 -->
 <!-- verify: check=155 contracts=yes status=yes smoke=107 budget=14 evidence=yes -->
 数值自检 126 + 场景几何 10 + HTML 契约 15 + 文档基准 4
@@ -36,6 +36,8 @@
 - 长稳 **600 s ×2**：批量（常驻水位 0.9 MB、峰值增量 26.4 MB、趋势 6.0 MB、116 样本）与软件替身重连（4.6 MB、27.8 MB、16.7 MB、122 样本）——`generated/soak-*-600-2bb7ea30.json`。
 - 视觉 11 张（320/390/768/1440 视口、200% 文字缩放、打印与三视图，控制台零错误）——`generated/visual-evidence-2bb7ea30.json`；性能 `generated/perf-report-2bb7ea30.json`（墙钟 58.9 fps、真实输入 p95 1.3 ms、运行期 timer p95 13.4 ms、取消 11.9 ms、堆峰值 20.9 MB）；体积归因 `generated/size-report-2bb7ea30.json`。
 - 严格验收通过：`npm run evidence:verify`（源码摘要 + 产物摘要 + buildId 三层绑定）。
+- **CI 侧五轮稳定性**：`workflow_dispatch` 在 Windows 上连跑 5 轮（run 42384961739，head `bc95b96`）——每轮 107 项、零 FAIL、零 warning、零未计划重启，登记为 `ci-stability-win-bc95b96`（current，`evidence:verify` 通过）；脚本按 artifacts 核对 workflow/job/attempt、冒烟步骤真的执行、五轮完整集合与 head_sha 绑定。
+- **单浏览器标签页上限**：CI 上同一浏览器开到第 10~11 个标签页时渲染进程会被回收（两次同一位置；JS 堆 12 MB、工作集 812–863 MB，非内存耗尽）。现达到 10 个标签页即**主动重建**并记入 `plannedRecycles`；未计划的回收仍判本轮失败。
 - **Windows CI**：提交 `2640153` 的 `gate`、`smoke-shards (app)` 87/87、`smoke-shards (devices)` 20/20 全绿，完整 `smoke-suite` 重跑后 107 PASS / 0 FAIL / 0 warn（SW-10 事件→handler 0.3 ms、事件→runner 14.7 ms、timer p95 39.6 ms，修复前 302.5／314.4／326.2 ms）。提交 `e9b1edd` 的 `smoke-suite` 也已全绿；同轮 CI 的 app 分片仍遇到一次 Chrome 进程被回收（87 项本身全 PASS），现场记录显示当时 JS 堆仅 12 MB、DOM 1 个文档——**不是应用内存泄漏**，是 2 vCPU + SwiftShader 环境下的进程级回收，已加工作集采样继续观察。
 - **提交 `b12b832` 两条工作流首轮即全绿**：`CI`（gate、app 87/87、devices 20/20）与 `Deploy`（verify、smoke-suite）均一次通过，未靠重跑；SW-10 事件→handler 0.2 ms、事件→runner 18.8 ms（来源 runner-stop）。软件渲染下关闭 GPU watchdog 后进程回收未再出现；工作集趋势约 2.5→2.8 GB，增长平缓（非泄漏）。
 - 历史（保留不删）：线上部署 `95a80413`（run 42040828875）曾通过部署后 smoke；`42074606433` 那轮 smoke-suite 两项断言失败，已由画质档修复覆盖。smoke-suite 仍是 `continue-on-error: true`，工作流总览成功不代表套件通过，发布验收必须单独看该作业。
@@ -71,9 +73,9 @@ UI 变化还需截图与控制台检查。页面缩放、纯文字放大与读�
 | SW-04 schema／克隆／规范形 | 已实施 | 克隆/迁移/规范化/校验共用同一份白名单与字段顺序；未知参数键明确拒绝并给字段路径（`schema-contract` 102 项） |
 | SW-05 超时与迟到完成 | 已实施 | 原始操作与会话所有权分离：超时后句柄进隔离队列、迟到落定自行关闭、`dispose` 只在真正关闭后返回 true（`lifecycle-contract` 18 项） |
 | SW-06 证据交叉绑定 | 已实施 | `dist/build-provenance.json`（源码摘要 + 产物摘要 + buildId）；页面自报 buildId；采集前后核对被服务产物身份与漂移；校验器按类型解析报告正文（含像素哈希）（`evidence-contract` 9 项） |
-| SW-07 完整集合与 CI 登记 | 已实施（本机部分） | 冒烟清单 + 结构化 `completed` 结果 + 统一判定（assert/incomplete/env/unknown）；`register-ci-run` 强化为"workflow/job/attempt + 步骤真的执行 + 产物五轮完整集合 + 摘要绑定 head_sha"（`smoke-verdict.test` 8 项）。**跨平台 CI 轮次未跑**（需授权推送） |
+| SW-07 完整集合与 CI 登记 | 已实施 | 冒烟清单 + 结构化 `completed` 结果 + 统一判定（assert/incomplete/env/unknown）；`register-ci-run` 强化为"workflow/job/attempt + 步骤真的执行 + 产物五轮完整集合 + 摘要绑定 head_sha"（`smoke-verdict.test` 8 项）。Windows CI 上的五轮由 `workflow_dispatch` 触发并按登记脚本核对（本阶段只支持 Windows，不跑 Ubuntu） |
 | SW-08 长稳末段增长 | 已实施 | 保留水位/峰值/趋势，新增"末段翘尾"判据（尾窗水位 + 持续超阈 + 不回落）与**停载后回落观察**阶段；采样覆盖（墙钟/空洞/样本数）单独判定（`soak-contract` 11 项） |
-| SW-09 预算口径与性能 | 部分实施 | 口径、纯函数判定、边界测试、sourcemap 归因（`npm run size:report`）、真实页面性能实测（`npm run perf`：可交互/墙钟帧率/长任务/输入延迟/取消延迟/堆峰值）已落地；**名义上限内剩余 1.1 KB，减重阶段未完成**（见 `QUALITY-SOFTWARE-ONLY.md`） |
+| SW-09 预算口径与性能 | 口径已实施；减重阶段有实测结论 | 口径、纯函数判定、边界测试、sourcemap 归因、真实页面性能实测已落地。减重实测：聚合 267.1 KiB gzip（有效门槛 270，余 2.9 KiB）；唯一结构性重复是 Worker 里那 15.9 KiB（把 worker 换成空 stub 后该 chunk 从 44,993 B 降到 52 B，实测），去重后约 253 KiB，仍高于 244.8 KiB 目标约 8 KiB；再减只能删教学能力或重写 three 用法，**按工单"另定标准需明确决策"的规则留在待决策项** |
 | SW-10 主线程降级取消 | 已实施 | 降级分支复用 runner 异步出口（128 步/片 + macrotask 让出），取消在下一片生效、半成品种子不计入统计；本机实测取消 11~73 ms、输入延迟 p95 ≤ 5 ms（真实点击取消用例 + `worker-contract`） |
 | SW-11 可访问性与窄屏 | 部分实施 | 窄屏文档目录改 `<details>` 折叠（首屏即见正文）、纯键盘往返与焦点归还、根字号放大的实测记录、Ctrl+K 搜索转义反例；**读屏抽查、真实浏览器字体设置路径与人工视觉判定未做**（逐条记在 `ACCESSIBILITY-ACCEPTANCE.md`） |
 | SW-12 职责拆分与覆盖 | 部分实施 | 已拆出 `ui/doc-search.ts`（纯函数 + 6 项契约 + 冒烟覆盖，顺带修掉查询串注入）；**校准栈/装配层其余部分未拆** |
@@ -81,7 +83,7 @@ UI 变化还需截图与控制台检查。页面缩放、纯文字放大与读�
 仍未完成的事（不许被上面的表格掩盖）：
 
 1. 跨平台 CI 轮次（需授权推送后运行）与 `register-ci-run` 的真实运行登记。
-2. SW-09 的减重阶段（目标：按冻结基线的聚合预算留 10% 余量 ≈ 244.8 KiB gzip；当前 266 KiB）。
+2. SW-09 的减重阶段：目标 244.8 KiB gzip，实测当前 267.1 KiB（有效门槛 270，余 2.9）。唯一结构性重复是 Worker 的 15.9 KiB（空 stub 实测 44,993 B → 52 B），去重后约 253 KiB，仍差约 8 KiB；再减需删教学能力或重写 three 用法，按工单规则属**待明确决策**项。
 3. SW-11 的读屏、真实字体设置路径与人工视觉判定。
 4. SW-12 的装配层拆分（`src/main.ts` 仍约 350 KB 源码，占主包归因的第一位）。
 

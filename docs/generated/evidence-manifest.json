@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-11-07T10:53:28.977Z",
+  "generatedAt": "2026-11-07T15:51:22.419Z",
   "reviewCommit": "830e4e3786bcf4dddbada7514fed05a8fd3a83ad",
   "entries": [
     {
@@ -755,6 +755,29 @@
       "supersedes": [],
       "runs": null,
       "notes": "本机采集（2026-11-07，构建提交 e9b1edd / 源码摘要 2bb7ea30）：报告正文随仓库，PNG 留在本机 screenshots/visual-2bb7ea30/（被 gitignore），报告逐张记录尺寸与 sha256。"
+    },
+    {
+      "id": "ci-stability-win-bc95b96",
+      "kind": "github-actions-smoke-stability",
+      "path": "https://github.com/liuxiangfan/fly-web/actions/runs/42384961739/job/128440812107",
+      "sha256": null,
+      "sourceCommit": "bc95b96db048ef13e5952ee76200e911331368c8",
+      "sourceDigest": "2bb7ea308692fcecbe6f5384b9618229",
+      "distHash": "98227c8e0d4eb42c",
+      "buildId": "2bb7ea308692-98227c8e0d4eb42c",
+      "browserVersion": "Edg/156.0.4314.58",
+      "runnerOs": "windows-latest",
+      "externalRunId": "42384961739",
+      "jobId": "128440812107",
+      "attempt": 1,
+      "workflow": "CI",
+      "runs": 5,
+      "result": "PASS",
+      "provenanceComplete": true,
+      "localOnly": false,
+      "current": true,
+      "supersedes": [],
+      "notes": "GitHub Actions run 42384961739（workflow「CI」，attempt 1）的 job「smoke-stability」（windows-latest）；判定 PASS；归因 pass；标记 current：head_sha 与审查基线一致。。"
     }
   ]
 }

@@ -1,7 +1,16 @@
 # 验证证据与证明边界
 
-> 最新验证：2026-11-06 · v0.2.0 修复分支，本地提交 `dbf22c7`（远端尚未更新）。
-> 当前本地验收源码摘要 `63cd97bf0bf234009a816a841699303f`，固定构建 `63cd97bf0bf2-afbbb5d7696c5008`。以下旧轮次细节保留为历史，不代表当前 CI 已通过。
+> 最新验证：2026-11-07 · 正式版 [v0.2.0](https://github.com/liuxiangfan/fly-web/releases/tag/v0.2.0) 已发布并部署，线上提交 `4c2176c`（合并提交 `db1a93f`）。
+> 当前验收源码摘要 `2bb7ea308692fcecbe6f5384b9618229`，本机构建 `2bb7ea308692-e791bb9d179928b1`；线上 `build-provenance.json` 的 `sourceDigest` 与之一致（产物摘要因提交戳不同而不同，属预期）。
+> 以下旧轮次细节保留为历史。最新结论只认机器索引里的 current 条目：`npm run evidence:verify`。
+
+## v0.2.0 验收要点（2026-11-07）
+
+- **Windows CI**：`CI`（gate、app 87/87、devices 20/20）与 `Deploy`（verify、smoke-suite 107 PASS / 0 FAIL / 0 warn）在合并提交上全部通过；SW-10 事件→handler 0.3 ms、事件→runner 14.7 ms、timer p95 39.6 ms（修复前 302.5／314.4／326.2 ms）。
+- **本机证据**（源码摘要 `2bb7ea30`）：连续 5 轮 ×107 项全绿；两份 600 s 长稳（批量常驻 0.9 MB／趋势 6.0 MB；重连 4.6 MB／16.7 MB）；视觉 11 张零控制台错误；性能墙钟 58.9 fps、真实输入 p95 1.3 ms、运行期 timer p95 13.4 ms、取消 11.9 ms、堆峰值 20.9 MB；`evidence:verify` 三层绑定通过。
+- **量具自身的修正**（都已成为常驻行为）：取消停止时刻改按「有取消在等且批量已不在运行」判定；外部真值回放改为有界状态等待；诊断续行不再复用 `[FAIL]` 前缀；浏览器回收时记录最后用例、JS 堆与 Chrome 工作集趋势。
+- **CI 侧五轮稳定性**（run 42384961739，head `bc95b96`）：Windows 上连续 5 轮 ×107 项全过、零 warning、零未计划重启（每轮各 2 次计划内浏览器重建，记录在 `plannedRecycles`）；已用 `register-ci-run.mjs` 从 artifacts 核对并登记为 current。
+- **单浏览器标签页数量上限**：CI（2 vCPU + SwiftShader）实测同一浏览器开到第 10~11 个标签页时渲染进程会被系统回收（两次都落在同一位置，JS 堆仅 12 MB、工作集 812–863 MB，不是内存耗尽）。现在达到 10 个标签页时**主动重建**浏览器并记入 `plannedRecycles`；未计划的回收仍然判本轮失败。
 
 ## v0.2.0 本地验证
 
@@ -174,7 +183,7 @@ node scripts/evidencecheck.mjs --require-source --require-build   # npm run evid
 
 1. **CI 上的五轮完整集合**：本机已 5/5 全绿；CI 端受 2 vCPU 容量限制（见 §7.1），
    要「CI 也五轮全绿」需要更大 runner 或把套件再拆片——这是环境/预算决策，未做。
-2. **实质减重**：冻结基线的聚合预算目标（10% 余量 ≈ 244.8 KiB gzip）未达成（当前 266 KiB）；
+2. **实质减重**：聚合预算目标 244.8 KiB gzip 未达成（实测 267.1 KiB；Worker 重复 15.9 KiB 是唯一结构性重复，去重后约 253 KiB，仍差约 8 KiB，需删功能或重写 three 用法）；
    主包名义上限内仅剩 1.1 KB。下一步是把校准栈与其余装配层流程改成按需加载（SW-12 范围），
    并按 SW-09 第 6 条做 before/after 对照。
 3. **纯文字放大 200%**：实测本装置版式为 px 计量，浏览器"字体大小"设置不改变排版；
