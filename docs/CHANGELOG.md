@@ -6,6 +6,13 @@
 >
 > 新增一轮里程碑时：在本文件顶部加一节（倒序），同步 PROJECT-STATE 的当前状态与验证入口。
 
+## 2026-11-07 · 五轮稳定性与证据冻结
+
+- 本机（Windows，Edge，SwiftShader，CI 同档 800×600 + SMOKE_SLOW）：连续 **5 轮 × 107 项全过、零 FAIL、零 warning、零重启**——`generated/stability-local-windows-358be02f.json`。
+- 期间发现「外部真值回放」用固定 250 ms 等统计样本：浏览器刚被回收、页面重编着色器时可能一步没推进，表格四列全是「—」。改为**有界状态等待**（最多 8 s，等 Mahony 均值成为有限值），失败时把 playing/simTime 一起交回断言；单跑复验 Mahony 均值 0.40°、simTime 10.00。
+- 两份 600 s 长稳通过（批量：常驻水位 5.6 MB、趋势 4.7 MB；重连：3.5 MB、17.2 MB，均在门槛内）；视觉 11 张（320/390/768/1440、200% 文字、打印、三视图，零控制台错误）；性能墙钟 58.7 fps、真实输入 p95 3.7 ms、运行期 timer p95 12.4 ms、取消 10.7 ms；体积归因同步重采。
+- 证据按源码摘要 + 产物摘要 + buildId 三层绑定登记（`npm run evidence:verify` 通过）。旧的 CI 稳定性失败条目 `ci-windows-stability-830e4e3` 降为历史并注明由本轮取代——失败记录保留，不删除。
+
 ## 2026-11-07 · 软件渲染画质档（WP-01/WP-03 第一轮）
 
 - 起点是 CI 的一条因果链：`smoke-suite` 在 Windows 2 vCPU 上「事件→handler 302.5 ms、运行中 timer p95 326.2 ms、单帧 172.7 ms、切片 216.9 ms」，而 handler→runner 只要 11.9 ms——点击不是处理慢，是主线程被整段占住。

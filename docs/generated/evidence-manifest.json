@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-11-06T06:12:40.103Z",
+  "generatedAt": "2026-11-07T09:04:55.549Z",
   "reviewCommit": "830e4e3786bcf4dddbada7514fed05a8fd3a83ad",
   "entries": [
     {
@@ -115,9 +115,10 @@
       "result": "FAIL",
       "provenanceComplete": true,
       "localOnly": false,
-      "current": true,
+      "current": false,
       "supersedes": [],
-      "notes": "Gate and one-shot app/devices shards passed; 5x Windows stability job failed."
+      "notes": "Historical FAILURE kept on record: the 5-round Windows CI stability run for commit 830e4e3 did not pass. Superseded by the local 5-round run on commit f74d2a8 (sourceDigest 358be02f): stability-local-windows-358be02f.",
+      "supersededBy": "stability-local-windows-358be02f"
     },
     {
       "id": "ci-ubuntu-stability-e8e6a8e",
@@ -270,12 +271,12 @@
     {
       "id": "perf-current",
       "kind": "performance-report",
-      "path": "docs/generated/perf-report.json",
-      "sha256": "77ef5dd4ac27e2fb62f7739379df8135858eb8a480b2fa1b1405974ad9d4ea31",
-      "sourceCommit": "dbf22c7de295395bd4faf88cc9802014fbb1cefb",
-      "sourceDigest": "63cd97bf0bf234009a816a841699303f",
-      "distHash": "afbbb5d7696c5008",
-      "buildId": "63cd97bf0bf2-afbbb5d7696c5008",
+      "path": "docs/generated/perf-report-358be02f.json",
+      "sha256": "5249017b595a839977a695c967c34c840f2790c9ffd9f259b1049c3924a4be33",
+      "sourceCommit": "f74d2a8b407681921db3656bede9e9624c2e405b",
+      "sourceDigest": "358be02fe263c91dbba776aa5bf18031",
+      "distHash": "bfd523554742eeb8",
+      "buildId": "358be02fe263-bfd523554742eeb8",
       "browserVersion": "Edg/156.0.4314.58",
       "runnerOs": "win32 x64",
       "result": "PASS",
@@ -284,17 +285,17 @@
       "current": true,
       "supersedes": [],
       "runs": null,
-      "notes": "本机采集（2026-11-06）：由 scripts/register-local-evidence.mjs 从报告正文读取事实后登记；同类型同平台的旧 current 已自动让位为历史观测。完整集合/判据由 performance-report 的解析器复核。"
+      "notes": "本机采集（2026-11-07）：由 scripts/register-local-evidence.mjs 从报告正文读取事实后登记；同类型同平台的旧 current 已自动让位为历史观测。完整集合/判据由 performance-report 的解析器复核。"
     },
     {
       "id": "size-current",
       "kind": "size-report",
-      "path": "docs/generated/size-report.json",
-      "sha256": "c1918927f8df8989772163487a842bcbcdb1a889b8c0497ca2ccaa76cf123d27",
-      "sourceCommit": "dbf22c7de295395bd4faf88cc9802014fbb1cefb",
-      "sourceDigest": "63cd97bf0bf234009a816a841699303f",
-      "distHash": "afbbb5d7696c5008",
-      "buildId": "63cd97bf0bf2-afbbb5d7696c5008",
+      "path": "docs/generated/size-report-358be02f.json",
+      "sha256": "dde9cb77f62c60fe32e0d7326427fba1b98dfaf39f02dea93a857f072d1f74fa",
+      "sourceCommit": "f74d2a8b407681921db3656bede9e9624c2e405b",
+      "sourceDigest": "358be02fe263c91dbba776aa5bf18031",
+      "distHash": "bfd523554742eeb8",
+      "buildId": "358be02fe263-bfd523554742eeb8",
       "browserVersion": null,
       "runnerOs": "win32 x64",
       "result": "PASS",
@@ -303,7 +304,7 @@
       "current": true,
       "supersedes": [],
       "runs": null,
-      "notes": "本机采集（2026-11-06）：由 scripts/register-local-evidence.mjs 从报告正文读取事实后登记；同类型同平台的旧 current 已自动让位为历史观测。完整集合/判据由 size-report 的解析器复核。"
+      "notes": "本机采集（2026-11-07）：由 scripts/register-local-evidence.mjs 从报告正文读取事实后登记；同类型同平台的旧 current 已自动让位为历史观测。完整集合/判据由 size-report 的解析器复核。"
     },
     {
       "id": "stability-local-windows-a958b348",
@@ -533,10 +534,11 @@
       "result": "PASS",
       "provenanceComplete": true,
       "localOnly": false,
-      "current": true,
+      "current": false,
       "supersedes": [],
       "runs": null,
-      "notes": "本机采集（2026-11-06）：由 scripts/register-local-evidence.mjs 从报告正文读取事实后登记；同类型同平台的旧 current 已自动让位为历史观测。完整集合/判据由 software-soak-batch 的解析器复核。"
+      "notes": "本机采集（2026-11-06）：由 scripts/register-local-evidence.mjs 从报告正文读取事实后登记；同类型同平台的旧 current 已自动让位为历史观测。完整集合/判据由 software-soak-batch 的解析器复核。已由 soak-batch-600-358be02f 取代（同一平台的新采集）。",
+      "supersededBy": "soak-batch-600-358be02f"
     },
     {
       "id": "soak-reconnect-600-63cd97bf",
@@ -552,10 +554,11 @@
       "result": "PASS",
       "provenanceComplete": true,
       "localOnly": false,
-      "current": true,
+      "current": false,
       "supersedes": [],
       "runs": null,
-      "notes": "本机采集（2026-11-06）：由 scripts/register-local-evidence.mjs 从报告正文读取事实后登记；同类型同平台的旧 current 已自动让位为历史观测。完整集合/判据由 software-soak-reconnect 的解析器复核。"
+      "notes": "本机采集（2026-11-06）：由 scripts/register-local-evidence.mjs 从报告正文读取事实后登记；同类型同平台的旧 current 已自动让位为历史观测。完整集合/判据由 software-soak-reconnect 的解析器复核。已由 soak-reconnect-600-358be02f 取代（同一平台的新采集）。",
+      "supersededBy": "soak-reconnect-600-358be02f"
     },
     {
       "id": "stability-local-windows-63cd97bf",
@@ -571,10 +574,11 @@
       "result": "PASS",
       "provenanceComplete": true,
       "localOnly": false,
-      "current": true,
+      "current": false,
       "supersedes": [],
       "runs": 5,
-      "notes": "本机采集（2026-11-06）：由 scripts/register-local-evidence.mjs 从报告正文读取事实后登记；同类型同平台的旧 current 已自动让位为历史观测。完整集合/判据由 software-smoke-stability 的解析器复核。"
+      "notes": "本机采集（2026-11-06）：由 scripts/register-local-evidence.mjs 从报告正文读取事实后登记；同类型同平台的旧 current 已自动让位为历史观测。完整集合/判据由 software-smoke-stability 的解析器复核。已由 stability-local-windows-358be02f 取代（同一平台的新采集）。",
+      "supersededBy": "stability-local-windows-358be02f"
     },
     {
       "id": "visual-current-63cd97bf",
@@ -590,10 +594,87 @@
       "result": "PASS",
       "provenanceComplete": true,
       "localOnly": true,
+      "current": false,
+      "supersedes": [],
+      "runs": null,
+      "notes": "本机采集（2026-11-06）：由 scripts/register-local-evidence.mjs 从报告正文读取事实后登记；同类型同平台的旧 current 已自动让位为历史观测。完整集合/判据由 visual-screenshot 的解析器复核。已由 visual-current-358be02f 取代（同一平台的新采集）。",
+      "supersededBy": "visual-current-358be02f"
+    },
+    {
+      "id": "soak-batch-600-358be02f",
+      "kind": "software-soak-batch",
+      "path": "docs/generated/soak-batch-600-358be02f.json",
+      "sha256": "9b4f28513ec527ac046c57a5deadfd68109d2478359f336c9b15e318e9d1a889",
+      "sourceCommit": "f74d2a8b407681921db3656bede9e9624c2e405b",
+      "sourceDigest": "358be02fe263c91dbba776aa5bf18031",
+      "distHash": "bfd523554742eeb8",
+      "buildId": "358be02fe263-bfd523554742eeb8",
+      "browserVersion": "Chrome/156.0.8078.81",
+      "runnerOs": "win32 x64",
+      "result": "PASS",
+      "provenanceComplete": true,
+      "localOnly": false,
       "current": true,
       "supersedes": [],
       "runs": null,
-      "notes": "本机采集（2026-11-06）：由 scripts/register-local-evidence.mjs 从报告正文读取事实后登记；同类型同平台的旧 current 已自动让位为历史观测。完整集合/判据由 visual-screenshot 的解析器复核。"
+      "notes": "本机采集（2026-11-07）：由 scripts/register-local-evidence.mjs 从报告正文读取事实后登记；同类型同平台的旧 current 已自动让位为历史观测。完整集合/判据由 software-soak-batch 的解析器复核。"
+    },
+    {
+      "id": "soak-reconnect-600-358be02f",
+      "kind": "software-soak-reconnect",
+      "path": "docs/generated/soak-reconnect-600-358be02f.json",
+      "sha256": "c8d1e4c1786e83d09fa1369139097ed92eb559b8cd0f80030e273a92ffcb67f3",
+      "sourceCommit": "f74d2a8b407681921db3656bede9e9624c2e405b",
+      "sourceDigest": "358be02fe263c91dbba776aa5bf18031",
+      "distHash": "bfd523554742eeb8",
+      "buildId": "358be02fe263-bfd523554742eeb8",
+      "browserVersion": "Chrome/156.0.8078.81",
+      "runnerOs": "win32 x64",
+      "result": "PASS",
+      "provenanceComplete": true,
+      "localOnly": false,
+      "current": true,
+      "supersedes": [],
+      "runs": null,
+      "notes": "本机采集（2026-11-07）：由 scripts/register-local-evidence.mjs 从报告正文读取事实后登记；同类型同平台的旧 current 已自动让位为历史观测。完整集合/判据由 software-soak-reconnect 的解析器复核。"
+    },
+    {
+      "id": "stability-local-windows-358be02f",
+      "kind": "software-smoke-stability",
+      "path": "docs/generated/stability-local-windows-358be02f.json",
+      "sha256": "d4d95016647728aa3dcf36f46f39c66d4525651b54856a52f6f2657c0a1cbe0c",
+      "sourceCommit": "f74d2a8b407681921db3656bede9e9624c2e405b",
+      "sourceDigest": "358be02fe263c91dbba776aa5bf18031",
+      "distHash": "bfd523554742eeb8",
+      "buildId": "358be02fe263-bfd523554742eeb8",
+      "browserVersion": "Edg/156.0.4314.58",
+      "runnerOs": "win32 x64",
+      "result": "PASS",
+      "provenanceComplete": true,
+      "localOnly": false,
+      "current": true,
+      "supersedes": [],
+      "runs": 5,
+      "notes": "本机采集（2026-11-07）：由 scripts/register-local-evidence.mjs 从报告正文读取事实后登记；同类型同平台的旧 current 已自动让位为历史观测。完整集合/判据由 software-smoke-stability 的解析器复核。"
+    },
+    {
+      "id": "visual-current-358be02f",
+      "kind": "visual-screenshot",
+      "path": "docs/generated/visual-evidence-358be02f.json",
+      "sha256": "1f8dac99601272916d2ee972be6e1f01736d6a869cc77c9035c1be5e97a662cb",
+      "sourceCommit": "f74d2a8b407681921db3656bede9e9624c2e405b",
+      "sourceDigest": "358be02fe263c91dbba776aa5bf18031",
+      "distHash": "bfd523554742eeb8",
+      "buildId": "358be02fe263-bfd523554742eeb8",
+      "browserVersion": "Edg/156.0.4314.58",
+      "runnerOs": "win32 x64",
+      "result": "PASS",
+      "provenanceComplete": true,
+      "localOnly": false,
+      "current": true,
+      "supersedes": [],
+      "runs": null,
+      "notes": "本机采集（2026-11-07）：由 scripts/register-local-evidence.mjs 从报告正文读取事实后登记；同类型同平台的旧 current 已自动让位为历史观测。完整集合/判据由 visual-screenshot 的解析器复核。"
     }
   ]
 }
