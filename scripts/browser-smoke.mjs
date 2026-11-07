@@ -8,6 +8,7 @@
  * 文档对话框焦点、A/B 图例、深链恢复、3D canvas 与帧率、控制台错误。
  */
 import puppeteer from "puppeteer-core";
+import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
@@ -117,6 +118,23 @@ const diagnostics = { checkOutcomes: [] };
  * 区分「容量到极限」与「别的原因」的证据。采样放进有界环形（最多 24 个），不逐用例堆积。
  */
 const infraDiag = { lastCheck: "(未开始)", samples: [], disconnects: [] };
+/**
+ * Chrome 进程树的工作集（Windows，`tasklist`）：页面 JS 堆只有 12 MB 时进程仍可能被系统回收，
+ * 因为 SwiftShader 的帧缓冲/纹理由**宿主内存**承担，不在 JS 堆里。只记峰值，够判断"是不是系统内存到顶"。
+ * 非 Windows（本机之外的 CI 或开发机）拿不到就留 null，不当失败。
+ */
+const sampleChromeWorkingSet = () => {
+  if (process.platform !== "win32") return;
+  execFile("tasklist", ["/FI", "IMAGENAME eq chrome.exe", "/FO", "CSV", "/NH"], { timeout: 20000, windowsHide: true }, (err, stdout) => {
+    if (err || !stdout) return;
+    let totalKb = 0;
+    for (const line of String(stdout).split(/\r?\n/)) {
+      const m = /"chrome\.exe","\d+","[^"]*","\d+","([\d,]+) K"/.exec(line);
+      if (m) totalKb += Number(m[1].replace(/,/g, "")) || 0;
+    }
+    if (totalKb > 0) infraDiag.peakChromeMb = Math.max(infraDiag.peakChromeMb ?? 0, Math.round(totalKb / 1024));
+  });
+};
 const samplePageMemory = async (pg) => {
   try {
     const m = await pg.metrics();
@@ -143,7 +161,10 @@ const check = (name, cond, detail) => {
   // 顺手记一个「最近跑过哪个用例」：浏览器被系统回收时，日志只能说明崩溃发生在两条 PASS 之间，
   // 结合这里的名字与下面的堆/DOM 采样才能回答「是不是内存耗到极限」。
   infraDiag.lastCheck = name;
-  if (checkResults.length % 10 === 0) void samplePageMemory(page);
+  if (checkResults.length % 10 === 0) {
+    void samplePageMemory(page);
+    sampleChromeWorkingSet();
+  }
 };
 /** 明确的跳过登记口：跳过的用例必须留痕（"没跑"不许伪装成"通过"）。 */
 const skip = (name, reason) => {
@@ -6004,9 +6025,11 @@ try {
 if (browserRestarts > 0) {
   failures++;
   console.error(`[FAIL] 浏览器进程被回收 ${browserRestarts} 次 — 基础设施失败，本轮不能判通过（请重跑）`);
-  // 把现场一起打出来：不是「机器慢」四个字，而是最后用例、断开时刻与当时的堆/DOM
-  console.error(`[FAIL]   现场：最后一次用例「${infraDiag.lastCheck}」；断开记录 ${JSON.stringify(infraDiag.disconnects)}；` +
-    `堆采样最近 ${infraDiag.samples.length} 个：${JSON.stringify(infraDiag.samples.slice(-4))}`);
+  // 现场用驱动器的续行格式（`       · `）而不是 `[FAIL] `：判据把 `[FAIL] xxx — yyy` 当成
+  // 「用例级失败」，续行再用同一前缀会被读成「仅日志可见的产品缺陷」（实测误报过一次）。
+  console.error(`       · 现场：最后一次用例「${infraDiag.lastCheck}」；断开记录 ${JSON.stringify(infraDiag.disconnects)}；` +
+    `堆采样最近 ${infraDiag.samples.length} 个：${JSON.stringify(infraDiag.samples.slice(-4))}；` +
+    `Chrome 工作集峰值 ${infraDiag.peakChromeMb ?? "缺失"} MB`);
 }
 console.log(failures === 0 ? `\n浏览器冒烟通过 ✅（${passes} 项）` : `\n${failures} 项失败 ❌`);
 if (SHARD !== "all") console.log(`（分片 SMOKE_SHARD=${SHARD}）`);
