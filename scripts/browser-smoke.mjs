@@ -304,6 +304,39 @@ const gotoSafe = async (pg, url = APP_URL) => {
     }
   }
 };
+let plannedRecycles = 0;
+/** 本进程内已新建的标签页数：到阈值就主动重建浏览器（见 newPage 的说明）。 */
+let targetsSinceLaunch = 0;
+const PLANNED_RECYCLE_TARGETS = 10;
+
+/**
+ * 重建浏览器与共享页（`planned` = 主动安排 vs 被动抢救）。
+ * 被动：浏览器已被系统回收，只能重启；主动：在已知接缝处提前重建，把一次**不可控的**
+ * 渲染进程回收换成一次**可控且记录在案**的重建（不计入 browserRestarts）。
+ */
+const restartBrowser = async (planned) => {
+  try { await browser.close(); } catch { /* 已经死了 */ }
+  browser = null;
+  await launchBrowser();
+  targetsSinceLaunch = 0;
+  if (page) {
+    try { await page.close(); } catch { /* 已随进程消失 */ }
+    page = await browser.newPage();
+    await page.setViewport({ ...VIEWPORT, deviceScaleFactor: 1 });
+    attachSharedListeners(page);
+    // 重启后的共享页面必须**重新载入应用**：后面的用例直接读 DOM，
+    // 空白页只会以「Cannot read properties of null」的形式误报成产品缺陷（实测踩到）。
+    try {
+      await page.goto(APP_URL, { waitUntil: "domcontentloaded", timeout: BOOT_MS });
+      await page.waitForFunction(
+        () => document.getElementById("fps")?.textContent !== "-- fps",
+        { timeout: BOOT_MS },
+      );
+    } catch { /* 让具体用例自己的 waitFor 报更准确的失败 */ }
+  }
+  if (planned) plannedRecycles++;
+};
+
 /**
  * 开新页面；浏览器进程被回收时**重启一次再继续**。
  *
@@ -316,29 +349,21 @@ const gotoSafe = async (pg, url = APP_URL) => {
  * 就报 `Attempted to use detached Frame`（实测踩到）。这里重生一个同样的共享页面。
  */
 const newPage = async () => {
+  // 主动重建：CI（2 vCPU + SwiftShader）上实测「同一个浏览器开到第 10~11 个页面」时
+  // 渲染进程会被系统回收，两次都落在同一个位置。与其让它随机落在某个用例中间，
+  // 不如在达到同样数量前重建——所有用例照跑，重建次数记录在 plannedRecycles 里。
+  if (browser && targetsSinceLaunch >= PLANNED_RECYCLE_TARGETS && !shuttingDown) {
+    console.log(`[INFO] 主动重建浏览器：本进程已新建 ${targetsSinceLaunch} 个标签页（计划内，不计基础设施失败）`);
+    await restartBrowser(true);
+  }
   try {
-    return await browser.newPage();
+    const created = await browser.newPage();
+    targetsSinceLaunch++;
+    return created;
   } catch (err) {
     console.warn(`[warn] 新建标签页失败（${err instanceof Error ? err.message.split("\n")[0] : String(err)}）——重启浏览器后重试`);
     browserRestarts++;
-    try { await browser.close(); } catch { /* 已经死了 */ }
-    browser = null;
-    await launchBrowser();
-    if (page) {
-      try { await page.close(); } catch { /* 已随进程消失 */ }
-      page = await browser.newPage();
-      await page.setViewport({ ...VIEWPORT, deviceScaleFactor: 1 });
-      attachSharedListeners(page);
-      // 重启后的共享页面必须**重新载入应用**：后面的用例直接读 DOM，
-      // 空白页只会以「Cannot read properties of null」的形式误报成产品缺陷（实测踩到）。
-      try {
-        await page.goto(APP_URL, { waitUntil: "domcontentloaded", timeout: BOOT_MS });
-        await page.waitForFunction(
-          () => document.getElementById("fps")?.textContent !== "-- fps",
-          { timeout: BOOT_MS },
-        );
-      } catch { /* 让具体用例自己的 waitFor 报更准确的失败 */ }
-    }
+    await restartBrowser(false);
     return browser.newPage();
   }
 };
@@ -6062,6 +6087,7 @@ const structured = {
   aborted,
   abortReason: abortReason || null,
   infraRestarts: browserRestarts,
+  plannedRecycles,
   infraDiag,
   executed: checkResults.length,
   passed: passes,
