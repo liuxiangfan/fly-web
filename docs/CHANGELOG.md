@@ -6,6 +6,13 @@
 >
 > 新增一轮里程碑时：在本文件顶部加一节（倒序），同步 PROJECT-STATE 的当前状态与验证入口。
 
+## 2026-11-20 · 悬停读数布局抖动、空格快捷键与样式收敛
+
+- **游标读数**：`#chart-cursor` 从 `display:none` 切换改为占位常驻（`visibility:hidden` + 一行 `min-height` + `nowrap/ellipsis`）。此前光标进入/离开曲线会让 body grid 增删一行，整个图表区反复上下跳；JS 与 `.hidden` 语义不变，冒烟断言无需改。实测 idle/hover/leave 三态 `#charts` 均为 y=480、h=357，读数行恒 31px。
+- **空格键**：鼠标点过「引导课程上一步/下一步」或回看面板步进按钮后，焦点留在按钮上，浏览器原生空格激活按钮，导致空格变成重复翻页而不是暂停。改为指针点击（`detail>0`）后 `blur()`；键盘激活（detail=0）保留焦点，可访问性不倒退。实测点下一步后 `activeElement=(none)`，空格暂停/继续且步骤号不变，Enter 仍可前进。
+- **样式收敛**：删除 quat 视图/`.section-quat`/`#readout-overlay`/`.formula b` 重复规则；新增 `--bg-raised`、`--bg-chip`、`--danger-text`、`--doc-ctrl-bg/line` 并归并 `#eef2f8`、`#ffc9c4`、`#0b688a`、`#0a1120` 等字面量，零像素变化。
+- **验证**：`tsc` / `npm run check`（0 FAIL）/ `build` / `budget`（18/18，全部 JS 余 0.0 KB 贴线）通过；浏览器冒烟 app **108/108**、devices **21/21**，控制台零错误；截图存 `D:/test-artifacts/quaternion-attitude/smoke/designfix-verify/`。
+
 ## 2026-11-20 · 后续优化最终闭环：ed0f78fb 身份与全套本机证据
 
 - 最终候选 `sourceDigest=ed0f78fb0e2f756be234f370b1954f11`、`buildId=ed0f78fb0e2f-fd379a47f3f6d9f4`、135 输入文件。tsc／完整 check／build 全绿；预算 19/19（产物总量余 0.0 KB、全部 JS gzip 余 0.1 KB，贴线不粉饰）。
