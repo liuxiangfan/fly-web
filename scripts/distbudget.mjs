@@ -67,8 +67,20 @@ const html = files.filter((f) => f.endsWith(".html"));
  * 而不是只看"还没到上限"。基线与上限同口径（同一测量方式、同一单位）。
  * 数据来源：`.audit-current/budget-review-830e4e3.log`（该提交上跑出的预算报告）。
  */
+/**
+ * **2026-11-16 P2 一次性调线记录（项目所有者决策）**
+ *
+ * 触发：C/D（可观性＋事件时间轴、历史回看＋ESKF 解剖）接线后按原门槛实测失败——
+ * 全部 JS 285.1 KiB / 有效 270、总产物 2020.4 KiB / 有效 1980、教学 chunk 123.8 KiB / 有效 115.2（阶段 E 交互收敛后最终 C/D 形态为 285.7 / 2023.3 / 123.9 KiB）。
+ * P1（接线＋归因＋一轮减重）已执行并记录：共享转义、`worker-core` 统一（修复 Worker 反向引用教学 UI）、
+ * 懒加载 preload 过滤均已完成；缺口来自 C/D 净新增代码，继续减只能删功能/删测试/改规则。
+ *
+ * 本次只调整三项上限并冻结新基线，其余项（主包 raw/gzip、外壳、字体、目录、Worker 入口等）保持不变。
+ * **该理由只覆盖本次已声明的 C/D 功能，后续新增功能不得沿用。**
+ * SW-09 的 244.8 KiB 减重目标保留为未达成的历史记录，本次调线不表示减重完成。
+ */
 const BASELINES = {
-  total: 1933 * 1024,
+  total: 2023 * 1024, // 2026-11-16 P2 新基线（含 C/D 与阶段 E 交互收敛）
   fonts: 399 * 1024,
   fontFiles: 17,
   html: 537 * 1024,
@@ -78,14 +90,19 @@ const BASELINES = {
   mainJs: 271 * 1024,
   docDemosJs: 22 * 1024,
   tourJs: 12 * 1024,
+  catalogJs: 0,
+  comparisonJs: 124 * 1024, // 2026-11-16 P2 新基线（含 C/D）
+  diagnosticsJs: 48 * 1024,
+  toolsUi: 0, // 新增按需分类沿用 runner 的零基线，Δ 显示其完整实测体积。
+  runnerJs: 0,
   swJs: 3 * 1024,
   workerJs: 45 * 1024,
-  allJsGzip: 262 * 1024,
+  allJsGzip: 286 * 1024, // 2026-11-16 P2 新基线（含 C/D 与阶段 E 交互收敛）
   mainJsGzip: 101 * 1024,
 };
 
 const LIMITS = {
-  total: 2200 * 1024,         // 全站产物（含所有字体与图标）；2026-11-03 实测 1941 KB
+  total: 2255 * 1024, // 2026-11-16 P2：C/D+阶段E实测 2023.3 KB + 6.2 KiB 余量；仅本次调整
   fonts: 460 * 1024,          // 字体总量（Fira 13 个子集 + KaTeX_Main 4 个）；实测 399 KB
   fontFiles: 24,              // 字体文件数
   // index.html 把全部文档内联（这是产品的核心价值，不是失误），所以上限放得够用；
@@ -120,12 +137,30 @@ const LIMITS = {
   docDemosJs: 26 * 1024,      // 实测 22 KB
   // 引导课程（按需 chunk）：13 步文案约占 6 KB gzip，只在点「开始」/按 G 时下载
   tourJs: 16 * 1024,
+  // 实验库 / 参数挑战目录（按需 chunk）：纯数据，打开对应面板时才下载。
+  // 从首屏主包移出后单列上限，避免它们悄悄长成第二个主包。
+  catalogJs: 20 * 1024,
+  // 单变量对照台（按需 chunk）：面板、视图、报告与共享配置；打开对照面板才下载。
+  comparisonJs: 144 * 1024, // 2026-11-16 P2：C/D 接线实测 123.8 KB + 余量
+  // 诊断 UI（可观性/事件/回看/ESKF）独立按需 chunk：与教学台分开计量，
+  // 避免任一功能增长挤占对照台/任务条的余量；该项为 FIX 轮新增，未上调任何既有上限。
+  diagnosticsJs: 64 * 1024,
+  // CSV 导出弹窗的独立按需分类：只在打开导出弹窗时下载，不计入首屏主包；
+  // 实验报告并入 teaching-ui 计量（与对照/学习面板共享文案字典，且有空闲预取）。
+  toolsUi: 24 * 1024,
+  // 共享数值内核（runner/trace 依赖）按需加载；主线程与 Worker 引用同一份产物，
+  // 因此单列总量上限，不重复计入首屏主包。
+  runnerJs: 96 * 1024,
   /**
    * **全部 JS 合计 gzip**（首屏 + 文档演示 + SW + 懒加载 Worker + three）：
    * 这是"不许有代码溜出预算"的总闸。按需拆分可以降低首屏，但总量仍被封在同一根线以内，
    * 所以拆包不能变成"把体积藏起来"。
    */
-  allJsGzip: 300 * 1024,      // 实测 265 KB（其中 three 130.9 KB gzip 是上游 vendor）
+  // 2026-11-20 所有者授权（阶段3只读实验报告）：实测新增约 2.0 KiB gzip，
+  // 已先做真实减重（重连编排去重、导出弹窗按需化、内嵌对照浅校验、报告并入
+  // teaching-ui 共享字典）仍超线 2.0 KiB；按 P2「有归因调线」先例仅本项名义
+  // 325→328 KiB（有效 292.5→295.2），其余 18 项上限与全部验收标准不动。
+  allJsGzip: 328 * 1024, // 2026-11-16 P2：C/D 接线实测 285.1 KiB + 阶段 E 余量（见下方 P2 说明）；2026-11-20 阶段3授权 +3 KiB
 };
 
 /**
@@ -135,10 +170,10 @@ const LIMITS = {
  * 一定是事故（误引入、误复制）。把两者放在一个上限里，结果是「内容一涨就报警」，
  * 逼着人抬上限——那正是我们要避免的「跟着报错走」。
  * 拆开之后：外壳有硬上限（小、灵敏），文档有宽松上限（大、只防失控）。
- * 定位方式：从 .doc-pages 容器开始做 div 配对扫描（不依赖注释标记，构建压缩后依然成立）。
+ * 定位方式：从 .doc-pages 容器开始做 div 配对扫描（兼容构建压缩后的无引号属性，不依赖注释标记）。
  */
 function splitShellAndDocs(htmlPath, text) {
-  const start = text.indexOf('<div class="doc-pages">');
+  const start = text.search(/<div class=(?:"doc-pages"|doc-pages)>/);
   if (start < 0) {
     console.error(`找不到 .doc-pages 容器：${htmlPath}`);
     process.exit(2);
@@ -173,7 +208,7 @@ const split = splitShellAndDocs(html[0], htmlText);
 
 // 懒加载的 Worker（批量评测）：只在点「运行批量评测」时才下载，不算首屏主包体积，
 // 但必须单独设上限——否则它可以悄悄长成第二个主包。
-const workerJs = js.filter((f) => /batch\.worker-/.test(f));
+const workerJs = js.filter((f) => /\.worker-/.test(f));
 /**
  * 首屏主包 = index-*.js（**不含** three-、懒加载 Worker，也**不含** sw.js）。
  * sw.js 是 Service Worker：浏览器在页面加载之后才注册它，不进首屏传输路径，
@@ -183,11 +218,23 @@ const workerJs = js.filter((f) => /batch\.worker-/.test(f));
 const swJs = js.filter((f) => /sw\.js$/.test(f));
 const docDemosJs = js.filter((f) => /doc-demos-/.test(f));
 const tourJs = js.filter((f) => /tour-/.test(f));
+const catalogJs = js.filter((f) => /experiments-/.test(f) || /challenges-/.test(f));
+const comparisonJs = js.filter((f) =>
+  /teaching-ui-/.test(f) || /comparison-ui-/.test(f) || /comparison-config-/.test(f) ||
+  /comparison-(panel|view|report)-/.test(f) || /task-strip-/.test(f) || /learning-panel-/.test(f),
+);
+const diagnosticsJs = js.filter((f) => /diagnostics-ui-/.test(f));
+const toolsJs = js.filter((f) => /tools-ui-/.test(f));
+const runnerJs = js.filter((f) => /runner-/.test(f) || /trace-events-/.test(f));
 // 首屏主包 = 除「明确按需加载」之外的全部 JS：three / Worker / SW / 文档演示 / 引导课程。
 // 按需 chunk 不计入首屏，但各自有独立上限、并计入「全部 JS 合计 gzip」。
 const mainJs = js.filter(
-  (f) => !/three-/.test(f) && !/batch\.worker-/.test(f) && !/sw\.js$/.test(f) &&
-    !/doc-demos-/.test(f) && !/tour-/.test(f),
+  (f) => !/three-/.test(f) && !/\.worker-/.test(f) && !/sw\.js$/.test(f) &&
+    !/doc-demos-/.test(f) && !/tour-/.test(f) &&
+    !/experiments-/.test(f) && !/challenges-/.test(f) &&
+    !/comparison-(panel|view|report|config)-/.test(f) && !/task-strip-/.test(f) &&
+    !/learning-panel-/.test(f) && !/teaching-ui-/.test(f) && !/comparison-ui-/.test(f) && !/diagnostics-ui-/.test(f) &&
+    !/tools-ui-/.test(f) && !/runner-/.test(f) && !/trace-events-/.test(f),
 );
 const metrics = [
   { name: "产物总量", value: total, limit: LIMITS.total, baseline: BASELINES.total, detail: `${(total / 1024).toFixed(0)} KB` },
@@ -240,13 +287,53 @@ const metrics = [
   },
 
   {
+    name: "实验/挑战目录 JS（按需 chunk）",
+    value: sizeOf(catalogJs),
+    limit: LIMITS.catalogJs, baseline: BASELINES.catalogJs,
+    detail: catalogJs.length
+      ? `${(sizeOf(catalogJs) / 1024).toFixed(1)} KB（gzip ${(catalogJs.reduce((s, f) => s + gzipSync(readFileSync(f), { level: 9 }).length, 0) / 1024).toFixed(1)} KB）`
+      : "无",
+  },
+  {
+    name: "教学交互按需 JS（对照台/任务条）",
+    value: sizeOf(comparisonJs),
+    limit: LIMITS.comparisonJs, baseline: BASELINES.comparisonJs,
+    detail: comparisonJs.length
+      ? `${(sizeOf(comparisonJs) / 1024).toFixed(1)} KB（gzip ${(comparisonJs.reduce((s, f) => s + gzipSync(readFileSync(f), { level: 9 }).length, 0) / 1024).toFixed(1)} KB）`
+      : "无",
+  },
+  {
+    name: "诊断按需 JS（可观性/事件/回看/ESKF）",
+    value: sizeOf(diagnosticsJs),
+    limit: LIMITS.diagnosticsJs, baseline: BASELINES.diagnosticsJs,
+    detail: diagnosticsJs.length
+      ? `${(sizeOf(diagnosticsJs) / 1024).toFixed(1)} KB（gzip ${(diagnosticsJs.reduce((s, f) => s + gzipSync(readFileSync(f), { level: 9 }).length, 0) / 1024).toFixed(1)} KB）`
+      : "无",
+  },
+  {
+    name: "CSV 导出 JS（按需 tools-ui）",
+    value: sizeOf(toolsJs),
+    limit: LIMITS.toolsUi, baseline: BASELINES.toolsUi,
+    detail: toolsJs.length
+      ? `${(sizeOf(toolsJs) / 1024).toFixed(1)} KB（gzip ${(toolsJs.reduce((s, f) => s + gzipSync(readFileSync(f), { level: 9 }).length, 0) / 1024).toFixed(1)} KB）`
+      : "无",
+  },
+  {
+    name: "共享数值内核 JS（按需 runner/trace）",
+    value: sizeOf(runnerJs),
+    limit: LIMITS.runnerJs, baseline: BASELINES.runnerJs,
+    detail: runnerJs.length
+      ? `${(sizeOf(runnerJs) / 1024).toFixed(1)} KB（gzip ${(runnerJs.reduce((s, f) => s + gzipSync(readFileSync(f), { level: 9 }).length, 0) / 1024).toFixed(1)} KB）`
+      : "无",
+  },
+  {
     name: "Service Worker JS（离线缓存，加载后注册）",
     value: sizeOf(swJs),
     limit: LIMITS.swJs, baseline: BASELINES.swJs,
     detail: swJs.length ? `${(sizeOf(swJs) / 1024).toFixed(0)} KB（gzip ${(swJs.reduce((s, f) => s + gzipSync(readFileSync(f), { level: 9 }).length, 0) / 1024).toFixed(0)} KB）` : "无",
   },
   {
-    name: "批量评测 Worker JS（懒加载）",
+    name: "评测 Worker 入口 JS（懒加载）",
     value: sizeOf(workerJs),
     limit: LIMITS.workerJs, baseline: BASELINES.workerJs,
     detail: workerJs.length ? workerJs.map((f) => `${(statSync(f).size / 1024).toFixed(0)}KB`).join(" + ") : "无",

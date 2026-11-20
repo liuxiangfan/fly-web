@@ -1,6 +1,7 @@
 import type { Quat, V3 } from "../core/quat";
 import { qConj, qFromEuler, qId, qIntegrate, qMul, qNorm, qRot, qRotInv, qSlerp, qToEuler } from "../core/quat";
 import { MAG_WORLD_NED } from "../core/imu";
+import type { ObservationState } from "../core/observability";
 
 /**
  * 估计器内部量（玻璃盒可视化用）。
@@ -28,6 +29,18 @@ export interface EstimatorTelemetry {
   accelAccepted?: boolean;
   /** 本帧磁观测是否实际通过门控并成功应用 */
   magAccepted?: boolean;
+  /**
+   * 本帧加计观测状态（F-03 显式语义，由估计器自己给出，UI 不猜）：
+   * 纯积分 `not-applicable`；固定增益算法区分 applied/rejected/invalid/disabled/unrecorded；
+   * 卡尔曼沿用 accelAccepted 与拒绝码的既有语义。
+   */
+  accelState?: ObservationState;
+  /** 本帧磁观测状态，语义同 accelState */
+  magState?: ObservationState;
+  /** 与 accelState 配套的稳定原因码；`null` 表示没有可报告的额外原因 */
+  accelReasonCode?: string | null;
+  /** 与 magState 配套的稳定原因码 */
+  magReasonCode?: string | null;
   /** 算法专属细节（互补：权重与两路倾角；Mahony：P/I 占比；Madgwick：残差），任意结构 */
   detail: Record<string, number>;
 }
@@ -43,8 +56,23 @@ export function emptyTelemetry(): EstimatorTelemetry {
     accelNorm: 0,
     accelValid: false,
     magValid: false,
+    // 尚未执行 update：不伪造“已应用/未应用”，用显式未记录状态占位。
+    accelState: "unrecorded",
+    magState: "unrecorded",
+    accelReasonCode: "not-recorded",
+    magReasonCode: "not-recorded",
     detail: {},
   };
+}
+
+/** 纯积分的占位遥测：两个观测通道都“本来就不适用”，不是 disabled/rejected */
+function pureTelemetry(): EstimatorTelemetry {
+  const t = emptyTelemetry();
+  t.accelState = "not-applicable";
+  t.magState = "not-applicable";
+  t.accelReasonCode = "no-correction-channel";
+  t.magReasonCode = "no-correction-channel";
+  return t;
 }
 
 /** 磁修正形态（Mahony / Madgwick 共有）：
@@ -309,7 +337,7 @@ export class PureGyroEstimator implements Estimator {
   label = "纯陀螺仪积分";
   color = "#f85149";
   q = qId();
-  telemetry = emptyTelemetry();
+  telemetry = pureTelemetry();
   magEnabled = false;
   update(gyro: V3, accel: V3, _mag: V3, dt: number): void {
     this.q = qIntegrate(this.q, gyro, dt);
@@ -325,12 +353,16 @@ export class PureGyroEstimator implements Estimator {
       accelNorm: norm,
       accelValid: Math.abs(norm - G) < 0.35 * G,
       magValid: false, // 纯积分无修正通道，磁力计对它无意义
+      accelState: "not-applicable",
+      magState: "not-applicable",
+      accelReasonCode: "no-correction-channel",
+      magReasonCode: "no-correction-channel",
       detail: { alignErrorDeg: angleBetweenDeg(this.telemetry.predictedGravity, this.telemetry.measuredGravity) },
     };
   }
   reset(initial?: Quat): void {
     this.q = initial ? { ...initial } : qId();
-    this.telemetry = emptyTelemetry();
+    this.telemetry = pureTelemetry();
   }
   copyRuntimeFrom(other: Estimator): void {
     this.q = { ...other.q };
@@ -381,6 +413,23 @@ export class ComplementaryEstimator implements Estimator {
       // 受扰（幅度/方向门控拦截）或近似自由落体：跳过加计修正——磁航向的倾斜补偿
       // 依赖可信姿态，一并跳过，本帧退化为纯陀螺仪积分
       this.q = qGyro;
+      // 状态语义：模长退化 => invalid；有效观测被方向门控拒绝 => rejected；
+      // 磁分支根本没执行（加计早退）=> unrecorded，不把“没评估”说成“磁测量退化”。
+      let accelState: ObservationState;
+      let accelReasonCode: string;
+      if (!(norm > 1e-6) || !accelValid) {
+        accelState = "invalid";
+        accelReasonCode = !Number.isFinite(norm)
+          ? "accel-norm-invalid"
+          : norm <= 1e-6
+            ? "accel-norm-zero"
+            : "accel-norm-out-of-range";
+      } else {
+        accelState = "rejected";
+        accelReasonCode = "gate-direction";
+      }
+      const magState: ObservationState = this.magEnabled ? "unrecorded" : "disabled";
+      const magReasonCode = this.magEnabled ? "mag-not-evaluated" : "mag-disabled";
       this.telemetry = {
         rate: [gyro[0], gyro[1], gyro[2]],
         rawGyro: [gyro[0], gyro[1], gyro[2]],
@@ -390,6 +439,10 @@ export class ComplementaryEstimator implements Estimator {
         accelNorm: norm,
         accelValid,
         magValid: false,
+        accelState,
+        magState,
+        accelReasonCode,
+        magReasonCode,
         detail: { accelWeight: 0, alignErrorDeg: alignDeg, gateMode: this.gate.mode(wouldReject), rejectRatio: this.gate.ratio },
       };
       return;
@@ -414,6 +467,28 @@ export class ComplementaryEstimator implements Estimator {
 
     const { w, x, y, z } = this.q;
     const euGyro = qToEuler(qGyro);
+    // 走到这里说明加计分支真的执行了（门控关闭/ramp/恢复窗或观测通过）：
+    // 模长异常仍标 invalid（观测本身不可信），但不再声称“被拒绝”。
+    // FIX-03：只有有效增益（alpha·ramp·dt > 0）才把“已接受”升级为 applied；
+    // alpha=0 时观测虽通过门控，本步修正量恒为零，如实报告 accepted-not-applied。
+    const accelApplied = accelValid && wAcc > 0;
+    const accelState: ObservationState = accelValid
+      ? accelApplied ? "applied" : "accepted-not-applied"
+      : "invalid";
+    const accelReasonCode = accelValid
+      ? accelApplied ? "applied" : "zero-gain"
+      : "accel-norm-out-of-range";
+    const magApplied = magOk && wAcc > 0;
+    const magState: ObservationState = !this.magEnabled
+      ? "disabled"
+      : magOk
+        ? magApplied ? "applied" : "accepted-not-applied"
+        : "invalid";
+    const magReasonCode = !this.magEnabled
+      ? "mag-disabled"
+      : magOk
+        ? magApplied ? "applied" : "zero-gain"
+        : "mag-norm-out-of-range";
     this.telemetry = {
       rate: [gyro[0], gyro[1], gyro[2]],
       rawGyro: [gyro[0], gyro[1], gyro[2]],
@@ -428,6 +503,10 @@ export class ComplementaryEstimator implements Estimator {
       accelNorm: norm,
       accelValid,
       magValid: magOk,
+      accelState,
+      magState,
+      accelReasonCode,
+      magReasonCode,
       detail: {
         accelWeight: wAcc,
         rollAccDeg: rollAcc * (180 / Math.PI),
@@ -505,7 +584,8 @@ export class MahonyEstimator implements Estimator {
     const wouldReject = gateActive && !(accelValid && alignDeg < this.gateDeg);
     const forceAccept = this.gate.step(dt, wouldReject, gateActive, this.gateRecovery);
     let magErrMag = 0;
-    if (norm > 1e-6 && (!wouldReject || forceAccept)) {
+    const accelUsed = norm > 1e-6 && (!wouldReject || forceAccept);
+    if (accelUsed) {
       const ax = measured[0], ay = measured[1], az = measured[2];
       const vx = predicted[0], vy = predicted[1], vz = predicted[2];
       // 误差 = 实测 × 预测（叉积）
@@ -554,6 +634,43 @@ export class MahonyEstimator implements Estimator {
     this.q = qIntegrate(this.q, omega, dt);
     const magP = Math.hypot(pTerm[0], pTerm[1], pTerm[2]);
     const magI = Math.hypot(iTerm[0], iTerm[1], iTerm[2]);
+    // 与互补同源：只有分支真的执行（accelUsed）才谈 applied/rejected；
+    // 模长异常优先标 invalid；加计早退时磁力计未被评估 => unrecorded。
+    // FIX-03：Kp 与 Ki 同时为 0 时比例/积分修正都恒为零，通过门控的观测应报告
+    // accepted-not-applied，而不是 applied。
+    const correctionEnabled = kP !== 0 || this.ki !== 0;
+    const accelState: ObservationState = accelUsed
+      ? accelValid
+        ? correctionEnabled ? "applied" : "accepted-not-applied"
+        : "invalid"
+      : !(norm > 1e-6) || !accelValid
+        ? "invalid"
+        : "rejected";
+    const accelReasonCode = accelUsed
+      ? accelValid
+        ? correctionEnabled ? "applied" : "zero-gain"
+        : "accel-norm-out-of-range"
+      : !Number.isFinite(norm)
+        ? "accel-norm-invalid"
+        : norm <= 1e-6
+          ? "accel-norm-zero"
+          : !accelValid
+            ? "accel-norm-out-of-range"
+            : "gate-direction";
+    const magState: ObservationState = !this.magEnabled
+      ? "disabled"
+      : !accelUsed
+        ? "unrecorded"
+        : magOk
+          ? correctionEnabled ? "applied" : "accepted-not-applied"
+          : "invalid";
+    const magReasonCode = !this.magEnabled
+      ? "mag-disabled"
+      : !accelUsed
+        ? "mag-not-evaluated"
+        : magOk
+          ? correctionEnabled ? "applied" : "zero-gain"
+          : "mag-norm-out-of-range";
     this.telemetry = {
       rate: [omega[0], omega[1], omega[2]],
       rawGyro: [gyro[0], gyro[1], gyro[2]],
@@ -563,6 +680,10 @@ export class MahonyEstimator implements Estimator {
       accelNorm: norm,
       accelValid,
       magValid: magOk,
+      accelState,
+      magState,
+      accelReasonCode,
+      magReasonCode,
       detail: {
         pShare: magP + magI > 1e-12 ? magP / (magP + magI) : 0, // 比例项占比（供双色条）
         iUsage,
@@ -644,12 +765,15 @@ export class MadgwickEstimator implements Estimator {
     let magOk = false;
     let yawMagDeg = NaN;
     let magResidual = 0;
+    /** 本步重力梯度模长（FIX-03：用于区分 applied 与梯度退化） */
+    let gradientNorm = 0;
     const accelValid = Math.abs(norm - G) < this.gateMagPct * G;
     const alignDeg = angleBetweenDeg(predicted, measured);
     const gateActive = accelGateActive(this.accelGate, this.rampEnabled, this.age);
     const wouldReject = gateActive && !(accelValid && alignDeg < this.gateDeg);
     const forceAccept = this.gate.step(dt, wouldReject, gateActive, this.gateRecovery);
-    if (norm > 1e-6 && (!wouldReject || forceAccept)) {
+    const accelUsed = norm > 1e-6 && (!wouldReject || forceAccept);
+    if (accelUsed) {
       const ax = measured[0], ay = measured[1], az = measured[2];
       magOk = this.magEnabled && magIsPlausible(mag);
 
@@ -679,6 +803,7 @@ export class MadgwickEstimator implements Estimator {
         const s3 = 2 * x * f1 + 2 * y * f2
           + (-4 * bx * z + 2 * bz * x) * f4 + (-2 * bx * w + 2 * bz * y) * f5 + 2 * bx * x * f6;
         const sNorm = Math.hypot(s0, s1, s2, s3);
+        gradientNorm = sNorm;
         if (sNorm > 1e-9) {
           cdw -= (betaEff * s0) / sNorm;
           cdx -= (betaEff * s1) / sNorm;
@@ -714,6 +839,7 @@ export class MadgwickEstimator implements Estimator {
           cdz += dir * magS * (w);
         }
         const sNorm = Math.hypot(s0, s1, s2, s3);
+        gradientNorm = sNorm;
         if (sNorm > 1e-9) {
           s0 /= sNorm; s1 /= sNorm; s2 /= sNorm; s3 /= sNorm;
           cdw -= betaEff * s0;
@@ -737,6 +863,48 @@ export class MadgwickEstimator implements Estimator {
     const cx = w * cdx - x * cdw - y * cdz + z * cdy;
     const cy = w * cdy - y * cdw - z * cdx + x * cdz;
     const cz = w * cdz - z * cdw - x * cdy + y * cdx;
+    // 状态语义与 Mahony 一致：只有梯度分支执行才谈 applied/rejected；
+    // 模长异常优先 invalid；加计早退导致磁未评估时用 unrecorded。
+    // FIX-03：β=0 时梯度步长恒为零；β>0 但梯度退化（sNorm≤1e-9）且仍有残差时，
+    // 下降方向不存在，本步无法修正——两种情况都如实报告 accepted-not-applied。
+    // 残差≈0（已经与观测一致）时梯度同样为 0，但此时没有需要修正的量，仍按 applied 记。
+    const hasResidual = residual > 1e-6 || (this.magMode === "full" && magResidual > 1e-6);
+    const gradStepEnabled = betaEff !== 0 && (gradientNorm > 1e-9 || !hasResidual);
+    const accelState: ObservationState = accelUsed
+      ? accelValid
+        ? gradStepEnabled ? "applied" : "accepted-not-applied"
+        : "invalid"
+      : !(norm > 1e-6) || !accelValid
+        ? "invalid"
+        : "rejected";
+    const accelReasonCode = accelUsed
+      ? accelValid
+        ? gradStepEnabled ? "applied" : betaEff === 0 ? "zero-gain" : "update-degenerate"
+        : "accel-norm-out-of-range"
+      : !Number.isFinite(norm)
+        ? "accel-norm-invalid"
+        : norm <= 1e-6
+          ? "accel-norm-zero"
+          : !accelValid
+            ? "accel-norm-out-of-range"
+            : "gate-direction";
+    // 简化 MARG（yaw 模式）的磁修正是独立的绕 z 分量，不依赖 β 或重力梯度；
+    // 标准 MARG（full 模式）与重力共用同一次归一化梯度，因此跟随 gradStepEnabled。
+    const magEffective = this.magMode === "full" ? gradStepEnabled : true;
+    const magState: ObservationState = !this.magEnabled
+      ? "disabled"
+      : !accelUsed
+        ? "unrecorded"
+        : magOk
+          ? magEffective ? "applied" : "accepted-not-applied"
+          : "invalid";
+    const magReasonCode = !this.magEnabled
+      ? "mag-disabled"
+      : !accelUsed
+        ? "mag-not-evaluated"
+        : magOk
+          ? magEffective ? "applied" : betaEff === 0 ? "zero-gain" : "update-degenerate"
+          : "mag-norm-out-of-range";
     this.telemetry = {
       rate: [gyro[0] + 2 * cx, gyro[1] + 2 * cy, gyro[2] + 2 * cz],
       rawGyro: [gyro[0], gyro[1], gyro[2]],
@@ -746,6 +914,10 @@ export class MadgwickEstimator implements Estimator {
       accelNorm: norm,
       accelValid,
       magValid: magOk,
+      accelState,
+      magState,
+      accelReasonCode,
+      magReasonCode,
       detail: {
         residual,
         // 梯度步长只反映**修正项**（旧实现把陀螺项也算进去，"没有修正的直线积分"会显得步子很大）
@@ -794,6 +966,25 @@ export class MadgwickEstimator implements Estimator {
 /** 3x3 反对称矩阵（行主序）：skew(v)·x = v×x */
 function skew(v: V3): number[] {
   return [0, -v[2], v[1], v[2], 0, -v[0], -v[1], v[0], 0];
+}
+
+/**
+ * FIX-02 诊断导出：右乘误差注入后的协方差重置一阶雅可比。
+ *
+ * 误差定义 `q_true ≈ q ⊗ [1, δθ/2]`，注入 `q⁺ = q ⊗ [1, δθ̂/2]` 后
+ * `δθ⁺ ≈ (I − ½[δθ̂]×)·δθ`（忽略注入本身带来的均值平移）。
+ * 返回 6×6 行主序 G，姿态块 = I − ½[δθ̂]×，零偏块保持单位。
+ *
+ * 仅供契约测试/离线诊断读取；生产路径也调用同一构造，避免测试复制一份公式。
+ */
+export function resetJacobianG(dTheta: V3): number[] {
+  const sk = skew(dTheta);
+  const G = new Array<number>(36).fill(0);
+  for (let i = 0; i < 6; i++) G[i * 6 + i] = 1;
+  for (let i = 0; i < 3; i++) {
+    for (let j = 0; j < 3; j++) G[i * 6 + j] -= 0.5 * sk[i * 3 + j];
+  }
+  return G;
 }
 
 /** 行主序稠密矩阵乘 (n×m)·(m×p) */
@@ -850,6 +1041,139 @@ const BIAS_LIMIT = 1.0;
 /** 协方差对角线下限：限制长时间运行后的对角数值下溢；
  *  它**不保证** P 永远正定——对称性与半正定性另行检查（Joseph 更新负责数值上更稳）。 */
 const P_FLOOR = 1e-12;
+/** 卡尔曼新息夹角门控阈值（度，原基线语义） */
+const KALMAN_ANGLE_GATE_DEG = 40;
+
+/**
+ * F-07：单个观测通道在一次 Kalman 更新中的只读诊断快照。
+ * 所有数组都是副本；S 为**新息协方差** S = H·P·Hᵀ + R（不是它的逆），
+ * K 为 6×3 增益，dx 为实际注入的 6 维误差状态（已含姿态小角限幅）。
+ */
+export interface KalmanObservationSnapshot {
+  channel: "accel" | "mag";
+  available: boolean;
+  predicted: V3 | null;
+  measured: V3 | null;
+  innovation: V3 | null;
+  innovationAngleDeg: number | null;
+  nis: number | null;
+  gate: { kind: string; threshold: number | null; accepted: boolean; reason: string };
+  S: number[] | null;
+  K: number[] | null;
+  dx: number[] | null;
+  applied: boolean;
+  qBefore: Quat;
+  qAfter: Quat;
+  biasBeforeRad: V3;
+  biasAfterRad: V3;
+  pDiagBefore: number[];
+  pDiagAfter: number[];
+  /** 仅在 diagFullP=true 时记录的 6×6 行主序独立副本 */
+  pFullBefore?: number[];
+  pFullAfter?: number[];
+  covarianceResetApplied: boolean;
+}
+
+/**
+ * F-07：一次 KalmanEstimator.update() 的只读诊断快照。
+ * `update()` 没有绝对时间参数，因此不伪造 `t`；调用方按自己的数据时钟打时间戳。
+ * 所有 q/bias/P 对角数组均为深拷贝，不含估计器内部可变引用。
+ */
+export interface KalmanStepSnapshot {
+  dt: number;
+  qInput: Quat;
+  biasInputRad: V3;
+  pDiagInput: number[];
+  pFullInput?: number[];
+  correctedGyroRad: V3;
+  qPredicted: Quat;
+  pDiagPredicted: number[];
+  pFullPredicted?: number[];
+  /** 生产顺序：先加计、后磁；未启用/无效的通道也有记录（available=false + 真实原因） */
+  observations: KalmanObservationSnapshot[];
+  qFinal: Quat;
+  biasFinalRad: V3;
+  pDiagFinal: number[];
+  pFullFinal?: number[];
+  /** 本步是否有任一被接受观测执行了 P ← G·P·Gᵀ */
+  covarianceResetApplied: boolean;
+}
+
+/** 诊断采集用的状态副本（仅 sink 已设置时创建） */
+interface KalmanDiagState {
+  q: Quat;
+  biasRad: V3;
+  pDiag: number[];
+  pFull?: number[];
+}
+
+/** applyUpdate 的可选输出：仅在诊断 sink 存在时创建并填充 */
+interface KalmanUpdateCapture {
+  S: number[] | null;
+  K: number[] | null;
+  dx: number[] | null;
+  applied: boolean;
+  before: KalmanDiagState;
+  after: KalmanDiagState | null;
+  covarianceResetApplied: boolean;
+}
+
+function copyV3(v: V3): V3 {
+  return [v[0], v[1], v[2]];
+}
+
+function finiteOrNull(value: number): number | null {
+  return Number.isFinite(value) ? value : null;
+}
+
+function normReason(channel: "accel" | "mag", norm: number): string {
+  if (!Number.isFinite(norm)) return `${channel}-norm-invalid`;
+  return norm <= 1e-6 ? `${channel}-norm-zero` : `${channel}-norm-out-of-range`;
+}
+
+/** 组装一条观测快照；所有数组/四元数在此处深拷贝，调用方之后改快照不影响估计器。 */
+function makeObservationSnapshot(
+  channel: "accel" | "mag",
+  available: boolean,
+  predicted: V3 | null,
+  measured: V3 | null,
+  innovation: V3 | null,
+  innovationAngleDeg: number,
+  nis: number,
+  gate: KalmanObservationSnapshot["gate"],
+  before: KalmanDiagState,
+  after: KalmanDiagState,
+  applied: boolean,
+  S: number[] | null,
+  K: number[] | null,
+  dx: number[] | null,
+  covarianceResetApplied: boolean,
+): KalmanObservationSnapshot {
+  const snapshot: KalmanObservationSnapshot = {
+    channel,
+    available,
+    predicted: predicted ? copyV3(predicted) : null,
+    measured: measured ? copyV3(measured) : null,
+    innovation: innovation ? copyV3(innovation) : null,
+    innovationAngleDeg: finiteOrNull(innovationAngleDeg),
+    nis: finiteOrNull(nis),
+    gate: { ...gate },
+    S: S ? [...S] : null,
+    K: K ? [...K] : null,
+    dx: dx ? [...dx] : null,
+    applied,
+    qBefore: { ...before.q },
+    qAfter: { ...after.q },
+    biasBeforeRad: copyV3(before.biasRad),
+    biasAfterRad: copyV3(after.biasRad),
+    pDiagBefore: [...before.pDiag],
+    pDiagAfter: [...after.pDiag],
+    covarianceResetApplied,
+  };
+  if (before.pFull) snapshot.pFullBefore = [...before.pFull];
+  if (after.pFull) snapshot.pFullAfter = [...after.pFull];
+  return snapshot;
+}
 
 export class KalmanEstimator implements Estimator {
   id = "kalman" as const;
@@ -865,7 +1189,7 @@ export class KalmanEstimator implements Estimator {
   /** χ² 门控阈值：3 自由度 99% 分位 ≈ 11.345（观测维数为 3） */
   gateChi2 = 11.345;
   /**
-   * 误差注入后的协方差重置（P ← G·P·Gᵀ，G = I + ½[δθ̂]×）。
+   * 误差注入后的协方差重置（P ← G·P·Gᵀ，G = I − ½[δθ̂]×）。
    * 默认关：教学尺度的小角注入下 G≈I，开启是为了给「完整 ESKF」提供一个可对照的现场。
    */
   resetCovOnInject = false;
@@ -876,9 +1200,32 @@ export class KalmanEstimator implements Estimator {
   private P: number[] = [];
   telemetry = emptyTelemetry();
   magEnabled = false;
+  /**
+   * F-07 可选单步诊断回调：只有设置时才创建快照，未设置时更新路径不分配额外对象。
+   * runner 不设置它；UI/教学层按需挂载并在回调里复制/打时间戳。
+   */
+  diagnostics?: (snap: KalmanStepSnapshot) => void;
+  /** 按需附带完整 6×6 P；关闭时不复制完整矩阵，也不新增 pFull 字段。 */
+  diagFullP = false;
 
   constructor() {
     this.initCovariance();
+  }
+
+  /** P 的 6 个对角元（新数组，调用方无内部引用） */
+  private pDiag(): number[] {
+    return [this.P[0], this.P[7], this.P[14], this.P[21], this.P[28], this.P[35]];
+  }
+
+  /** 诊断用状态深拷贝：仅 sink 已设置时调用 */
+  private diagState(): KalmanDiagState {
+    const state: KalmanDiagState = {
+      q: { ...this.q },
+      biasRad: [this.bias[0], this.bias[1], this.bias[2]],
+      pDiag: this.pDiag(),
+    };
+    if (this.diagFullP) state.pFull = [...this.P];
+    return state;
   }
 
   private initCovariance(): void {
@@ -895,6 +1242,13 @@ export class KalmanEstimator implements Estimator {
   update(gyro: V3, accel: V3, mag: V3, dt: number): void {
     const sig = this.gyroNoiseDps * (Math.PI / 180); // °/s → rad/s
     const w: V3 = [gyro[0] - this.bias[0], gyro[1] - this.bias[1], gyro[2] - this.bias[2]];
+    // 诊断 sink 未设置时以下全部为 null/空分支：预测/观测/更新顺序与旧实现逐位一致。
+    const diagSink = this.diagnostics;
+    const qInput = diagSink ? { ...this.q } : null;
+    const biasInputRad = diagSink ? copyV3(this.bias) : null;
+    const pDiagInput = diagSink ? this.pDiag() : null;
+    const pFullInput = diagSink && this.diagFullP ? [...this.P] : null;
+    const observations: KalmanObservationSnapshot[] | null = diagSink ? [] : null;
 
     // ---- 预测：姿态积分 + 协方差传播 ----
     this.q = qIntegrate(this.q, w, dt);
@@ -913,10 +1267,14 @@ export class KalmanEstimator implements Estimator {
       this.P[i * 6 + i] += sig * sig * dt;
       this.P[(i + 3) * 6 + i + 3] += this.biasWalk * this.biasWalk * dt;
     }
+    const qPredicted = diagSink ? { ...this.q } : null;
+    const pDiagPredicted = diagSink ? this.pDiag() : null;
+    const pFullPredicted = diagSink && this.diagFullP ? [...this.P] : null;
 
     // ---- 观测：重力（横滚/俯仰）与磁场（偏航），共用同一套增益公式 ----
     const norm = Math.hypot(accel[0], accel[1], accel[2]);
     const accelValid = norm > 1e-6 && Math.abs(norm - G) < 0.35 * G;
+    const gateThreshold = this.gateMode === "mahalanobis" ? this.gateChi2 : KALMAN_ANGLE_GATE_DEG;
     let innoAccelDeg = NaN;
     let nisAccel = NaN;
     let accelAccepted = false;
@@ -930,14 +1288,55 @@ export class KalmanEstimator implements Estimator {
       const rVar = this.obsNoise * this.obsNoise;
       const nis = this.innovationNis(H, zAccel, rVar);
       nisAccel = Number.isFinite(nis) ? nis : NaN;
-      const pass = this.gateMode === "mahalanobis" ? Number.isFinite(nis) && nis < this.gateChi2 : innoAccelDeg < 40;
+      const pass = this.gateMode === "mahalanobis" ? Number.isFinite(nis) && nis < this.gateChi2 : innoAccelDeg < KALMAN_ANGLE_GATE_DEG;
       if (pass) {
         accelReject = "none";
-        accelAccepted = this.applyUpdate(H, zAccel, rVar);
+        const capture: KalmanUpdateCapture | undefined = diagSink
+          ? { S: null, K: null, dx: null, applied: false, before: this.diagState(), after: null, covarianceResetApplied: false }
+          : undefined;
+        accelAccepted = this.applyUpdate(H, zAccel, rVar, capture);
         if (!accelAccepted) accelReject = "degenerate";
+        if (observations && capture) {
+          observations.push(makeObservationSnapshot(
+            "accel", true, gPred, aHat, zAccel, innoAccelDeg, nisAccel,
+            {
+              kind: this.gateMode,
+              threshold: gateThreshold,
+              accepted: true,
+              reason: accelAccepted ? "applied" : "update-degenerate",
+            },
+            capture.before,
+            capture.after ?? this.diagState(),
+            accelAccepted,
+            capture.S,
+            capture.K,
+            capture.dx,
+            capture.covarianceResetApplied,
+          ));
+        }
       } else {
         accelReject = this.gateMode === "mahalanobis" ? "mahalanobis" : "angle";
+        if (observations) {
+          const state = this.diagState();
+          observations.push(makeObservationSnapshot(
+            "accel", true, gPred, aHat, zAccel, innoAccelDeg, nisAccel,
+            {
+              kind: this.gateMode,
+              threshold: gateThreshold,
+              accepted: false,
+              reason: this.gateMode === "mahalanobis" ? "gate-mahalanobis" : "gate-direction",
+            },
+            state, state, false, null, null, null, false,
+          ));
+        }
       }
+    } else if (observations) {
+      const state = this.diagState();
+      observations.push(makeObservationSnapshot(
+        "accel", false, null, null, null, NaN, NaN,
+        { kind: "norm", threshold: null, accepted: false, reason: normReason("accel", norm) },
+        state, state, false, null, null, null, false,
+      ));
     }
     const magOk = this.magEnabled && magIsPlausible(mag);
     let innoMagDeg = NaN;
@@ -957,18 +1356,100 @@ export class KalmanEstimator implements Estimator {
       const rVar = sigmaM * sigmaM;
       const nis = this.innovationNis(H, zMag, rVar);
       nisMag = Number.isFinite(nis) ? nis : NaN;
-      const pass = this.gateMode === "mahalanobis" ? Number.isFinite(nis) && nis < this.gateChi2 : innoMagDeg < 40;
+      const pass = this.gateMode === "mahalanobis" ? Number.isFinite(nis) && nis < this.gateChi2 : innoMagDeg < KALMAN_ANGLE_GATE_DEG;
       if (pass) {
         magReject = "none";
-        magAccepted = this.applyUpdate(H, zMag, rVar);
+        const capture: KalmanUpdateCapture | undefined = diagSink
+          ? { S: null, K: null, dx: null, applied: false, before: this.diagState(), after: null, covarianceResetApplied: false }
+          : undefined;
+        magAccepted = this.applyUpdate(H, zMag, rVar, capture);
         if (!magAccepted) magReject = "degenerate";
+        if (observations && capture) {
+          observations.push(makeObservationSnapshot(
+            "mag", true, mHatN, mMeasN, zMag, innoMagDeg, nisMag,
+            {
+              kind: this.gateMode,
+              threshold: gateThreshold,
+              accepted: true,
+              reason: magAccepted ? "applied" : "update-degenerate",
+            },
+            capture.before,
+            capture.after ?? this.diagState(),
+            magAccepted,
+            capture.S,
+            capture.K,
+            capture.dx,
+            capture.covarianceResetApplied,
+          ));
+        }
       } else {
         magReject = this.gateMode === "mahalanobis" ? "mahalanobis" : "angle";
+        if (observations) {
+          const state = this.diagState();
+          observations.push(makeObservationSnapshot(
+            "mag", true, mHatN, mMeasN, zMag, innoMagDeg, nisMag,
+            {
+              kind: this.gateMode,
+              threshold: gateThreshold,
+              accepted: false,
+              reason: this.gateMode === "mahalanobis" ? "gate-mahalanobis" : "gate-direction",
+            },
+            state, state, false, null, null, null, false,
+          ));
+        }
       }
+    } else if (observations) {
+      const state = this.diagState();
+      observations.push(makeObservationSnapshot(
+        "mag", false, null, null, null, NaN, NaN,
+        {
+          kind: this.magEnabled ? "norm" : "disabled",
+          threshold: null,
+          accepted: false,
+          reason: this.magEnabled ? normReason("mag", Math.hypot(mag[0], mag[1], mag[2])) : "mag-disabled",
+        },
+        state, state, false, null, null, null, false,
+      ));
     }
 
     const predicted: V3 = qRotInv(this.q, [0, 0, 1]);
     const measured: V3 = accelValid ? [accel[0] / norm, accel[1] / norm, accel[2] / norm] : [0, 0, 0];
+    let accelState: ObservationState;
+    let accelReasonCode: string;
+    if (accelAccepted) {
+      accelState = "applied";
+      accelReasonCode = "applied";
+    } else if (!accelValid) {
+      accelState = "invalid";
+      accelReasonCode = normReason("accel", norm);
+    } else if (accelReject === "degenerate") {
+      // FIX-08：门控已放行、失败发生在 S 求逆（数值奇异），不是门控拦截。
+      // 报告 accepted-not-applied，避免事件记录器把它误讲成 gate-reject。
+      accelState = "accepted-not-applied";
+      accelReasonCode = "update-degenerate";
+    } else {
+      accelState = "rejected";
+      accelReasonCode = this.gateMode === "mahalanobis" ? "gate-mahalanobis" : "gate-direction";
+    }
+    let magState: ObservationState;
+    let magReasonCode: string;
+    if (magAccepted) {
+      magState = "applied";
+      magReasonCode = "applied";
+    } else if (!this.magEnabled) {
+      magState = "disabled";
+      magReasonCode = "mag-disabled";
+    } else if (!magOk) {
+      magState = "invalid";
+      magReasonCode = normReason("mag", Math.hypot(mag[0], mag[1], mag[2]));
+    } else if (magReject === "degenerate") {
+      // FIX-08：同加计——数值奇异是“已接受但未应用”，不是门控拒绝。
+      magState = "accepted-not-applied";
+      magReasonCode = "update-degenerate";
+    } else {
+      magState = "rejected";
+      magReasonCode = this.gateMode === "mahalanobis" ? "gate-mahalanobis" : "gate-direction";
+    }
     this.telemetry = {
       rate: [w[0], w[1], w[2]],
       rawGyro: [gyro[0], gyro[1], gyro[2]],
@@ -981,6 +1462,10 @@ export class KalmanEstimator implements Estimator {
       magValid: magOk,
       accelAccepted,
       magAccepted,
+      accelState,
+      magState,
+      accelReasonCode,
+      magReasonCode,
       detail: {
         biasXDps: this.bias[0] * (180 / Math.PI),
         biasYDps: this.bias[1] * (180 / Math.PI),
@@ -1000,6 +1485,27 @@ export class KalmanEstimator implements Estimator {
         ...(magOk ? { magEnabled: 1 } : { magEnabled: 0 }),
       },
     };
+    if (diagSink && observations && qInput && biasInputRad && pDiagInput && qPredicted && pDiagPredicted) {
+      const finalState = this.diagState();
+      const snapshot: KalmanStepSnapshot = {
+        dt,
+        qInput,
+        biasInputRad,
+        pDiagInput,
+        correctedGyroRad: copyV3(w),
+        qPredicted,
+        pDiagPredicted,
+        observations,
+        qFinal: finalState.q,
+        biasFinalRad: finalState.biasRad,
+        pDiagFinal: finalState.pDiag,
+        covarianceResetApplied: observations.some((o) => o.covarianceResetApplied),
+      };
+      if (pFullInput) snapshot.pFullInput = pFullInput;
+      if (pFullPredicted) snapshot.pFullPredicted = pFullPredicted;
+      if (finalState.pFull) snapshot.pFullFinal = finalState.pFull;
+      diagSink(snapshot);
+    }
   }
 
   /** 新息协方差 S = H·P·Hᵀ + R 的逆与新息马氏距离 NIS = zᵀ·S⁻¹·z（奇异返回 NaN） */
@@ -1019,13 +1525,26 @@ export class KalmanEstimator implements Estimator {
   /**
    * 单次观测更新：K = P·Hᵀ·(H·P·Hᵀ+R)⁻¹，δx = K·z，回填姿态/零偏并收缩 P。
    * 返回 false 表示 S 奇异、本次更新被安全跳过（计入遥测，不伪装成成功）。
+   * `capture` 仅在 F-07 诊断 sink 存在时传入；它只读地记录本次实际使用的 S/K/dx
+   * 与更新前后状态，不改变任何运算顺序或数值。
    */
-  private applyUpdate(H: number[], z: V3, rVar: number): boolean {
+  private applyUpdate(H: number[], z: V3, rVar: number, capture?: KalmanUpdateCapture): boolean {
     const PHt = matMul(this.P, matTranspose(H, 3, 6), 6, 6, 3); // (6x3)
     const HPHt = matMul(H, PHt, 3, 6, 3); // (3x3)
-    const S = mat3Inverse(HPHt.map((v, i) => (i % 4 === 0 ? v + rVar : v)));
-    if (!S) return false;
-    const K = matMul(PHt, S, 6, 3, 3); // (6x3)
+    const Sfull = HPHt.map((v, i) => (i % 4 === 0 ? v + rVar : v));
+    const Sinv = mat3Inverse(Sfull);
+    if (!Sinv) {
+      if (capture) {
+        capture.S = null;
+        capture.K = null;
+        capture.dx = null;
+        capture.applied = false;
+        capture.after = this.diagState();
+        capture.covarianceResetApplied = false;
+      }
+      return false;
+    }
+    const K = matMul(PHt, Sinv, 6, 3, 3); // (6x3)
     const dx = [
       K[0] * z[0] + K[1] * z[1] + K[2] * z[2],
       K[3] * z[0] + K[4] * z[1] + K[5] * z[2],
@@ -1079,20 +1598,23 @@ export class KalmanEstimator implements Estimator {
     for (let i = 0; i < 6; i++) Pn[i * 6 + i] = Math.max(P_FLOOR, Pn[i * 6 + i]);
     this.P = Pn;
     if (this.resetCovOnInject) this.applyResetJacobian([dx[0], dx[1], dx[2]]);
+    if (capture) {
+      capture.S = [...Sfull];
+      capture.K = [...K];
+      capture.dx = [...dx];
+      capture.applied = true;
+      capture.after = this.diagState();
+      capture.covarianceResetApplied = this.resetCovOnInject;
+    }
     return true;
   }
 
   /**
-   * 误差注入后的协方差重置（可选）：δθ' ≈ G·δθ，G = I + ½[δθ̂]×（一阶）。
+   * 误差注入后的协方差重置（可选）：δθ' ≈ G·δθ，G = I − ½[δθ̂]×（一阶）。
    * 零偏块不变。只做一次 6×6 相似变换并沿用对称化与对角下限。
    */
   private applyResetJacobian(dTheta: V3): void {
-    const sk = skew(dTheta);
-    const G = new Array<number>(36).fill(0);
-    for (let i = 0; i < 6; i++) G[i * 6 + i] = 1;
-    for (let i = 0; i < 3; i++) {
-      for (let j = 0; j < 3; j++) G[i * 6 + j] += 0.5 * sk[i * 3 + j];
-    }
+    const G = resetJacobianG(dTheta);
     const Gt = matTranspose(G, 6, 6);
     let Pn = matMul(matMul(G, this.P, 6, 6, 6), Gt, 6, 6, 6);
     for (let i = 0; i < 6; i++)
@@ -1157,4 +1679,9 @@ export class KalmanEstimator implements Estimator {
   getCovariance(): number[] {
     return [...this.P];
   }
+}
+
+/** 唯一的五算法装配顺序，供在线、A/B 克隆和 runner 共用。 */
+export function createEstimators(): Estimator[] {
+  return [PureGyroEstimator, ComplementaryEstimator, MahonyEstimator, MadgwickEstimator, KalmanEstimator].map((Ctor) => new Ctor());
 }

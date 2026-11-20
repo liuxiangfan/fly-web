@@ -2,7 +2,7 @@
 export const ALGORITHMS = ['pure','comp','mahony','madg','kalman'];
 export function parseSoakArgs(argv) {
   const raw={};
-  const allowed=new Set(['url','seconds','interval','heapLimitMb','allowNoHeap','seeds','batch','reconnect','dropEvery','output','profileRoot','tailObserveSeconds']);
+  const allowed=new Set(['url','seconds','interval','heapLimitMb','allowNoHeap','seeds','batch','reconnect','teaching','dropEvery','output','profileRoot','tailObserveSeconds']);
   for(const arg of argv) {
     const m=/^--([a-zA-Z][a-zA-Z-]*)(?:=(.*))?$/.exec(arg);
     if(!m) throw new Error(`非法 CLI 参数 ${arg}`);
@@ -18,8 +18,8 @@ export function parseSoakArgs(argv) {
     const n=Number(value); if(!Number.isFinite(n)||n<=0||(integer&&!Number.isSafeInteger(n))) throw new Error(`${k} 必须是${integer?'正整数':'有限正数'}`);
     return n;
   };
-  const result={url:raw.url,seconds:num('seconds',120),interval:num('interval',5000),heapLimitMb:num('heapLimitMb',24),allowNoHeap:bool('allowNoHeap'),seeds:num('seeds',10,true),batch:bool('batch'),reconnect:bool('reconnect'),dropEvery:num('dropEvery',8),output:raw.output??'docs/generated/soak.json',profileRoot:raw.profileRoot,tailObserve:nonNegative('tailObserveSeconds',90)};
-  if(result.batch&&result.reconnect) throw new Error('--batch 与 --reconnect 不可组合：真实模式无批量真值，请分别运行');
+  const result={url:raw.url,seconds:num('seconds',120),interval:num('interval',5000),heapLimitMb:num('heapLimitMb',24),allowNoHeap:bool('allowNoHeap'),seeds:num('seeds',10,true),batch:bool('batch'),reconnect:bool('reconnect'),teaching:bool('teaching'),dropEvery:num('dropEvery',8),output:raw.output??'docs/generated/soak.json',profileRoot:raw.profileRoot,tailObserve:nonNegative('tailObserveSeconds',90)};
+  if([result.batch,result.reconnect,result.teaching].filter(Boolean).length>1) throw new Error('--batch / --reconnect / --teaching 只能选一种负载');
   if(result.seeds>1000) throw new Error('seeds 超过 1000');
   if(!result.output.trim() || result.output==='true') throw new Error('output 必须是路径');
   return result;

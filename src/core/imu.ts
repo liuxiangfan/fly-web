@@ -72,6 +72,12 @@ export interface ImuSample {
    * 透传快路径不带该字段（保持历史逐位一致的契约）。
    */
   times?: { gyro: number; accel: number; mag: number };
+  /**
+   * 陀螺仪本帧是否真的被满量程削顶（只读观测信号）。
+   * 只在**实际削顶分支**发生变化时写入 true；未启用或本帧未削顶时不带字段，
+   * 保持既有 ImuSample 透传与逐位一致契约。事件层只能读它，不能按 |gyro|≈range 猜测。
+   */
+  gyroSaturated?: boolean;
 }
 
 /**
@@ -207,9 +213,14 @@ export function simulateImu(
   }
   // 满量程饱和：读数在 ±range 处被削平（真实器件输出即如此），
   // 积分器拿到一串「恒定最大速率」→ 姿态落后于真实机动且无法察觉
+  let gyroSaturated = false;
   if (p.gyroRangeDps > 0) {
     const lim = p.gyroRangeDps / 57.29578;
-    for (let i = 0; i < 3; i++) gyro[i] = Math.max(-lim, Math.min(lim, gyro[i]));
+    for (let i = 0; i < 3; i++) {
+      const clamped = Math.max(-lim, Math.min(lim, gyro[i]));
+      if (clamped !== gyro[i]) gyroSaturated = true;
+      gyro[i] = clamped;
+    }
   }
 
   // 加计确定性部分：重力投影 − 平动加速度投影 + 振动（运动学一致模式）；否则用旧的独立正弦扰动
@@ -234,7 +245,7 @@ export function simulateImu(
   const accel = accelChannel(accelBase, p, gauss);
 
   const magSample = simulateMag(q, t, p, magGauss);
-  return { gyro, accel, mag: magSample };
+  return { gyro, accel, mag: magSample, ...(gyroSaturated ? { gyroSaturated: true } : {}) };
 }
 
 /**

@@ -5,7 +5,9 @@ import { defaultExperimentConfig, parseMagCalibration, parseAccelCalibration, va
 import { copyCalibration } from "../src/core/calibration-validation";
 import { calibrateAccel, synthesizeAccelSamples, type AccelCalibration } from "../src/core/accelcal";
 import { applyMagCalibration, calibrateMag, calibrateMagFull, calibrateMagWithValidation } from "../src/core/magcal";
-import type { V3 } from "../src/core/quat";
+import { DEG, type V3 } from "../src/core/quat";
+import { IMU_EXPORT_COLUMNS, serializeAttitudeCsv, serializeRawImuCsv, type LogRow } from "../src/core/csv-export";
+import { parseImuCsv } from "../src/core/replay";
 
 let passed = 0, failed = 0;
 function test(name: string, body: () => void): void {
@@ -383,6 +385,90 @@ test("校准快照共用克隆：未知键、缺省 kind、可选字段存在性
     const copy = cloneMagCalibration(input);
     assert.deepEqual(copy, input);
     assert.deepEqual(Object.keys(copy), Object.keys(input));
+  }
+});
+
+test("CSV 快照序列化：三种参考与全部列开关保持旧格式逐字节等价", () => {
+  const ids = ["pure", "comp", "mahony", "madg", "kalman"];
+  const imu = { gyro: [0.1, -0.2, 0.3] as V3, accel: [1, 2, 9.81] as V3, mag: [30, 4, 50] as V3 };
+  const row: LogRow = {
+    t: 0.04, euler: Array.from({ length: 6 }, (_, i) => [i - 180, i * 12.3, -i]),
+    err: [0.2, 0.3, NaN, Infinity, -Infinity],
+    quats: ids.map((_, i) => ({ w: 0.8, x: i * 0.1, y: -0.2, z: 0.3 })),
+    qTrue: { w: 1, x: 0, y: 0, z: 0 }, imu,
+    imuConsumed: { ...imu, mag: [25, 3, 49] }, consumedSolveT: 0.039, sourceCalibrated: false,
+  };
+  const rows = [row, { ...row, t: 0.08, imu: null, imuConsumed: null, sourceCalibrated: true }];
+  // 旧 main.ts 的列序与逐行格式冻结在测试侧；不得与被测 helper 共用构造逻辑。
+  for (const ref of ["groundTruth", "external", "mahony"] as const) {
+    const refLabel = ref === "groundTruth" ? "truth" : ref === "external" ? "external_ref" : "mahony_ref";
+    for (const quatOn of [false, true]) for (const imuOn of [false, true]) for (const consumed of [false, true]) {
+      for (const meta of [[], ["# quaternion-attitude-demo export", "# imu=calibrated", "# imu_note=记录时刻快照，不随后续改标定变化"]]) {
+        for (const input of [[], rows]) {
+          const header = [
+            "t_s",
+            ...[0, 1, 2].map((k) => `${refLabel}_${["roll", "pitch", "yaw"][k]}_deg`),
+            ...ids.flatMap((id) => [0, 1, 2].map((k) => `${id}_${["roll", "pitch", "yaw"][k]}_deg`)),
+            ...ids.map((id) => `err_${id}_deg`),
+            ...(quatOn ? ids.flatMap((id) => ["w", "x", "y", "z"].map((k) => `${id}_q${k}`)) : []),
+            ...(quatOn ? ["w", "x", "y", "z"].map((k) => `${refLabel}_q${k}`) : []),
+            ...(imuOn ? IMU_EXPORT_COLUMNS : []),
+          ];
+          const lines = [header.join(",")];
+          for (const r of input) {
+            const values = [r.t];
+            for (const e of r.euler) values.push(e[0], e[1], e[2]);
+            values.push(...r.err);
+            if (quatOn) {
+              for (const q of r.quats) values.push(q.w, q.x, q.y, q.z);
+              values.push(r.qTrue.w, r.qTrue.x, r.qTrue.y, r.qTrue.z);
+            }
+            if (imuOn) {
+              const sample = consumed ? r.imuConsumed : r.imu;
+              values.push(...(sample ? [...sample.gyro.map((v) => v * DEG), ...sample.accel, ...sample.mag] : new Array<number>(9).fill(NaN)));
+            }
+            lines.push(values.map((v) => Number.isFinite(v) ? v.toFixed(6) : "").join(","));
+          }
+          assert.equal(serializeAttitudeCsv(input, ids, ref, quatOn, imuOn, consumed, meta), `\ufeff${meta.join("\n")}\n${lines.join("\n")}\n`);
+        }
+      }
+    }
+  }
+});
+
+test("CSV 纯函数：源与消费快照、四元数、列开关与元数据不修改入参", () => {
+  const imu = { gyro: [0.1, 0.2, 0.3] as V3, accel: [0, 0, 9.81] as V3, mag: [30, 0, 50] as V3 };
+  const rows: LogRow[] = [{
+    t: 0.04, euler: [[1, 2, 3], [4, 5, 6]], err: [NaN],
+    quats: [{ w: -1, x: 0, y: 0, z: 0 }], qTrue: { w: 1, x: 0, y: 0, z: 0 },
+    imu, imuConsumed: { ...imu, mag: [25, 0, 50] }, consumedSolveT: 0.039, sourceCalibrated: true,
+  }];
+  const rawRows = [{ t: 0.04, ...imu }], ids = ["mahony"], meta = ["# imu=calibrated"];
+  const before = structuredClone({ rows, rawRows, ids, meta });
+  const source = serializeAttitudeCsv(rows, ids, "external", true, true, false, meta);
+  const consumed = serializeAttitudeCsv(rows, ids, "external", true, true, true, meta);
+  serializeRawImuCsv(rawRows, meta);
+  assert.notEqual(source, consumed, "源读数与记录时刻消费读数必须可区分");
+  assert.ok(source.includes("-1.000000"), "q/−q 必须原样序列化，不从欧拉角重算");
+  assert.deepEqual({ rows, rawRows, ids, meta }, before);
+});
+
+test("全帧 CSV：十列、六位小数/BOM/末尾换行与回放校准语义兼容", () => {
+  const columns = ["gyro_x_dps", "gyro_y_dps", "gyro_z_dps", "accel_x_ms2", "accel_y_ms2", "accel_z_ms2", "mag_x_ut", "mag_y_ut", "mag_z_ut"];
+  assert.deepEqual(IMU_EXPORT_COLUMNS, columns);
+  const rows = Array.from({ length: 20 }, (_, i) => ({ t: i * 0.002, gyro: [0.1, -0.2, 0.3] as V3, accel: [0, 0, 9.81] as V3, mag: [25, 3, 49] as V3 }));
+  for (const calibrated of [false, true]) {
+    const meta = [`# imu=${calibrated ? "calibrated" : "raw"}`];
+    const lines = [["t_s", ...columns].join(","), ...rows.map((r) => [r.t, ...r.gyro.map((v) => v * DEG), ...r.accel, ...r.mag].map((v) => v.toFixed(6)).join(","))];
+    const csv = serializeRawImuCsv(rows, meta);
+    assert.equal(csv, `\ufeff${meta.join("\n")}\n${lines.join("\n")}\n`);
+    const parsed = parseImuCsv(csv);
+    assert.equal(parsed.error, undefined);
+    assert.equal(parsed.frames.length, rows.length);
+    assert.equal(parsed.imuCalibrated, calibrated, "calibrated 日志必须保持禁止二次校准的标注");
+    assert.ok(Math.abs(parsed.frames[0].gyroDps[0] / DEG - rows[0].gyro[0]) < 1e-8, "CSV 的度每秒回放后须可还原 rad/s");
+    assert.deepEqual(parsed.frames[0].accelMs2, rows[0].accel);
+    assert.deepEqual(parsed.frames[0].magUt, rows[0].mag);
   }
 });
 

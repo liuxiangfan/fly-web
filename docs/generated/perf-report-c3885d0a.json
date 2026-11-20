@@ -1,0 +1,4483 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-11-17T08:24:29.811Z",
+  "startedAt": "2026-11-17T08:24:11.272Z",
+  "finishedAt": "2026-11-17T08:24:29.811Z",
+  "url": "http://127.0.0.1:4173/",
+  "commit": "7d5cf97fdddfb9f25d660d199075a3ec84006d30",
+  "sourceDigest": "c3885d0af8c701c189fac78e580be168",
+  "worktree": "dirty",
+  "buildId": "c3885d0af8c7-ddaaaefb993691e8",
+  "distHash": "ddaaaefb993691e8",
+  "browserVersion": "Edg/157.0.4341.60",
+  "viewport": {
+    "width": 1440,
+    "height": 900,
+    "deviceScaleFactor": 1
+  },
+  "headless": true,
+  "note": "headless + swiftshader 软件渲染；200 ms为固定绝对目标，timer基线仅诊断。timer不是输入，runner停止不是await返回，不从观测推断根因。",
+  "timings": {
+    "interactiveMs": 2136,
+    "domContentLoadedMs": 646.6999999880791,
+    "wallFrameWindowSec": 5.005400000035762
+  },
+  "frames": {
+    "fpsWall": 51.34454788791381,
+    "count": 257,
+    "frameMsP50": 16.699999999999818,
+    "frameMsP95": 33.399999999999636,
+    "frameMsMax": 100
+  },
+  "longTasks": {
+    "supported": true,
+    "count": 3,
+    "maxMs": 566
+  },
+  "inputLatency": {
+    "samples": [
+      1.437255859375,
+      0.650146484375,
+      6.5478515625,
+      3.334716796875,
+      0.7314453125,
+      0.6015625,
+      2.80517578125,
+      0.853515625,
+      0.805419921875,
+      1.071533203125,
+      0.54541015625,
+      0.7783203125,
+      0.650146484375,
+      0.64697265625,
+      1.383056640625,
+      1.5224609375,
+      2.80126953125,
+      0.9169921875,
+      1.084228515625,
+      0.6328125,
+      3.83056640625,
+      0.90625,
+      1.011474609375,
+      0.675537109375,
+      0.84423828125,
+      2.77099609375,
+      1.26513671875,
+      0.925537109375,
+      1.434326171875,
+      0.962158203125,
+      6.50537109375,
+      3.22119140625,
+      0.762451171875,
+      0.789306640625,
+      0.82763671875,
+      0.706787109375,
+      0.7333984375,
+      0.875,
+      1.00927734375,
+      0.66943359375
+    ],
+    "count": 40,
+    "p50": 0.90625,
+    "p95": 3.83056640625,
+    "max": 6.5478515625,
+    "percentileMethod": "nearest rank",
+    "kind": "real mouse: Node input dispatch to page capture handler",
+    "allTrusted": true,
+    "postHandlerNote": "postHandlerAt is a timer observation, not runner stop or event arrival"
+  },
+  "batch": {
+    "workerMs": 6560.37451171875,
+    "rows": 5,
+    "workerMode": "worker",
+    "workerCompleted": true,
+    "mainCancelLatencyMs": 32.39999997615814,
+    "mainCancelDefinition": "request to runner stop, not post-await",
+    "partialSeeds": 1,
+    "peakHeapMb": 19.54924964904785,
+    "heapFinalMb": 14.981449127197266
+  },
+  "consoleErrors": [],
+  "diagnostics": {
+    "targetMs": 200,
+    "minimumSamples": 40,
+    "waitFailures": [],
+    "checks": [
+      {
+        "name": "console",
+        "pass": true,
+        "reason": "0 个控制台错误"
+      },
+      {
+        "name": "wall frames",
+        "pass": true,
+        "reason": "墙钟 51.3 fps"
+      },
+      {
+        "name": "real input",
+        "pass": true,
+        "reason": "真实输入 40 样本，p95=3.83056640625 ms，固定目标200"
+      },
+      {
+        "name": "batch timer",
+        "pass": true,
+        "reason": "基线仅诊断，运行 40 样本，p95=15.600000023841858 ms，固定目标200"
+      },
+      {
+        "name": "main cancellation",
+        "pass": true,
+        "reason": "request→runner 32.39999997615814 ms，input→runner 35.09999996423721 ms，post-await单记；取消前「批量评测准备中：30 个种子 × 30 s…」"
+      },
+      {
+        "name": "telemetry",
+        "pass": true,
+        "reason": "必须保留主线程 slice 与 api.performance 分项测量，不把缺失当0"
+      },
+      {
+        "name": "worker complete",
+        "pass": true,
+        "reason": "完成：10 个种子 × 10 s（seed 24301 → 3235159734）· P50/P95 为跨种子分布；稳态 = 每次运行末段 40%（* 倾角/偏航为 SO(3) 小角分解，不受欧拉奇点影响）；未收敛率 = 单次 10 s 内未连续 1 s 总误差 <2° 的比例；统计口径：精确（逐样本）；本批在 Web Worker 中执行（评测期间界面不卡）；模式 worker、表格 5 行"
+      },
+      {
+        "name": "bounded waits",
+        "pass": true,
+        "reason": "[]"
+      }
+    ],
+    "frameWindow": {
+      "at": 7793.399999976158,
+      "timeOrigin": 1794903852073.6,
+      "state": {
+        "running": false,
+        "activeJob": 0,
+        "cancels": 0,
+        "button": "运行批量评测",
+        "generation": 0,
+        "mode": null,
+        "cancelLatencyMs": null,
+        "partialSeeds": 0,
+        "workerDisabled": false,
+        "slices": {
+          "count": 0,
+          "maxComputeMs": 0
+        },
+        "cancelTiming": {
+          "requestedAt": null,
+          "runnerStoppedAt": null,
+          "postAwaitAt": null
+        }
+      },
+      "status": "",
+      "frameTiming": {
+        "count": 257,
+        "max": {
+          "simulation": 4.5,
+          "scene": 7,
+          "ui": 2.900000035762787,
+          "metrics": 14.800000011920929,
+          "frame": 17.400000035762787
+        }
+      },
+      "visibilityState": "visible",
+      "hasFocus": true,
+      "activeElement": {
+        "id": "",
+        "tag": "BODY"
+      },
+      "longTaskSupported": true,
+      "longTaskReason": null,
+      "longTasks": [
+        {
+          "start": 84.29999995231628,
+          "duration": 566
+        },
+        {
+          "start": 662.5,
+          "duration": 384
+        },
+        {
+          "start": 1668.199999988079,
+          "duration": 70
+        }
+      ],
+      "frames": [
+        {
+          "at": 2783.6,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 2800.2,
+          "ms": 16.59999999999991
+        },
+        {
+          "at": 2816.9,
+          "ms": 16.700000000000273
+        },
+        {
+          "at": 2850.2,
+          "ms": 33.29999999999973
+        },
+        {
+          "at": 2866.9,
+          "ms": 16.700000000000273
+        },
+        {
+          "at": 2883.5,
+          "ms": 16.59999999999991
+        },
+        {
+          "at": 2900.2,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 2916.8,
+          "ms": 16.600000000000364
+        },
+        {
+          "at": 2933.5,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 2966.8,
+          "ms": 33.30000000000018
+        },
+        {
+          "at": 2983.5,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 3000.2,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 3016.8,
+          "ms": 16.600000000000364
+        },
+        {
+          "at": 3033.4,
+          "ms": 16.59999999999991
+        },
+        {
+          "at": 3050.1,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 3083.5,
+          "ms": 33.40000000000009
+        },
+        {
+          "at": 3100.1,
+          "ms": 16.59999999999991
+        },
+        {
+          "at": 3116.8,
+          "ms": 16.700000000000273
+        },
+        {
+          "at": 3133.5,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 3150.1,
+          "ms": 16.59999999999991
+        },
+        {
+          "at": 3183.4,
+          "ms": 33.30000000000018
+        },
+        {
+          "at": 3200.1,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 3216.8,
+          "ms": 16.700000000000273
+        },
+        {
+          "at": 3233.4,
+          "ms": 16.59999999999991
+        },
+        {
+          "at": 3266.7,
+          "ms": 33.29999999999973
+        },
+        {
+          "at": 3283.4,
+          "ms": 16.700000000000273
+        },
+        {
+          "at": 3300,
+          "ms": 16.59999999999991
+        },
+        {
+          "at": 3333.4,
+          "ms": 33.40000000000009
+        },
+        {
+          "at": 3350,
+          "ms": 16.59999999999991
+        },
+        {
+          "at": 3366.8,
+          "ms": 16.800000000000182
+        },
+        {
+          "at": 3400,
+          "ms": 33.19999999999982
+        },
+        {
+          "at": 3416.7,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 3433.3,
+          "ms": 16.600000000000364
+        },
+        {
+          "at": 3450.1,
+          "ms": 16.799999999999727
+        },
+        {
+          "at": 3483.3,
+          "ms": 33.20000000000027
+        },
+        {
+          "at": 3500,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 3516.7,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 3550,
+          "ms": 33.30000000000018
+        },
+        {
+          "at": 3566.6,
+          "ms": 16.59999999999991
+        },
+        {
+          "at": 3583.4,
+          "ms": 16.800000000000182
+        },
+        {
+          "at": 3616.7,
+          "ms": 33.29999999999973
+        },
+        {
+          "at": 3633.3,
+          "ms": 16.600000000000364
+        },
+        {
+          "at": 3649.9,
+          "ms": 16.59999999999991
+        },
+        {
+          "at": 3666.6,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 3683.3,
+          "ms": 16.700000000000273
+        },
+        {
+          "at": 3716.6,
+          "ms": 33.29999999999973
+        },
+        {
+          "at": 3733.2,
+          "ms": 16.59999999999991
+        },
+        {
+          "at": 3749.9,
+          "ms": 16.700000000000273
+        },
+        {
+          "at": 3766.6,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 3783.2,
+          "ms": 16.59999999999991
+        },
+        {
+          "at": 3833.3,
+          "ms": 50.100000000000364
+        },
+        {
+          "at": 3849.9,
+          "ms": 16.59999999999991
+        },
+        {
+          "at": 3866.6,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 3899.8,
+          "ms": 33.20000000000027
+        },
+        {
+          "at": 3933.2,
+          "ms": 33.399999999999636
+        },
+        {
+          "at": 3949.9,
+          "ms": 16.700000000000273
+        },
+        {
+          "at": 3983.2,
+          "ms": 33.29999999999973
+        },
+        {
+          "at": 4016.6,
+          "ms": 33.40000000000009
+        },
+        {
+          "at": 4033.2,
+          "ms": 16.59999999999991
+        },
+        {
+          "at": 4066.5,
+          "ms": 33.30000000000018
+        },
+        {
+          "at": 4083.1,
+          "ms": 16.59999999999991
+        },
+        {
+          "at": 4099.8,
+          "ms": 16.700000000000273
+        },
+        {
+          "at": 4133.2,
+          "ms": 33.399999999999636
+        },
+        {
+          "at": 4166.5,
+          "ms": 33.30000000000018
+        },
+        {
+          "at": 4183.1,
+          "ms": 16.600000000000364
+        },
+        {
+          "at": 4199.8,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 4233.1,
+          "ms": 33.30000000000018
+        },
+        {
+          "at": 4266.5,
+          "ms": 33.399999999999636
+        },
+        {
+          "at": 4283.1,
+          "ms": 16.600000000000364
+        },
+        {
+          "at": 4299.8,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 4333.1,
+          "ms": 33.30000000000018
+        },
+        {
+          "at": 4433.1,
+          "ms": 100
+        },
+        {
+          "at": 4449.7,
+          "ms": 16.599999999999454
+        },
+        {
+          "at": 4466.4,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 4499.7,
+          "ms": 33.30000000000018
+        },
+        {
+          "at": 4533,
+          "ms": 33.30000000000018
+        },
+        {
+          "at": 4549.6,
+          "ms": 16.600000000000364
+        },
+        {
+          "at": 4583,
+          "ms": 33.399999999999636
+        },
+        {
+          "at": 4599.7,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 4633,
+          "ms": 33.30000000000018
+        },
+        {
+          "at": 4649.7,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 4666.4,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 4683,
+          "ms": 16.600000000000364
+        },
+        {
+          "at": 4699.6,
+          "ms": 16.600000000000364
+        },
+        {
+          "at": 4716.4,
+          "ms": 16.799999999999272
+        },
+        {
+          "at": 4733,
+          "ms": 16.600000000000364
+        },
+        {
+          "at": 4749.7,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 4766.3,
+          "ms": 16.600000000000364
+        },
+        {
+          "at": 4783,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 4849.6,
+          "ms": 66.60000000000036
+        },
+        {
+          "at": 4866.3,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 4916.2,
+          "ms": 49.899999999999636
+        },
+        {
+          "at": 4932.9,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 4949.6,
+          "ms": 16.700000000000728
+        },
+        {
+          "at": 4982.9,
+          "ms": 33.29999999999927
+        },
+        {
+          "at": 4999.6,
+          "ms": 16.700000000000728
+        },
+        {
+          "at": 5032.9,
+          "ms": 33.29999999999927
+        },
+        {
+          "at": 5049.6,
+          "ms": 16.700000000000728
+        },
+        {
+          "at": 5099.5,
+          "ms": 49.899999999999636
+        },
+        {
+          "at": 5116.2,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 5132.8,
+          "ms": 16.600000000000364
+        },
+        {
+          "at": 5149.5,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 5166.1,
+          "ms": 16.600000000000364
+        },
+        {
+          "at": 5182.8,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 5199.6,
+          "ms": 16.800000000000182
+        },
+        {
+          "at": 5216.2,
+          "ms": 16.599999999999454
+        },
+        {
+          "at": 5232.9,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 5249.5,
+          "ms": 16.600000000000364
+        },
+        {
+          "at": 5266.1,
+          "ms": 16.600000000000364
+        },
+        {
+          "at": 5282.8,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 5299.5,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 5316.2,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 5332.8,
+          "ms": 16.600000000000364
+        },
+        {
+          "at": 5349.4,
+          "ms": 16.599999999999454
+        },
+        {
+          "at": 5366.1,
+          "ms": 16.700000000000728
+        },
+        {
+          "at": 5382.8,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 5399.5,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 5416.1,
+          "ms": 16.600000000000364
+        },
+        {
+          "at": 5432.7,
+          "ms": 16.599999999999454
+        },
+        {
+          "at": 5449.4,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 5466,
+          "ms": 16.600000000000364
+        },
+        {
+          "at": 5482.7,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 5499.5,
+          "ms": 16.800000000000182
+        },
+        {
+          "at": 5516.1,
+          "ms": 16.600000000000364
+        },
+        {
+          "at": 5532.8,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 5549.4,
+          "ms": 16.599999999999454
+        },
+        {
+          "at": 5566,
+          "ms": 16.600000000000364
+        },
+        {
+          "at": 5582.7,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 5599.4,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 5616,
+          "ms": 16.600000000000364
+        },
+        {
+          "at": 5632.7,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 5649.4,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 5666,
+          "ms": 16.600000000000364
+        },
+        {
+          "at": 5682.6,
+          "ms": 16.600000000000364
+        },
+        {
+          "at": 5699.3,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 5716,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 5732.6,
+          "ms": 16.600000000000364
+        },
+        {
+          "at": 5749.4,
+          "ms": 16.799999999999272
+        },
+        {
+          "at": 5766,
+          "ms": 16.600000000000364
+        },
+        {
+          "at": 5782.6,
+          "ms": 16.600000000000364
+        },
+        {
+          "at": 5799.3,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 5815.9,
+          "ms": 16.599999999999454
+        },
+        {
+          "at": 5832.6,
+          "ms": 16.700000000000728
+        },
+        {
+          "at": 5849.3,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 5865.9,
+          "ms": 16.599999999999454
+        },
+        {
+          "at": 5882.6,
+          "ms": 16.700000000000728
+        },
+        {
+          "at": 5899.3,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 5916,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 5932.6,
+          "ms": 16.600000000000364
+        },
+        {
+          "at": 5949.2,
+          "ms": 16.599999999999454
+        },
+        {
+          "at": 5965.9,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 5982.6,
+          "ms": 16.700000000000728
+        },
+        {
+          "at": 5999.3,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 6015.9,
+          "ms": 16.599999999999454
+        },
+        {
+          "at": 6032.6,
+          "ms": 16.700000000000728
+        },
+        {
+          "at": 6049.2,
+          "ms": 16.599999999999454
+        },
+        {
+          "at": 6082.6,
+          "ms": 33.400000000000546
+        },
+        {
+          "at": 6099.2,
+          "ms": 16.599999999999454
+        },
+        {
+          "at": 6115.9,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 6132.5,
+          "ms": 16.600000000000364
+        },
+        {
+          "at": 6149.2,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 6165.9,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 6182.6,
+          "ms": 16.700000000000728
+        },
+        {
+          "at": 6199.1,
+          "ms": 16.5
+        },
+        {
+          "at": 6215.8,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 6232.5,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 6249.2,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 6265.8,
+          "ms": 16.600000000000364
+        },
+        {
+          "at": 6282.5,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 6299.2,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 6315.9,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 6332.5,
+          "ms": 16.600000000000364
+        },
+        {
+          "at": 6349.2,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 6365.8,
+          "ms": 16.600000000000364
+        },
+        {
+          "at": 6382.4,
+          "ms": 16.599999999999454
+        },
+        {
+          "at": 6399.1,
+          "ms": 16.700000000000728
+        },
+        {
+          "at": 6415.8,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 6432.5,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 6449.1,
+          "ms": 16.600000000000364
+        },
+        {
+          "at": 6465.8,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 6482.5,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 6499.1,
+          "ms": 16.600000000000364
+        },
+        {
+          "at": 6515.8,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 6532.4,
+          "ms": 16.599999999999454
+        },
+        {
+          "at": 6549,
+          "ms": 16.600000000000364
+        },
+        {
+          "at": 6565.7,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 6582.4,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 6599.1,
+          "ms": 16.700000000000728
+        },
+        {
+          "at": 6615.7,
+          "ms": 16.599999999999454
+        },
+        {
+          "at": 6632.4,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 6649.1,
+          "ms": 16.700000000000728
+        },
+        {
+          "at": 6665.8,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 6682.4,
+          "ms": 16.599999999999454
+        },
+        {
+          "at": 6699.1,
+          "ms": 16.700000000000728
+        },
+        {
+          "at": 6715.7,
+          "ms": 16.599999999999454
+        },
+        {
+          "at": 6732.4,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 6749.1,
+          "ms": 16.700000000000728
+        },
+        {
+          "at": 6765.7,
+          "ms": 16.599999999999454
+        },
+        {
+          "at": 6782.3,
+          "ms": 16.600000000000364
+        },
+        {
+          "at": 6799,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 6815.7,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 6832.3,
+          "ms": 16.600000000000364
+        },
+        {
+          "at": 6849,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 6865.7,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 6882.3,
+          "ms": 16.600000000000364
+        },
+        {
+          "at": 6898.9,
+          "ms": 16.599999999999454
+        },
+        {
+          "at": 6915.6,
+          "ms": 16.700000000000728
+        },
+        {
+          "at": 6932.2,
+          "ms": 16.599999999999454
+        },
+        {
+          "at": 6949,
+          "ms": 16.800000000000182
+        },
+        {
+          "at": 6965.6,
+          "ms": 16.600000000000364
+        },
+        {
+          "at": 6982.3,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 6998.9,
+          "ms": 16.599999999999454
+        },
+        {
+          "at": 7015.6,
+          "ms": 16.700000000000728
+        },
+        {
+          "at": 7032.3,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 7048.9,
+          "ms": 16.599999999999454
+        },
+        {
+          "at": 7065.5,
+          "ms": 16.600000000000364
+        },
+        {
+          "at": 7082.2,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 7098.9,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 7132.2,
+          "ms": 33.30000000000018
+        },
+        {
+          "at": 7148.8,
+          "ms": 16.600000000000364
+        },
+        {
+          "at": 7165.6,
+          "ms": 16.800000000000182
+        },
+        {
+          "at": 7182.2,
+          "ms": 16.599999999999454
+        },
+        {
+          "at": 7198.8,
+          "ms": 16.600000000000364
+        },
+        {
+          "at": 7232.2,
+          "ms": 33.399999999999636
+        },
+        {
+          "at": 7248.8,
+          "ms": 16.600000000000364
+        },
+        {
+          "at": 7265.5,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 7282.1,
+          "ms": 16.600000000000364
+        },
+        {
+          "at": 7298.8,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 7315.5,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 7332.1,
+          "ms": 16.600000000000364
+        },
+        {
+          "at": 7348.8,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 7365.5,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 7382.2,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 7398.8,
+          "ms": 16.600000000000364
+        },
+        {
+          "at": 7415.5,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 7432.1,
+          "ms": 16.600000000000364
+        },
+        {
+          "at": 7448.8,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 7465.4,
+          "ms": 16.599999999999454
+        },
+        {
+          "at": 7482.1,
+          "ms": 16.700000000000728
+        },
+        {
+          "at": 7498.8,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 7515.5,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 7532.1,
+          "ms": 16.600000000000364
+        },
+        {
+          "at": 7548.7,
+          "ms": 16.599999999999454
+        },
+        {
+          "at": 7565.4,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 7582,
+          "ms": 16.600000000000364
+        },
+        {
+          "at": 7598.8,
+          "ms": 16.800000000000182
+        },
+        {
+          "at": 7615.4,
+          "ms": 16.599999999999454
+        },
+        {
+          "at": 7632.1,
+          "ms": 16.700000000000728
+        },
+        {
+          "at": 7648.7,
+          "ms": 16.599999999999454
+        },
+        {
+          "at": 7665.3,
+          "ms": 16.600000000000364
+        },
+        {
+          "at": 7682.1,
+          "ms": 16.800000000000182
+        },
+        {
+          "at": 7698.8,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 7715.4,
+          "ms": 16.599999999999454
+        },
+        {
+          "at": 7732,
+          "ms": 16.600000000000364
+        },
+        {
+          "at": 7748.7,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 7765.4,
+          "ms": 16.699999999999818
+        },
+        {
+          "at": 7782,
+          "ms": 16.600000000000364
+        }
+      ]
+    },
+    "realInputs": [
+      {
+        "node": {
+          "kind": "click-producing mouseup dispatch",
+          "sentEpochMs": 1794903859932.0627,
+          "returnedEpochMs": 1794903859934.7527,
+          "x": 886,
+          "y": 84
+        },
+        "input": {
+          "handlerAt": 7859.899999976158,
+          "eventTimeStamp": 7859.099999964237,
+          "timeOrigin": 1794903852073.6,
+          "trusted": true,
+          "hasFocus": true,
+          "visibilityState": "visible",
+          "activeElementId": "",
+          "stateBeforeHandler": {
+            "running": false,
+            "activeJob": 0,
+            "cancels": 0,
+            "button": "运行批量评测",
+            "generation": 0,
+            "mode": null,
+            "cancelLatencyMs": null,
+            "partialSeeds": 0,
+            "workerDisabled": false,
+            "slices": {
+              "count": 0,
+              "maxComputeMs": 0
+            },
+            "cancelTiming": {
+              "requestedAt": null,
+              "runnerStoppedAt": null,
+              "postAwaitAt": null
+            }
+          },
+          "postHandlerAt": 7870.599999964237
+        },
+        "nodeInputToHandlerMs": 1.437255859375,
+        "eventToHandlerMs": 0.800000011920929,
+        "handlerToPostHandlerMs": 10.699999988079071
+      },
+      {
+        "node": {
+          "kind": "click-producing mouseup dispatch",
+          "sentEpochMs": 1794903859961.3499,
+          "returnedEpochMs": 1794903859962.6455,
+          "x": 886,
+          "y": 84
+        },
+        "input": {
+          "handlerAt": 7888.399999976158,
+          "eventTimeStamp": 7888.099999964237,
+          "timeOrigin": 1794903852073.6,
+          "trusted": true,
+          "hasFocus": true,
+          "visibilityState": "visible",
+          "activeElementId": "",
+          "stateBeforeHandler": {
+            "running": false,
+            "activeJob": 0,
+            "cancels": 0,
+            "button": "运行批量评测",
+            "generation": 0,
+            "mode": null,
+            "cancelLatencyMs": null,
+            "partialSeeds": 0,
+            "workerDisabled": false,
+            "slices": {
+              "count": 0,
+              "maxComputeMs": 0
+            },
+            "cancelTiming": {
+              "requestedAt": null,
+              "runnerStoppedAt": null,
+              "postAwaitAt": null
+            }
+          },
+          "postHandlerAt": null
+        },
+        "nodeInputToHandlerMs": 0.650146484375,
+        "eventToHandlerMs": 0.30000001192092896,
+        "handlerToPostHandlerMs": null
+      },
+      {
+        "node": {
+          "kind": "click-producing mouseup dispatch",
+          "sentEpochMs": 1794903859996.5522,
+          "returnedEpochMs": 1794903860004.0623,
+          "x": 886,
+          "y": 84
+        },
+        "input": {
+          "handlerAt": 7929.5,
+          "eventTimeStamp": 7929.199999988079,
+          "timeOrigin": 1794903852073.6,
+          "trusted": true,
+          "hasFocus": true,
+          "visibilityState": "visible",
+          "activeElementId": "",
+          "stateBeforeHandler": {
+            "running": false,
+            "activeJob": 0,
+            "cancels": 0,
+            "button": "运行批量评测",
+            "generation": 0,
+            "mode": null,
+            "cancelLatencyMs": null,
+            "partialSeeds": 0,
+            "workerDisabled": false,
+            "slices": {
+              "count": 0,
+              "maxComputeMs": 0
+            },
+            "cancelTiming": {
+              "requestedAt": null,
+              "runnerStoppedAt": null,
+              "postAwaitAt": null
+            }
+          },
+          "postHandlerAt": 7942.399999976158
+        },
+        "nodeInputToHandlerMs": 6.5478515625,
+        "eventToHandlerMs": 0.30000001192092896,
+        "handlerToPostHandlerMs": 12.899999976158142
+      },
+      {
+        "node": {
+          "kind": "click-producing mouseup dispatch",
+          "sentEpochMs": 1794903860048.2654,
+          "returnedEpochMs": 1794903860053.047,
+          "x": 886,
+          "y": 84
+        },
+        "input": {
+          "handlerAt": 7978,
+          "eventTimeStamp": 7977.5,
+          "timeOrigin": 1794903852073.6,
+          "trusted": true,
+          "hasFocus": true,
+          "visibilityState": "visible",
+          "activeElementId": "",
+          "stateBeforeHandler": {
+            "running": false,
+            "activeJob": 0,
+            "cancels": 0,
+            "button": "运行批量评测",
+            "generation": 0,
+            "mode": null,
+            "cancelLatencyMs": null,
+            "partialSeeds": 0,
+            "workerDisabled": false,
+            "slices": {
+              "count": 0,
+              "maxComputeMs": 0
+            },
+            "cancelTiming": {
+              "requestedAt": null,
+              "runnerStoppedAt": null,
+              "postAwaitAt": null
+            }
+          },
+          "postHandlerAt": 7990
+        },
+        "nodeInputToHandlerMs": 3.334716796875,
+        "eventToHandlerMs": 0.5,
+        "handlerToPostHandlerMs": 12
+      },
+      {
+        "node": {
+          "kind": "click-producing mouseup dispatch",
+          "sentEpochMs": 1794903860097.3687,
+          "returnedEpochMs": 1794903860099.0935,
+          "x": 886,
+          "y": 84
+        },
+        "input": {
+          "handlerAt": 8024.5,
+          "eventTimeStamp": 8024.199999988079,
+          "timeOrigin": 1794903852073.6,
+          "trusted": true,
+          "hasFocus": true,
+          "visibilityState": "visible",
+          "activeElementId": "",
+          "stateBeforeHandler": {
+            "running": false,
+            "activeJob": 0,
+            "cancels": 0,
+            "button": "运行批量评测",
+            "generation": 0,
+            "mode": null,
+            "cancelLatencyMs": null,
+            "partialSeeds": 0,
+            "workerDisabled": false,
+            "slices": {
+              "count": 0,
+              "maxComputeMs": 0
+            },
+            "cancelTiming": {
+              "requestedAt": null,
+              "runnerStoppedAt": null,
+              "postAwaitAt": null
+            }
+          },
+          "postHandlerAt": 8036.699999988079
+        },
+        "nodeInputToHandlerMs": 0.7314453125,
+        "eventToHandlerMs": 0.30000001192092896,
+        "handlerToPostHandlerMs": 12.199999988079071
+      },
+      {
+        "node": {
+          "kind": "click-producing mouseup dispatch",
+          "sentEpochMs": 1794903860144.2986,
+          "returnedEpochMs": 1794903860145.6177,
+          "x": 886,
+          "y": 84
+        },
+        "input": {
+          "handlerAt": 8071.299999952316,
+          "eventTimeStamp": 8071.099999964237,
+          "timeOrigin": 1794903852073.6,
+          "trusted": true,
+          "hasFocus": true,
+          "visibilityState": "visible",
+          "activeElementId": "",
+          "stateBeforeHandler": {
+            "running": false,
+            "activeJob": 0,
+            "cancels": 0,
+            "button": "运行批量评测",
+            "generation": 0,
+            "mode": null,
+            "cancelLatencyMs": null,
+            "partialSeeds": 0,
+            "workerDisabled": false,
+            "slices": {
+              "count": 0,
+              "maxComputeMs": 0
+            },
+            "cancelTiming": {
+              "requestedAt": null,
+              "runnerStoppedAt": null,
+              "postAwaitAt": null
+            }
+          },
+          "postHandlerAt": null
+        },
+        "nodeInputToHandlerMs": 0.6015625,
+        "eventToHandlerMs": 0.19999998807907104,
+        "handlerToPostHandlerMs": null
+      },
+      {
+        "node": {
+          "kind": "click-producing mouseup dispatch",
+          "sentEpochMs": 1794903860175.1948,
+          "returnedEpochMs": 1794903860178.994,
+          "x": 886,
+          "y": 84
+        },
+        "input": {
+          "handlerAt": 8104.399999976158,
+          "eventTimeStamp": 8102.299999952316,
+          "timeOrigin": 1794903852073.6,
+          "trusted": true,
+          "hasFocus": true,
+          "visibilityState": "visible",
+          "activeElementId": "",
+          "stateBeforeHandler": {
+            "running": false,
+            "activeJob": 0,
+            "cancels": 0,
+            "button": "运行批量评测",
+            "generation": 0,
+            "mode": null,
+            "cancelLatencyMs": null,
+            "partialSeeds": 0,
+            "workerDisabled": false,
+            "slices": {
+              "count": 0,
+              "maxComputeMs": 0
+            },
+            "cancelTiming": {
+              "requestedAt": null,
+              "runnerStoppedAt": null,
+              "postAwaitAt": null
+            }
+          },
+          "postHandlerAt": null
+        },
+        "nodeInputToHandlerMs": 2.80517578125,
+        "eventToHandlerMs": 2.100000023841858,
+        "handlerToPostHandlerMs": null
+      },
+      {
+        "node": {
+          "kind": "click-producing mouseup dispatch",
+          "sentEpochMs": 1794903860224.1465,
+          "returnedEpochMs": 1794903860226.7263,
+          "x": 886,
+          "y": 84
+        },
+        "input": {
+          "handlerAt": 8151.399999976158,
+          "eventTimeStamp": 8151.099999964237,
+          "timeOrigin": 1794903852073.6,
+          "trusted": true,
+          "hasFocus": true,
+          "visibilityState": "visible",
+          "activeElementId": "",
+          "stateBeforeHandler": {
+            "running": false,
+            "activeJob": 0,
+            "cancels": 0,
+            "button": "运行批量评测",
+            "generation": 0,
+            "mode": null,
+            "cancelLatencyMs": null,
+            "partialSeeds": 0,
+            "workerDisabled": false,
+            "slices": {
+              "count": 0,
+              "maxComputeMs": 0
+            },
+            "cancelTiming": {
+              "requestedAt": null,
+              "runnerStoppedAt": null,
+              "postAwaitAt": null
+            }
+          },
+          "postHandlerAt": 8159.699999988079
+        },
+        "nodeInputToHandlerMs": 0.853515625,
+        "eventToHandlerMs": 0.30000001192092896,
+        "handlerToPostHandlerMs": 8.300000011920929
+      },
+      {
+        "node": {
+          "kind": "click-producing mouseup dispatch",
+          "sentEpochMs": 1794903860264.1946,
+          "returnedEpochMs": 1794903860265.8958,
+          "x": 886,
+          "y": 84
+        },
+        "input": {
+          "handlerAt": 8191.399999976158,
+          "eventTimeStamp": 8191.099999964237,
+          "timeOrigin": 1794903852073.6,
+          "trusted": true,
+          "hasFocus": true,
+          "visibilityState": "visible",
+          "activeElementId": "",
+          "stateBeforeHandler": {
+            "running": false,
+            "activeJob": 0,
+            "cancels": 0,
+            "button": "运行批量评测",
+            "generation": 0,
+            "mode": null,
+            "cancelLatencyMs": null,
+            "partialSeeds": 0,
+            "workerDisabled": false,
+            "slices": {
+              "count": 0,
+              "maxComputeMs": 0
+            },
+            "cancelTiming": {
+              "requestedAt": null,
+              "runnerStoppedAt": null,
+              "postAwaitAt": null
+            }
+          },
+          "postHandlerAt": null
+        },
+        "nodeInputToHandlerMs": 0.805419921875,
+        "eventToHandlerMs": 0.30000001192092896,
+        "handlerToPostHandlerMs": null
+      },
+      {
+        "node": {
+          "kind": "click-producing mouseup dispatch",
+          "sentEpochMs": 1794903860297.0286,
+          "returnedEpochMs": 1794903860298.9248,
+          "x": 886,
+          "y": 84
+        },
+        "input": {
+          "handlerAt": 8224.5,
+          "eventTimeStamp": 8224,
+          "timeOrigin": 1794903852073.6,
+          "trusted": true,
+          "hasFocus": true,
+          "visibilityState": "visible",
+          "activeElementId": "",
+          "stateBeforeHandler": {
+            "running": false,
+            "activeJob": 0,
+            "cancels": 0,
+            "button": "运行批量评测",
+            "generation": 0,
+            "mode": null,
+            "cancelLatencyMs": null,
+            "partialSeeds": 0,
+            "workerDisabled": false,
+            "slices": {
+              "count": 0,
+              "maxComputeMs": 0
+            },
+            "cancelTiming": {
+              "requestedAt": null,
+              "runnerStoppedAt": null,
+              "postAwaitAt": null
+            }
+          },
+          "postHandlerAt": null
+        },
+        "nodeInputToHandlerMs": 1.071533203125,
+        "eventToHandlerMs": 0.5,
+        "handlerToPostHandlerMs": null
+      },
+      {
+        "node": {
+          "kind": "click-producing mouseup dispatch",
+          "sentEpochMs": 1794903860319.0547,
+          "returnedEpochMs": 1794903860320.2598,
+          "x": 886,
+          "y": 84
+        },
+        "input": {
+          "handlerAt": 8246,
+          "eventTimeStamp": 8245.799999952316,
+          "timeOrigin": 1794903852073.6,
+          "trusted": true,
+          "hasFocus": true,
+          "visibilityState": "visible",
+          "activeElementId": "",
+          "stateBeforeHandler": {
+            "running": false,
+            "activeJob": 0,
+            "cancels": 0,
+            "button": "运行批量评测",
+            "generation": 0,
+            "mode": null,
+            "cancelLatencyMs": null,
+            "partialSeeds": 0,
+            "workerDisabled": false,
+            "slices": {
+              "count": 0,
+              "maxComputeMs": 0
+            },
+            "cancelTiming": {
+              "requestedAt": null,
+              "runnerStoppedAt": null,
+              "postAwaitAt": null
+            }
+          },
+          "postHandlerAt": null
+        },
+        "nodeInputToHandlerMs": 0.54541015625,
+        "eventToHandlerMs": 0.20000004768371582,
+        "handlerToPostHandlerMs": null
+      },
+      {
+        "node": {
+          "kind": "click-producing mouseup dispatch",
+          "sentEpochMs": 1794903860341.3218,
+          "returnedEpochMs": 1794903860342.9849,
+          "x": 886,
+          "y": 84
+        },
+        "input": {
+          "handlerAt": 8268.5,
+          "eventTimeStamp": 8268.099999964237,
+          "timeOrigin": 1794903852073.6,
+          "trusted": true,
+          "hasFocus": true,
+          "visibilityState": "visible",
+          "activeElementId": "",
+          "stateBeforeHandler": {
+            "running": false,
+            "activeJob": 0,
+            "cancels": 0,
+            "button": "运行批量评测",
+            "generation": 0,
+            "mode": null,
+            "cancelLatencyMs": null,
+            "partialSeeds": 0,
+            "workerDisabled": false,
+            "slices": {
+              "count": 0,
+              "maxComputeMs": 0
+            },
+            "cancelTiming": {
+              "requestedAt": null,
+              "runnerStoppedAt": null,
+              "postAwaitAt": null
+            }
+          },
+          "postHandlerAt": 8277.899999976158
+        },
+        "nodeInputToHandlerMs": 0.7783203125,
+        "eventToHandlerMs": 0.40000003576278687,
+        "handlerToPostHandlerMs": 9.399999976158142
+      },
+      {
+        "node": {
+          "kind": "click-producing mouseup dispatch",
+          "sentEpochMs": 1794903860379.05,
+          "returnedEpochMs": 1794903860380.1746,
+          "x": 886,
+          "y": 84
+        },
+        "input": {
+          "handlerAt": 8306.099999964237,
+          "eventTimeStamp": 8305.799999952316,
+          "timeOrigin": 1794903852073.6,
+          "trusted": true,
+          "hasFocus": true,
+          "visibilityState": "visible",
+          "activeElementId": "",
+          "stateBeforeHandler": {
+            "running": false,
+            "activeJob": 0,
+            "cancels": 0,
+            "button": "运行批量评测",
+            "generation": 0,
+            "mode": null,
+            "cancelLatencyMs": null,
+            "partialSeeds": 0,
+            "workerDisabled": false,
+            "slices": {
+              "count": 0,
+              "maxComputeMs": 0
+            },
+            "cancelTiming": {
+              "requestedAt": null,
+              "runnerStoppedAt": null,
+              "postAwaitAt": null
+            }
+          },
+          "postHandlerAt": null
+        },
+        "nodeInputToHandlerMs": 0.650146484375,
+        "eventToHandlerMs": 0.30000001192092896,
+        "handlerToPostHandlerMs": null
+      },
+      {
+        "node": {
+          "kind": "click-producing mouseup dispatch",
+          "sentEpochMs": 1794903860434.7532,
+          "returnedEpochMs": 1794903860435.9697,
+          "x": 886,
+          "y": 84
+        },
+        "input": {
+          "handlerAt": 8361.799999952316,
+          "eventTimeStamp": 8361.5,
+          "timeOrigin": 1794903852073.6,
+          "trusted": true,
+          "hasFocus": true,
+          "visibilityState": "visible",
+          "activeElementId": "",
+          "stateBeforeHandler": {
+            "running": false,
+            "activeJob": 0,
+            "cancels": 0,
+            "button": "运行批量评测",
+            "generation": 0,
+            "mode": null,
+            "cancelLatencyMs": null,
+            "partialSeeds": 0,
+            "workerDisabled": false,
+            "slices": {
+              "count": 0,
+              "maxComputeMs": 0
+            },
+            "cancelTiming": {
+              "requestedAt": null,
+              "runnerStoppedAt": null,
+              "postAwaitAt": null
+            }
+          },
+          "postHandlerAt": null
+        },
+        "nodeInputToHandlerMs": 0.64697265625,
+        "eventToHandlerMs": 0.2999999523162842,
+        "handlerToPostHandlerMs": null
+      },
+      {
+        "node": {
+          "kind": "click-producing mouseup dispatch",
+          "sentEpochMs": 1794903860455.417,
+          "returnedEpochMs": 1794903860458.08,
+          "x": 886,
+          "y": 84
+        },
+        "input": {
+          "handlerAt": 8383.199999988079,
+          "eventTimeStamp": 8382.599999964237,
+          "timeOrigin": 1794903852073.6,
+          "trusted": true,
+          "hasFocus": true,
+          "visibilityState": "visible",
+          "activeElementId": "",
+          "stateBeforeHandler": {
+            "running": false,
+            "activeJob": 0,
+            "cancels": 0,
+            "button": "运行批量评测",
+            "generation": 0,
+            "mode": null,
+            "cancelLatencyMs": null,
+            "partialSeeds": 0,
+            "workerDisabled": false,
+            "slices": {
+              "count": 0,
+              "maxComputeMs": 0
+            },
+            "cancelTiming": {
+              "requestedAt": null,
+              "runnerStoppedAt": null,
+              "postAwaitAt": null
+            }
+          },
+          "postHandlerAt": 8393
+        },
+        "nodeInputToHandlerMs": 1.383056640625,
+        "eventToHandlerMs": 0.6000000238418579,
+        "handlerToPostHandlerMs": 9.800000011920929
+      },
+      {
+        "node": {
+          "kind": "click-producing mouseup dispatch",
+          "sentEpochMs": 1794903860497.1777,
+          "returnedEpochMs": 1794903860503.449,
+          "x": 886,
+          "y": 84
+        },
+        "input": {
+          "handlerAt": 8425.099999964237,
+          "eventTimeStamp": 8424,
+          "timeOrigin": 1794903852073.6,
+          "trusted": true,
+          "hasFocus": true,
+          "visibilityState": "visible",
+          "activeElementId": "",
+          "stateBeforeHandler": {
+            "running": false,
+            "activeJob": 0,
+            "cancels": 0,
+            "button": "运行批量评测",
+            "generation": 0,
+            "mode": null,
+            "cancelLatencyMs": null,
+            "partialSeeds": 0,
+            "workerDisabled": false,
+            "slices": {
+              "count": 0,
+              "maxComputeMs": 0
+            },
+            "cancelTiming": {
+              "requestedAt": null,
+              "runnerStoppedAt": null,
+              "postAwaitAt": null
+            }
+          },
+          "postHandlerAt": null
+        },
+        "nodeInputToHandlerMs": 1.5224609375,
+        "eventToHandlerMs": 1.0999999642372131,
+        "handlerToPostHandlerMs": null
+      },
+      {
+        "node": {
+          "kind": "click-producing mouseup dispatch",
+          "sentEpochMs": 1794903860554.899,
+          "returnedEpochMs": 1794903860560.327,
+          "x": 886,
+          "y": 84
+        },
+        "input": {
+          "handlerAt": 8484.099999964237,
+          "eventTimeStamp": 8481.599999964237,
+          "timeOrigin": 1794903852073.6,
+          "trusted": true,
+          "hasFocus": true,
+          "visibilityState": "visible",
+          "activeElementId": "",
+          "stateBeforeHandler": {
+            "running": false,
+            "activeJob": 0,
+            "cancels": 0,
+            "button": "运行批量评测",
+            "generation": 0,
+            "mode": null,
+            "cancelLatencyMs": null,
+            "partialSeeds": 0,
+            "workerDisabled": false,
+            "slices": {
+              "count": 0,
+              "maxComputeMs": 0
+            },
+            "cancelTiming": {
+              "requestedAt": null,
+              "runnerStoppedAt": null,
+              "postAwaitAt": null
+            }
+          },
+          "postHandlerAt": null
+        },
+        "nodeInputToHandlerMs": 2.80126953125,
+        "eventToHandlerMs": 2.5,
+        "handlerToPostHandlerMs": null
+      },
+      {
+        "node": {
+          "kind": "click-producing mouseup dispatch",
+          "sentEpochMs": 1794903860596.683,
+          "returnedEpochMs": 1794903860600.0054,
+          "x": 886,
+          "y": 84
+        },
+        "input": {
+          "handlerAt": 8524,
+          "eventTimeStamp": 8523.599999964237,
+          "timeOrigin": 1794903852073.6,
+          "trusted": true,
+          "hasFocus": true,
+          "visibilityState": "visible",
+          "activeElementId": "",
+          "stateBeforeHandler": {
+            "running": false,
+            "activeJob": 0,
+            "cancels": 0,
+            "button": "运行批量评测",
+            "generation": 0,
+            "mode": null,
+            "cancelLatencyMs": null,
+            "partialSeeds": 0,
+            "workerDisabled": false,
+            "slices": {
+              "count": 0,
+              "maxComputeMs": 0
+            },
+            "cancelTiming": {
+              "requestedAt": null,
+              "runnerStoppedAt": null,
+              "postAwaitAt": null
+            }
+          },
+          "postHandlerAt": null
+        },
+        "nodeInputToHandlerMs": 0.9169921875,
+        "eventToHandlerMs": 0.40000003576278687,
+        "handlerToPostHandlerMs": null
+      },
+      {
+        "node": {
+          "kind": "click-producing mouseup dispatch",
+          "sentEpochMs": 1794903860633.9158,
+          "returnedEpochMs": 1794903860639.2947,
+          "x": 886,
+          "y": 84
+        },
+        "input": {
+          "handlerAt": 8561.399999976158,
+          "eventTimeStamp": 8560.799999952316,
+          "timeOrigin": 1794903852073.6,
+          "trusted": true,
+          "hasFocus": true,
+          "visibilityState": "visible",
+          "activeElementId": "",
+          "stateBeforeHandler": {
+            "running": false,
+            "activeJob": 0,
+            "cancels": 0,
+            "button": "运行批量评测",
+            "generation": 0,
+            "mode": null,
+            "cancelLatencyMs": null,
+            "partialSeeds": 0,
+            "workerDisabled": false,
+            "slices": {
+              "count": 0,
+              "maxComputeMs": 0
+            },
+            "cancelTiming": {
+              "requestedAt": null,
+              "runnerStoppedAt": null,
+              "postAwaitAt": null
+            }
+          },
+          "postHandlerAt": 8568.799999952316
+        },
+        "nodeInputToHandlerMs": 1.084228515625,
+        "eventToHandlerMs": 0.6000000238418579,
+        "handlerToPostHandlerMs": 7.399999976158142
+      },
+      {
+        "node": {
+          "kind": "click-producing mouseup dispatch",
+          "sentEpochMs": 1794903860684.2673,
+          "returnedEpochMs": 1794903860685.291,
+          "x": 886,
+          "y": 84
+        },
+        "input": {
+          "handlerAt": 8611.299999952316,
+          "eventTimeStamp": 8611,
+          "timeOrigin": 1794903852073.6,
+          "trusted": true,
+          "hasFocus": true,
+          "visibilityState": "visible",
+          "activeElementId": "",
+          "stateBeforeHandler": {
+            "running": false,
+            "activeJob": 0,
+            "cancels": 0,
+            "button": "运行批量评测",
+            "generation": 0,
+            "mode": null,
+            "cancelLatencyMs": null,
+            "partialSeeds": 0,
+            "workerDisabled": false,
+            "slices": {
+              "count": 0,
+              "maxComputeMs": 0
+            },
+            "cancelTiming": {
+              "requestedAt": null,
+              "runnerStoppedAt": null,
+              "postAwaitAt": null
+            }
+          },
+          "postHandlerAt": null
+        },
+        "nodeInputToHandlerMs": 0.6328125,
+        "eventToHandlerMs": 0.2999999523162842,
+        "handlerToPostHandlerMs": null
+      },
+      {
+        "node": {
+          "kind": "click-producing mouseup dispatch",
+          "sentEpochMs": 1794903860732.9695,
+          "returnedEpochMs": 1794903860738.1953,
+          "x": 886,
+          "y": 84
+        },
+        "input": {
+          "handlerAt": 8663.199999988079,
+          "eventTimeStamp": 8662.599999964237,
+          "timeOrigin": 1794903852073.6,
+          "trusted": true,
+          "hasFocus": true,
+          "visibilityState": "visible",
+          "activeElementId": "",
+          "stateBeforeHandler": {
+            "running": false,
+            "activeJob": 0,
+            "cancels": 0,
+            "button": "运行批量评测",
+            "generation": 0,
+            "mode": null,
+            "cancelLatencyMs": null,
+            "partialSeeds": 0,
+            "workerDisabled": false,
+            "slices": {
+              "count": 0,
+              "maxComputeMs": 0
+            },
+            "cancelTiming": {
+              "requestedAt": null,
+              "runnerStoppedAt": null,
+              "postAwaitAt": null
+            }
+          },
+          "postHandlerAt": 8669.399999976158
+        },
+        "nodeInputToHandlerMs": 3.83056640625,
+        "eventToHandlerMs": 0.6000000238418579,
+        "handlerToPostHandlerMs": 6.199999988079071
+      },
+      {
+        "node": {
+          "kind": "click-producing mouseup dispatch",
+          "sentEpochMs": 1794903860784.6938,
+          "returnedEpochMs": 1794903860786.2747,
+          "x": 886,
+          "y": 84
+        },
+        "input": {
+          "handlerAt": 8712,
+          "eventTimeStamp": 8711.599999964237,
+          "timeOrigin": 1794903852073.6,
+          "trusted": true,
+          "hasFocus": true,
+          "visibilityState": "visible",
+          "activeElementId": "",
+          "stateBeforeHandler": {
+            "running": false,
+            "activeJob": 0,
+            "cancels": 0,
+            "button": "运行批量评测",
+            "generation": 0,
+            "mode": null,
+            "cancelLatencyMs": null,
+            "partialSeeds": 0,
+            "workerDisabled": false,
+            "slices": {
+              "count": 0,
+              "maxComputeMs": 0
+            },
+            "cancelTiming": {
+              "requestedAt": null,
+              "runnerStoppedAt": null,
+              "postAwaitAt": null
+            }
+          },
+          "postHandlerAt": 8722.799999952316
+        },
+        "nodeInputToHandlerMs": 0.90625,
+        "eventToHandlerMs": 0.40000003576278687,
+        "handlerToPostHandlerMs": 10.799999952316284
+      },
+      {
+        "node": {
+          "kind": "click-producing mouseup dispatch",
+          "sentEpochMs": 1794903860830.7886,
+          "returnedEpochMs": 1794903860832.382,
+          "x": 886,
+          "y": 84
+        },
+        "input": {
+          "handlerAt": 8758.199999988079,
+          "eventTimeStamp": 8757.799999952316,
+          "timeOrigin": 1794903852073.6,
+          "trusted": true,
+          "hasFocus": true,
+          "visibilityState": "visible",
+          "activeElementId": "",
+          "stateBeforeHandler": {
+            "running": false,
+            "activeJob": 0,
+            "cancels": 0,
+            "button": "运行批量评测",
+            "generation": 0,
+            "mode": null,
+            "cancelLatencyMs": null,
+            "partialSeeds": 0,
+            "workerDisabled": false,
+            "slices": {
+              "count": 0,
+              "maxComputeMs": 0
+            },
+            "cancelTiming": {
+              "requestedAt": null,
+              "runnerStoppedAt": null,
+              "postAwaitAt": null
+            }
+          },
+          "postHandlerAt": null
+        },
+        "nodeInputToHandlerMs": 1.011474609375,
+        "eventToHandlerMs": 0.40000003576278687,
+        "handlerToPostHandlerMs": null
+      },
+      {
+        "node": {
+          "kind": "click-producing mouseup dispatch",
+          "sentEpochMs": 1794903860885.4246,
+          "returnedEpochMs": 1794903860886.608,
+          "x": 886,
+          "y": 84
+        },
+        "input": {
+          "handlerAt": 8812.5,
+          "eventTimeStamp": 8812.199999988079,
+          "timeOrigin": 1794903852073.6,
+          "trusted": true,
+          "hasFocus": true,
+          "visibilityState": "visible",
+          "activeElementId": "",
+          "stateBeforeHandler": {
+            "running": false,
+            "activeJob": 0,
+            "cancels": 0,
+            "button": "运行批量评测",
+            "generation": 0,
+            "mode": null,
+            "cancelLatencyMs": null,
+            "partialSeeds": 0,
+            "workerDisabled": false,
+            "slices": {
+              "count": 0,
+              "maxComputeMs": 0
+            },
+            "cancelTiming": {
+              "requestedAt": null,
+              "runnerStoppedAt": null,
+              "postAwaitAt": null
+            }
+          },
+          "postHandlerAt": null
+        },
+        "nodeInputToHandlerMs": 0.675537109375,
+        "eventToHandlerMs": 0.30000001192092896,
+        "handlerToPostHandlerMs": null
+      },
+      {
+        "node": {
+          "kind": "click-producing mouseup dispatch",
+          "sentEpochMs": 1794903860931.9558,
+          "returnedEpochMs": 1794903860933.7417,
+          "x": 886,
+          "y": 84
+        },
+        "input": {
+          "handlerAt": 8859.199999988079,
+          "eventTimeStamp": 8858.899999976158,
+          "timeOrigin": 1794903852073.6,
+          "trusted": true,
+          "hasFocus": true,
+          "visibilityState": "visible",
+          "activeElementId": "",
+          "stateBeforeHandler": {
+            "running": false,
+            "activeJob": 0,
+            "cancels": 0,
+            "button": "运行批量评测",
+            "generation": 0,
+            "mode": null,
+            "cancelLatencyMs": null,
+            "partialSeeds": 0,
+            "workerDisabled": false,
+            "slices": {
+              "count": 0,
+              "maxComputeMs": 0
+            },
+            "cancelTiming": {
+              "requestedAt": null,
+              "runnerStoppedAt": null,
+              "postAwaitAt": null
+            }
+          },
+          "postHandlerAt": null
+        },
+        "nodeInputToHandlerMs": 0.84423828125,
+        "eventToHandlerMs": 0.30000001192092896,
+        "handlerToPostHandlerMs": null
+      },
+      {
+        "node": {
+          "kind": "click-producing mouseup dispatch",
+          "sentEpochMs": 1794903860968.6292,
+          "returnedEpochMs": 1794903860973.0825,
+          "x": 886,
+          "y": 84
+        },
+        "input": {
+          "handlerAt": 8897.799999952316,
+          "eventTimeStamp": 8895.5,
+          "timeOrigin": 1794903852073.6,
+          "trusted": true,
+          "hasFocus": true,
+          "visibilityState": "visible",
+          "activeElementId": "",
+          "stateBeforeHandler": {
+            "running": false,
+            "activeJob": 0,
+            "cancels": 0,
+            "button": "运行批量评测",
+            "generation": 0,
+            "mode": null,
+            "cancelLatencyMs": null,
+            "partialSeeds": 0,
+            "workerDisabled": false,
+            "slices": {
+              "count": 0,
+              "maxComputeMs": 0
+            },
+            "cancelTiming": {
+              "requestedAt": null,
+              "runnerStoppedAt": null,
+              "postAwaitAt": null
+            }
+          },
+          "postHandlerAt": 8903.099999964237
+        },
+        "nodeInputToHandlerMs": 2.77099609375,
+        "eventToHandlerMs": 2.299999952316284,
+        "handlerToPostHandlerMs": 5.300000011920929
+      },
+      {
+        "node": {
+          "kind": "click-producing mouseup dispatch",
+          "sentEpochMs": 1794903861009.535,
+          "returnedEpochMs": 1794903861011.7007,
+          "x": 886,
+          "y": 84
+        },
+        "input": {
+          "handlerAt": 8937.199999988079,
+          "eventTimeStamp": 8936.899999976158,
+          "timeOrigin": 1794903852073.6,
+          "trusted": true,
+          "hasFocus": true,
+          "visibilityState": "visible",
+          "activeElementId": "",
+          "stateBeforeHandler": {
+            "running": false,
+            "activeJob": 0,
+            "cancels": 0,
+            "button": "运行批量评测",
+            "generation": 0,
+            "mode": null,
+            "cancelLatencyMs": null,
+            "partialSeeds": 0,
+            "workerDisabled": false,
+            "slices": {
+              "count": 0,
+              "maxComputeMs": 0
+            },
+            "cancelTiming": {
+              "requestedAt": null,
+              "runnerStoppedAt": null,
+              "postAwaitAt": null
+            }
+          },
+          "postHandlerAt": null
+        },
+        "nodeInputToHandlerMs": 1.26513671875,
+        "eventToHandlerMs": 0.30000001192092896,
+        "handlerToPostHandlerMs": null
+      },
+      {
+        "node": {
+          "kind": "click-producing mouseup dispatch",
+          "sentEpochMs": 1794903861034.2747,
+          "returnedEpochMs": 1794903861036.033,
+          "x": 886,
+          "y": 84
+        },
+        "input": {
+          "handlerAt": 8961.599999964237,
+          "eventTimeStamp": 8961.199999988079,
+          "timeOrigin": 1794903852073.6,
+          "trusted": true,
+          "hasFocus": true,
+          "visibilityState": "visible",
+          "activeElementId": "",
+          "stateBeforeHandler": {
+            "running": false,
+            "activeJob": 0,
+            "cancels": 0,
+            "button": "运行批量评测",
+            "generation": 0,
+            "mode": null,
+            "cancelLatencyMs": null,
+            "partialSeeds": 0,
+            "workerDisabled": false,
+            "slices": {
+              "count": 0,
+              "maxComputeMs": 0
+            },
+            "cancelTiming": {
+              "requestedAt": null,
+              "runnerStoppedAt": null,
+              "postAwaitAt": null
+            }
+          },
+          "postHandlerAt": 8972.099999964237
+        },
+        "nodeInputToHandlerMs": 0.925537109375,
+        "eventToHandlerMs": 0.3999999761581421,
+        "handlerToPostHandlerMs": 10.5
+      },
+      {
+        "node": {
+          "kind": "click-producing mouseup dispatch",
+          "sentEpochMs": 1794903861097.8657,
+          "returnedEpochMs": 1794903861100.2212,
+          "x": 886,
+          "y": 84
+        },
+        "input": {
+          "handlerAt": 9025.699999988079,
+          "eventTimeStamp": 9024.899999976158,
+          "timeOrigin": 1794903852073.6,
+          "trusted": true,
+          "hasFocus": true,
+          "visibilityState": "visible",
+          "activeElementId": "",
+          "stateBeforeHandler": {
+            "running": false,
+            "activeJob": 0,
+            "cancels": 0,
+            "button": "运行批量评测",
+            "generation": 0,
+            "mode": null,
+            "cancelLatencyMs": null,
+            "partialSeeds": 0,
+            "workerDisabled": false,
+            "slices": {
+              "count": 0,
+              "maxComputeMs": 0
+            },
+            "cancelTiming": {
+              "requestedAt": null,
+              "runnerStoppedAt": null,
+              "postAwaitAt": null
+            }
+          },
+          "postHandlerAt": 9036.599999964237
+        },
+        "nodeInputToHandlerMs": 1.434326171875,
+        "eventToHandlerMs": 0.800000011920929,
+        "handlerToPostHandlerMs": 10.899999976158142
+      },
+      {
+        "node": {
+          "kind": "click-producing mouseup dispatch",
+          "sentEpochMs": 1794903861160.338,
+          "returnedEpochMs": 1794903861162.5723,
+          "x": 886,
+          "y": 84
+        },
+        "input": {
+          "handlerAt": 9087.699999988079,
+          "eventTimeStamp": 9087.199999988079,
+          "timeOrigin": 1794903852073.6,
+          "trusted": true,
+          "hasFocus": true,
+          "visibilityState": "visible",
+          "activeElementId": "",
+          "stateBeforeHandler": {
+            "running": false,
+            "activeJob": 0,
+            "cancels": 0,
+            "button": "运行批量评测",
+            "generation": 0,
+            "mode": null,
+            "cancelLatencyMs": null,
+            "partialSeeds": 0,
+            "workerDisabled": false,
+            "slices": {
+              "count": 0,
+              "maxComputeMs": 0
+            },
+            "cancelTiming": {
+              "requestedAt": null,
+              "runnerStoppedAt": null,
+              "postAwaitAt": null
+            }
+          },
+          "postHandlerAt": 9093
+        },
+        "nodeInputToHandlerMs": 0.962158203125,
+        "eventToHandlerMs": 0.5,
+        "handlerToPostHandlerMs": 5.300000011920929
+      },
+      {
+        "node": {
+          "kind": "click-producing mouseup dispatch",
+          "sentEpochMs": 1794903861212.7947,
+          "returnedEpochMs": 1794903861220.3696,
+          "x": 886,
+          "y": 84
+        },
+        "input": {
+          "handlerAt": 9145.699999988079,
+          "eventTimeStamp": 9143.5,
+          "timeOrigin": 1794903852073.6,
+          "trusted": true,
+          "hasFocus": true,
+          "visibilityState": "visible",
+          "activeElementId": "",
+          "stateBeforeHandler": {
+            "running": false,
+            "activeJob": 0,
+            "cancels": 0,
+            "button": "运行批量评测",
+            "generation": 0,
+            "mode": null,
+            "cancelLatencyMs": null,
+            "partialSeeds": 0,
+            "workerDisabled": false,
+            "slices": {
+              "count": 0,
+              "maxComputeMs": 0
+            },
+            "cancelTiming": {
+              "requestedAt": null,
+              "runnerStoppedAt": null,
+              "postAwaitAt": null
+            }
+          },
+          "postHandlerAt": 9153.099999964237
+        },
+        "nodeInputToHandlerMs": 6.50537109375,
+        "eventToHandlerMs": 2.199999988079071,
+        "handlerToPostHandlerMs": 7.399999976158142
+      },
+      {
+        "node": {
+          "kind": "click-producing mouseup dispatch",
+          "sentEpochMs": 1794903861279.5789,
+          "returnedEpochMs": 1794903861283.6921,
+          "x": 886,
+          "y": 84
+        },
+        "input": {
+          "handlerAt": 9209.199999988079,
+          "eventTimeStamp": 9206.5,
+          "timeOrigin": 1794903852073.6,
+          "trusted": true,
+          "hasFocus": true,
+          "visibilityState": "visible",
+          "activeElementId": "",
+          "stateBeforeHandler": {
+            "running": false,
+            "activeJob": 0,
+            "cancels": 0,
+            "button": "运行批量评测",
+            "generation": 0,
+            "mode": null,
+            "cancelLatencyMs": null,
+            "partialSeeds": 0,
+            "workerDisabled": false,
+            "slices": {
+              "count": 0,
+              "maxComputeMs": 0
+            },
+            "cancelTiming": {
+              "requestedAt": null,
+              "runnerStoppedAt": null,
+              "postAwaitAt": null
+            }
+          },
+          "postHandlerAt": null
+        },
+        "nodeInputToHandlerMs": 3.22119140625,
+        "eventToHandlerMs": 2.699999988079071,
+        "handlerToPostHandlerMs": null
+      },
+      {
+        "node": {
+          "kind": "click-producing mouseup dispatch",
+          "sentEpochMs": 1794903861316.9377,
+          "returnedEpochMs": 1794903861320.1958,
+          "x": 886,
+          "y": 84
+        },
+        "input": {
+          "handlerAt": 9244.099999964237,
+          "eventTimeStamp": 9243.699999988079,
+          "timeOrigin": 1794903852073.6,
+          "trusted": true,
+          "hasFocus": true,
+          "visibilityState": "visible",
+          "activeElementId": "",
+          "stateBeforeHandler": {
+            "running": false,
+            "activeJob": 0,
+            "cancels": 0,
+            "button": "运行批量评测",
+            "generation": 0,
+            "mode": null,
+            "cancelLatencyMs": null,
+            "partialSeeds": 0,
+            "workerDisabled": false,
+            "slices": {
+              "count": 0,
+              "maxComputeMs": 0
+            },
+            "cancelTiming": {
+              "requestedAt": null,
+              "runnerStoppedAt": null,
+              "postAwaitAt": null
+            }
+          },
+          "postHandlerAt": 9256
+        },
+        "nodeInputToHandlerMs": 0.762451171875,
+        "eventToHandlerMs": 0.3999999761581421,
+        "handlerToPostHandlerMs": 11.900000035762787
+      },
+      {
+        "node": {
+          "kind": "click-producing mouseup dispatch",
+          "sentEpochMs": 1794903861369.911,
+          "returnedEpochMs": 1794903861371.1711,
+          "x": 886,
+          "y": 84
+        },
+        "input": {
+          "handlerAt": 9297.099999964237,
+          "eventTimeStamp": 9296.699999988079,
+          "timeOrigin": 1794903852073.6,
+          "trusted": true,
+          "hasFocus": true,
+          "visibilityState": "visible",
+          "activeElementId": "",
+          "stateBeforeHandler": {
+            "running": false,
+            "activeJob": 0,
+            "cancels": 0,
+            "button": "运行批量评测",
+            "generation": 0,
+            "mode": null,
+            "cancelLatencyMs": null,
+            "partialSeeds": 0,
+            "workerDisabled": false,
+            "slices": {
+              "count": 0,
+              "maxComputeMs": 0
+            },
+            "cancelTiming": {
+              "requestedAt": null,
+              "runnerStoppedAt": null,
+              "postAwaitAt": null
+            }
+          },
+          "postHandlerAt": 9305.799999952316
+        },
+        "nodeInputToHandlerMs": 0.789306640625,
+        "eventToHandlerMs": 0.3999999761581421,
+        "handlerToPostHandlerMs": 8.699999988079071
+      },
+      {
+        "node": {
+          "kind": "click-producing mouseup dispatch",
+          "sentEpochMs": 1794903861414.3726,
+          "returnedEpochMs": 1794903861416.081,
+          "x": 886,
+          "y": 84
+        },
+        "input": {
+          "handlerAt": 9341.599999964237,
+          "eventTimeStamp": 9341.099999964237,
+          "timeOrigin": 1794903852073.6,
+          "trusted": true,
+          "hasFocus": true,
+          "visibilityState": "visible",
+          "activeElementId": "",
+          "stateBeforeHandler": {
+            "running": false,
+            "activeJob": 0,
+            "cancels": 0,
+            "button": "运行批量评测",
+            "generation": 0,
+            "mode": null,
+            "cancelLatencyMs": null,
+            "partialSeeds": 0,
+            "workerDisabled": false,
+            "slices": {
+              "count": 0,
+              "maxComputeMs": 0
+            },
+            "cancelTiming": {
+              "requestedAt": null,
+              "runnerStoppedAt": null,
+              "postAwaitAt": null
+            }
+          },
+          "postHandlerAt": null
+        },
+        "nodeInputToHandlerMs": 0.82763671875,
+        "eventToHandlerMs": 0.5,
+        "handlerToPostHandlerMs": null
+      },
+      {
+        "node": {
+          "kind": "click-producing mouseup dispatch",
+          "sentEpochMs": 1794903861467.1934,
+          "returnedEpochMs": 1794903861468.4585,
+          "x": 886,
+          "y": 84
+        },
+        "input": {
+          "handlerAt": 9394.299999952316,
+          "eventTimeStamp": 9394,
+          "timeOrigin": 1794903852073.6,
+          "trusted": true,
+          "hasFocus": true,
+          "visibilityState": "visible",
+          "activeElementId": "",
+          "stateBeforeHandler": {
+            "running": false,
+            "activeJob": 0,
+            "cancels": 0,
+            "button": "运行批量评测",
+            "generation": 0,
+            "mode": null,
+            "cancelLatencyMs": null,
+            "partialSeeds": 0,
+            "workerDisabled": false,
+            "slices": {
+              "count": 0,
+              "maxComputeMs": 0
+            },
+            "cancelTiming": {
+              "requestedAt": null,
+              "runnerStoppedAt": null,
+              "postAwaitAt": null
+            }
+          },
+          "postHandlerAt": null
+        },
+        "nodeInputToHandlerMs": 0.706787109375,
+        "eventToHandlerMs": 0.2999999523162842,
+        "handlerToPostHandlerMs": null
+      },
+      {
+        "node": {
+          "kind": "click-producing mouseup dispatch",
+          "sentEpochMs": 1794903861490.6667,
+          "returnedEpochMs": 1794903861492.1577,
+          "x": 886,
+          "y": 84
+        },
+        "input": {
+          "handlerAt": 9417.799999952316,
+          "eventTimeStamp": 9417.5,
+          "timeOrigin": 1794903852073.6,
+          "trusted": true,
+          "hasFocus": true,
+          "visibilityState": "visible",
+          "activeElementId": "",
+          "stateBeforeHandler": {
+            "running": false,
+            "activeJob": 0,
+            "cancels": 0,
+            "button": "运行批量评测",
+            "generation": 0,
+            "mode": null,
+            "cancelLatencyMs": null,
+            "partialSeeds": 0,
+            "workerDisabled": false,
+            "slices": {
+              "count": 0,
+              "maxComputeMs": 0
+            },
+            "cancelTiming": {
+              "requestedAt": null,
+              "runnerStoppedAt": null,
+              "postAwaitAt": null
+            }
+          },
+          "postHandlerAt": 9425
+        },
+        "nodeInputToHandlerMs": 0.7333984375,
+        "eventToHandlerMs": 0.2999999523162842,
+        "handlerToPostHandlerMs": 7.200000047683716
+      },
+      {
+        "node": {
+          "kind": "click-producing mouseup dispatch",
+          "sentEpochMs": 1794903861545.225,
+          "returnedEpochMs": 1794903861547.0374,
+          "x": 886,
+          "y": 84
+        },
+        "input": {
+          "handlerAt": 9472.5,
+          "eventTimeStamp": 9472.099999964237,
+          "timeOrigin": 1794903852073.6,
+          "trusted": true,
+          "hasFocus": true,
+          "visibilityState": "visible",
+          "activeElementId": "",
+          "stateBeforeHandler": {
+            "running": false,
+            "activeJob": 0,
+            "cancels": 0,
+            "button": "运行批量评测",
+            "generation": 0,
+            "mode": null,
+            "cancelLatencyMs": null,
+            "partialSeeds": 0,
+            "workerDisabled": false,
+            "slices": {
+              "count": 0,
+              "maxComputeMs": 0
+            },
+            "cancelTiming": {
+              "requestedAt": null,
+              "runnerStoppedAt": null,
+              "postAwaitAt": null
+            }
+          },
+          "postHandlerAt": 9477.299999952316
+        },
+        "nodeInputToHandlerMs": 0.875,
+        "eventToHandlerMs": 0.40000003576278687,
+        "handlerToPostHandlerMs": 4.799999952316284
+      },
+      {
+        "node": {
+          "kind": "click-producing mouseup dispatch",
+          "sentEpochMs": 1794903861590.191,
+          "returnedEpochMs": 1794903861591.8972,
+          "x": 886,
+          "y": 84
+        },
+        "input": {
+          "handlerAt": 9517.599999964237,
+          "eventTimeStamp": 9517.099999964237,
+          "timeOrigin": 1794903852073.6,
+          "trusted": true,
+          "hasFocus": true,
+          "visibilityState": "visible",
+          "activeElementId": "",
+          "stateBeforeHandler": {
+            "running": false,
+            "activeJob": 0,
+            "cancels": 0,
+            "button": "运行批量评测",
+            "generation": 0,
+            "mode": null,
+            "cancelLatencyMs": null,
+            "partialSeeds": 0,
+            "workerDisabled": false,
+            "slices": {
+              "count": 0,
+              "maxComputeMs": 0
+            },
+            "cancelTiming": {
+              "requestedAt": null,
+              "runnerStoppedAt": null,
+              "postAwaitAt": null
+            }
+          },
+          "postHandlerAt": null
+        },
+        "nodeInputToHandlerMs": 1.00927734375,
+        "eventToHandlerMs": 0.5,
+        "handlerToPostHandlerMs": null
+      },
+      {
+        "node": {
+          "kind": "click-producing mouseup dispatch",
+          "sentEpochMs": 1794903861637.5308,
+          "returnedEpochMs": 1794903861639.1746,
+          "x": 886,
+          "y": 84
+        },
+        "input": {
+          "handlerAt": 9564.599999964237,
+          "eventTimeStamp": 9564.399999976158,
+          "timeOrigin": 1794903852073.6,
+          "trusted": true,
+          "hasFocus": true,
+          "visibilityState": "visible",
+          "activeElementId": "",
+          "stateBeforeHandler": {
+            "running": false,
+            "activeJob": 0,
+            "cancels": 0,
+            "button": "运行批量评测",
+            "generation": 0,
+            "mode": null,
+            "cancelLatencyMs": null,
+            "partialSeeds": 0,
+            "workerDisabled": false,
+            "slices": {
+              "count": 0,
+              "maxComputeMs": 0
+            },
+            "cancelTiming": {
+              "requestedAt": null,
+              "runnerStoppedAt": null,
+              "postAwaitAt": null
+            }
+          },
+          "postHandlerAt": 9575.299999952316
+        },
+        "nodeInputToHandlerMs": 0.66943359375,
+        "eventToHandlerMs": 0.19999998807907104,
+        "handlerToPostHandlerMs": 10.699999988079071
+      }
+    ],
+    "worker": {
+      "rows": 5,
+      "mode": "worker",
+      "state": {
+        "running": false,
+        "activeJob": 0,
+        "cancels": 0,
+        "button": "运行批量评测",
+        "generation": 1,
+        "mode": "worker",
+        "cancelLatencyMs": null,
+        "partialSeeds": 0,
+        "workerDisabled": false,
+        "slices": {
+          "count": 0,
+          "maxComputeMs": 0
+        },
+        "cancelTiming": {
+          "requestedAt": null,
+          "runnerStoppedAt": null,
+          "postAwaitAt": null
+        }
+      },
+      "result": {
+        "generation": 1,
+        "seeds": [
+          1365145197,
+          2682685793,
+          40415518,
+          863273770,
+          3951895519,
+          2066689950,
+          3811395989,
+          1312811519,
+          1941031831,
+          3235159734
+        ],
+        "summary": [
+          {
+            "id": "pure",
+            "label": "纯陀螺仪积分",
+            "runs": 10,
+            "rmseP50": 5.741606224883876,
+            "rmseP95": 5.7667340286296,
+            "rmseMean": 5.7403349262061045,
+            "steadyRmseP50": 8.030946269486654,
+            "steadyRmseP95": 8.07067311834401,
+            "nonConvergedPct": 0,
+            "tiltRmseP95": 5.351013214189517,
+            "yawRmseP95": 2.3081753320126297,
+            "tiltSo3P95": 5.348923535183061,
+            "yawSo3P95": 2.1654370946968253
+          },
+          {
+            "id": "comp",
+            "label": "互补滤波",
+            "runs": 10,
+            "rmseP50": 1.5055193860565426,
+            "rmseP95": 1.5199960660984533,
+            "rmseMean": 1.5039960216469515,
+            "steadyRmseP50": 1.5988629218131516,
+            "steadyRmseP95": 1.6273952671913265,
+            "nonConvergedPct": 0,
+            "tiltRmseP95": 1.0718840574726867,
+            "yawRmseP95": 1.083710134625564,
+            "tiltSo3P95": 1.0718825134038832,
+            "yawSo3P95": 1.0816066332438583
+          },
+          {
+            "id": "mahony",
+            "label": "Mahony",
+            "runs": 10,
+            "rmseP50": 1.353545730970807,
+            "rmseP95": 1.3618305900915566,
+            "rmseMean": 1.3482952151406622,
+            "steadyRmseP50": 1.1590328136922068,
+            "steadyRmseP95": 1.1819849751608011,
+            "nonConvergedPct": 0,
+            "tiltRmseP95": 1.013801849035526,
+            "yawRmseP95": 0.918929111931345,
+            "tiltSo3P95": 1.0138015240286207,
+            "yawSo3P95": 0.9170248509622013
+          },
+          {
+            "id": "madg",
+            "label": "Madgwick",
+            "runs": 10,
+            "rmseP50": 1.3622291913827507,
+            "rmseP95": 1.3935318748659116,
+            "rmseMean": 1.3639254840941093,
+            "steadyRmseP50": 1.2922904108765585,
+            "steadyRmseP95": 1.3301462492550062,
+            "nonConvergedPct": 0,
+            "tiltRmseP95": 1.1112203580051725,
+            "yawRmseP95": 0.8435456703286738,
+            "tiltSo3P95": 1.111197749048424,
+            "yawSo3P95": 0.8421969966907795
+          },
+          {
+            "id": "kalman",
+            "label": "卡尔曼滤波",
+            "runs": 10,
+            "rmseP50": 1.3327277914047806,
+            "rmseP95": 1.3438700789597104,
+            "rmseMean": 1.3323621746945626,
+            "steadyRmseP50": 1.1259412090712089,
+            "steadyRmseP95": 1.133617018010536,
+            "nonConvergedPct": 0,
+            "tiltRmseP95": 1.181033981073261,
+            "yawRmseP95": 0.6524799388700013,
+            "tiltSo3P95": 1.1810046943951058,
+            "yawSo3P95": 0.6488544579935874
+          }
+        ]
+      },
+      "status": "完成：10 个种子 × 10 s（seed 24301 → 3235159734）· P50/P95 为跨种子分布；稳态 = 每次运行末段 40%（* 倾角/偏航为 SO(3) 小角分解，不受欧拉奇点影响）；未收敛率 = 单次 10 s 内未连续 1 s 总误差 <2° 的比例；统计口径：精确（逐样本）；本批在 Web Worker 中执行（评测期间界面不卡）",
+      "elapsedMs": 6560.37451171875,
+      "settled": true
+    },
+    "timerBaseline": {
+      "samples": [
+        0.09999996423721313,
+        0,
+        0,
+        0,
+        0.09999996423721313,
+        0,
+        5,
+        4.300000011920929,
+        4.300000011920929,
+        4.199999988079071,
+        4.600000023841858,
+        4.600000023841858,
+        9.300000011920929,
+        4.800000011920929,
+        7.099999964237213,
+        4.100000023841858,
+        4.399999976158142,
+        6.199999988079071,
+        7.900000035762787,
+        5,
+        5.900000035762787,
+        4.400000035762787,
+        6,
+        4.599999964237213,
+        6.100000023841858,
+        4.899999976158142,
+        4.899999976158142,
+        4.799999952316284,
+        7.300000011920929,
+        5.699999988079071,
+        5,
+        4.600000023841858,
+        5.599999964237213,
+        9.900000035762787,
+        4.699999988079071,
+        8.5,
+        4.399999976158142,
+        4.899999976158142,
+        5,
+        5
+      ],
+      "observations": [
+        {
+          "requestedAt": 16154,
+          "observedAt": 16154.099999964237,
+          "runningBefore": false,
+          "runningAfter": false,
+          "generation": 1,
+          "slices": {
+            "count": 0,
+            "maxComputeMs": 0
+          },
+          "status": "完成：10 个种子 × 10 s（seed 24301 → 3235159734）· P50/P95 为跨种子分布；稳态 = 每次运行末段 40%（* 倾角/偏航为 SO(3) 小角分解，不受欧拉奇点影响）；未收敛率 = 单次 10 s 内未连续 1 s 总误差 <2° 的比例；统计口径：精确（逐样本）；本批在 Web Worker 中执行（评测期间界面不卡）"
+        },
+        {
+          "requestedAt": 16154.199999988079,
+          "observedAt": 16154.199999988079,
+          "runningBefore": false,
+          "runningAfter": false,
+          "generation": 1,
+          "slices": {
+            "count": 0,
+            "maxComputeMs": 0
+          },
+          "status": "完成：10 个种子 × 10 s（seed 24301 → 3235159734）· P50/P95 为跨种子分布；稳态 = 每次运行末段 40%（* 倾角/偏航为 SO(3) 小角分解，不受欧拉奇点影响）；未收敛率 = 单次 10 s 内未连续 1 s 总误差 <2° 的比例；统计口径：精确（逐样本）；本批在 Web Worker 中执行（评测期间界面不卡）"
+        },
+        {
+          "requestedAt": 16154.199999988079,
+          "observedAt": 16154.199999988079,
+          "runningBefore": false,
+          "runningAfter": false,
+          "generation": 1,
+          "slices": {
+            "count": 0,
+            "maxComputeMs": 0
+          },
+          "status": "完成：10 个种子 × 10 s（seed 24301 → 3235159734）· P50/P95 为跨种子分布；稳态 = 每次运行末段 40%（* 倾角/偏航为 SO(3) 小角分解，不受欧拉奇点影响）；未收敛率 = 单次 10 s 内未连续 1 s 总误差 <2° 的比例；统计口径：精确（逐样本）；本批在 Web Worker 中执行（评测期间界面不卡）"
+        },
+        {
+          "requestedAt": 16154.199999988079,
+          "observedAt": 16154.199999988079,
+          "runningBefore": false,
+          "runningAfter": false,
+          "generation": 1,
+          "slices": {
+            "count": 0,
+            "maxComputeMs": 0
+          },
+          "status": "完成：10 个种子 × 10 s（seed 24301 → 3235159734）· P50/P95 为跨种子分布；稳态 = 每次运行末段 40%（* 倾角/偏航为 SO(3) 小角分解，不受欧拉奇点影响）；未收敛率 = 单次 10 s 内未连续 1 s 总误差 <2° 的比例；统计口径：精确（逐样本）；本批在 Web Worker 中执行（评测期间界面不卡）"
+        },
+        {
+          "requestedAt": 16154.199999988079,
+          "observedAt": 16154.299999952316,
+          "runningBefore": false,
+          "runningAfter": false,
+          "generation": 1,
+          "slices": {
+            "count": 0,
+            "maxComputeMs": 0
+          },
+          "status": "完成：10 个种子 × 10 s（seed 24301 → 3235159734）· P50/P95 为跨种子分布；稳态 = 每次运行末段 40%（* 倾角/偏航为 SO(3) 小角分解，不受欧拉奇点影响）；未收敛率 = 单次 10 s 内未连续 1 s 总误差 <2° 的比例；统计口径：精确（逐样本）；本批在 Web Worker 中执行（评测期间界面不卡）"
+        },
+        {
+          "requestedAt": 16154.299999952316,
+          "observedAt": 16154.299999952316,
+          "runningBefore": false,
+          "runningAfter": false,
+          "generation": 1,
+          "slices": {
+            "count": 0,
+            "maxComputeMs": 0
+          },
+          "status": "完成：10 个种子 × 10 s（seed 24301 → 3235159734）· P50/P95 为跨种子分布；稳态 = 每次运行末段 40%（* 倾角/偏航为 SO(3) 小角分解，不受欧拉奇点影响）；未收敛率 = 单次 10 s 内未连续 1 s 总误差 <2° 的比例；统计口径：精确（逐样本）；本批在 Web Worker 中执行（评测期间界面不卡）"
+        },
+        {
+          "requestedAt": 16154.299999952316,
+          "observedAt": 16159.299999952316,
+          "runningBefore": false,
+          "runningAfter": false,
+          "generation": 1,
+          "slices": {
+            "count": 0,
+            "maxComputeMs": 0
+          },
+          "status": "完成：10 个种子 × 10 s（seed 24301 → 3235159734）· P50/P95 为跨种子分布；稳态 = 每次运行末段 40%（* 倾角/偏航为 SO(3) 小角分解，不受欧拉奇点影响）；未收敛率 = 单次 10 s 内未连续 1 s 总误差 <2° 的比例；统计口径：精确（逐样本）；本批在 Web Worker 中执行（评测期间界面不卡）"
+        },
+        {
+          "requestedAt": 16159.399999976158,
+          "observedAt": 16163.699999988079,
+          "runningBefore": false,
+          "runningAfter": false,
+          "generation": 1,
+          "slices": {
+            "count": 0,
+            "maxComputeMs": 0
+          },
+          "status": "完成：10 个种子 × 10 s（seed 24301 → 3235159734）· P50/P95 为跨种子分布；稳态 = 每次运行末段 40%（* 倾角/偏航为 SO(3) 小角分解，不受欧拉奇点影响）；未收敛率 = 单次 10 s 内未连续 1 s 总误差 <2° 的比例；统计口径：精确（逐样本）；本批在 Web Worker 中执行（评测期间界面不卡）"
+        },
+        {
+          "requestedAt": 16163.699999988079,
+          "observedAt": 16168,
+          "runningBefore": false,
+          "runningAfter": false,
+          "generation": 1,
+          "slices": {
+            "count": 0,
+            "maxComputeMs": 0
+          },
+          "status": "完成：10 个种子 × 10 s（seed 24301 → 3235159734）· P50/P95 为跨种子分布；稳态 = 每次运行末段 40%（* 倾角/偏航为 SO(3) 小角分解，不受欧拉奇点影响）；未收敛率 = 单次 10 s 内未连续 1 s 总误差 <2° 的比例；统计口径：精确（逐样本）；本批在 Web Worker 中执行（评测期间界面不卡）"
+        },
+        {
+          "requestedAt": 16168.099999964237,
+          "observedAt": 16172.299999952316,
+          "runningBefore": false,
+          "runningAfter": false,
+          "generation": 1,
+          "slices": {
+            "count": 0,
+            "maxComputeMs": 0
+          },
+          "status": "完成：10 个种子 × 10 s（seed 24301 → 3235159734）· P50/P95 为跨种子分布；稳态 = 每次运行末段 40%（* 倾角/偏航为 SO(3) 小角分解，不受欧拉奇点影响）；未收敛率 = 单次 10 s 内未连续 1 s 总误差 <2° 的比例；统计口径：精确（逐样本）；本批在 Web Worker 中执行（评测期间界面不卡）"
+        },
+        {
+          "requestedAt": 16172.399999976158,
+          "observedAt": 16177,
+          "runningBefore": false,
+          "runningAfter": false,
+          "generation": 1,
+          "slices": {
+            "count": 0,
+            "maxComputeMs": 0
+          },
+          "status": "完成：10 个种子 × 10 s（seed 24301 → 3235159734）· P50/P95 为跨种子分布；稳态 = 每次运行末段 40%（* 倾角/偏航为 SO(3) 小角分解，不受欧拉奇点影响）；未收敛率 = 单次 10 s 内未连续 1 s 总误差 <2° 的比例；统计口径：精确（逐样本）；本批在 Web Worker 中执行（评测期间界面不卡）"
+        },
+        {
+          "requestedAt": 16177.099999964237,
+          "observedAt": 16181.699999988079,
+          "runningBefore": false,
+          "runningAfter": false,
+          "generation": 1,
+          "slices": {
+            "count": 0,
+            "maxComputeMs": 0
+          },
+          "status": "完成：10 个种子 × 10 s（seed 24301 → 3235159734）· P50/P95 为跨种子分布；稳态 = 每次运行末段 40%（* 倾角/偏航为 SO(3) 小角分解，不受欧拉奇点影响）；未收敛率 = 单次 10 s 内未连续 1 s 总误差 <2° 的比例；统计口径：精确（逐样本）；本批在 Web Worker 中执行（评测期间界面不卡）"
+        },
+        {
+          "requestedAt": 16181.899999976158,
+          "observedAt": 16191.199999988079,
+          "runningBefore": false,
+          "runningAfter": false,
+          "generation": 1,
+          "slices": {
+            "count": 0,
+            "maxComputeMs": 0
+          },
+          "status": "完成：10 个种子 × 10 s（seed 24301 → 3235159734）· P50/P95 为跨种子分布；稳态 = 每次运行末段 40%（* 倾角/偏航为 SO(3) 小角分解，不受欧拉奇点影响）；未收敛率 = 单次 10 s 内未连续 1 s 总误差 <2° 的比例；统计口径：精确（逐样本）；本批在 Web Worker 中执行（评测期间界面不卡）"
+        },
+        {
+          "requestedAt": 16191.199999988079,
+          "observedAt": 16196,
+          "runningBefore": false,
+          "runningAfter": false,
+          "generation": 1,
+          "slices": {
+            "count": 0,
+            "maxComputeMs": 0
+          },
+          "status": "完成：10 个种子 × 10 s（seed 24301 → 3235159734）· P50/P95 为跨种子分布；稳态 = 每次运行末段 40%（* 倾角/偏航为 SO(3) 小角分解，不受欧拉奇点影响）；未收敛率 = 单次 10 s 内未连续 1 s 总误差 <2° 的比例；统计口径：精确（逐样本）；本批在 Web Worker 中执行（评测期间界面不卡）"
+        },
+        {
+          "requestedAt": 16196,
+          "observedAt": 16203.099999964237,
+          "runningBefore": false,
+          "runningAfter": false,
+          "generation": 1,
+          "slices": {
+            "count": 0,
+            "maxComputeMs": 0
+          },
+          "status": "完成：10 个种子 × 10 s（seed 24301 → 3235159734）· P50/P95 为跨种子分布；稳态 = 每次运行末段 40%（* 倾角/偏航为 SO(3) 小角分解，不受欧拉奇点影响）；未收敛率 = 单次 10 s 内未连续 1 s 总误差 <2° 的比例；统计口径：精确（逐样本）；本批在 Web Worker 中执行（评测期间界面不卡）"
+        },
+        {
+          "requestedAt": 16203.099999964237,
+          "observedAt": 16207.199999988079,
+          "runningBefore": false,
+          "runningAfter": false,
+          "generation": 1,
+          "slices": {
+            "count": 0,
+            "maxComputeMs": 0
+          },
+          "status": "完成：10 个种子 × 10 s（seed 24301 → 3235159734）· P50/P95 为跨种子分布；稳态 = 每次运行末段 40%（* 倾角/偏航为 SO(3) 小角分解，不受欧拉奇点影响）；未收敛率 = 单次 10 s 内未连续 1 s 总误差 <2° 的比例；统计口径：精确（逐样本）；本批在 Web Worker 中执行（评测期间界面不卡）"
+        },
+        {
+          "requestedAt": 16207.199999988079,
+          "observedAt": 16211.599999964237,
+          "runningBefore": false,
+          "runningAfter": false,
+          "generation": 1,
+          "slices": {
+            "count": 0,
+            "maxComputeMs": 0
+          },
+          "status": "完成：10 个种子 × 10 s（seed 24301 → 3235159734）· P50/P95 为跨种子分布；稳态 = 每次运行末段 40%（* 倾角/偏航为 SO(3) 小角分解，不受欧拉奇点影响）；未收敛率 = 单次 10 s 内未连续 1 s 总误差 <2° 的比例；统计口径：精确（逐样本）；本批在 Web Worker 中执行（评测期间界面不卡）"
+        },
+        {
+          "requestedAt": 16211.599999964237,
+          "observedAt": 16217.799999952316,
+          "runningBefore": false,
+          "runningAfter": false,
+          "generation": 1,
+          "slices": {
+            "count": 0,
+            "maxComputeMs": 0
+          },
+          "status": "完成：10 个种子 × 10 s（seed 24301 → 3235159734）· P50/P95 为跨种子分布；稳态 = 每次运行末段 40%（* 倾角/偏航为 SO(3) 小角分解，不受欧拉奇点影响）；未收敛率 = 单次 10 s 内未连续 1 s 总误差 <2° 的比例；统计口径：精确（逐样本）；本批在 Web Worker 中执行（评测期间界面不卡）"
+        },
+        {
+          "requestedAt": 16217.799999952316,
+          "observedAt": 16225.699999988079,
+          "runningBefore": false,
+          "runningAfter": false,
+          "generation": 1,
+          "slices": {
+            "count": 0,
+            "maxComputeMs": 0
+          },
+          "status": "完成：10 个种子 × 10 s（seed 24301 → 3235159734）· P50/P95 为跨种子分布；稳态 = 每次运行末段 40%（* 倾角/偏航为 SO(3) 小角分解，不受欧拉奇点影响）；未收敛率 = 单次 10 s 内未连续 1 s 总误差 <2° 的比例；统计口径：精确（逐样本）；本批在 Web Worker 中执行（评测期间界面不卡）"
+        },
+        {
+          "requestedAt": 16225.799999952316,
+          "observedAt": 16230.799999952316,
+          "runningBefore": false,
+          "runningAfter": false,
+          "generation": 1,
+          "slices": {
+            "count": 0,
+            "maxComputeMs": 0
+          },
+          "status": "完成：10 个种子 × 10 s（seed 24301 → 3235159734）· P50/P95 为跨种子分布；稳态 = 每次运行末段 40%（* 倾角/偏航为 SO(3) 小角分解，不受欧拉奇点影响）；未收敛率 = 单次 10 s 内未连续 1 s 总误差 <2° 的比例；统计口径：精确（逐样本）；本批在 Web Worker 中执行（评测期间界面不卡）"
+        },
+        {
+          "requestedAt": 16230.799999952316,
+          "observedAt": 16236.699999988079,
+          "runningBefore": false,
+          "runningAfter": false,
+          "generation": 1,
+          "slices": {
+            "count": 0,
+            "maxComputeMs": 0
+          },
+          "status": "完成：10 个种子 × 10 s（seed 24301 → 3235159734）· P50/P95 为跨种子分布；稳态 = 每次运行末段 40%（* 倾角/偏航为 SO(3) 小角分解，不受欧拉奇点影响）；未收敛率 = 单次 10 s 内未连续 1 s 总误差 <2° 的比例；统计口径：精确（逐样本）；本批在 Web Worker 中执行（评测期间界面不卡）"
+        },
+        {
+          "requestedAt": 16236.799999952316,
+          "observedAt": 16241.199999988079,
+          "runningBefore": false,
+          "runningAfter": false,
+          "generation": 1,
+          "slices": {
+            "count": 0,
+            "maxComputeMs": 0
+          },
+          "status": "完成：10 个种子 × 10 s（seed 24301 → 3235159734）· P50/P95 为跨种子分布；稳态 = 每次运行末段 40%（* 倾角/偏航为 SO(3) 小角分解，不受欧拉奇点影响）；未收敛率 = 单次 10 s 内未连续 1 s 总误差 <2° 的比例；统计口径：精确（逐样本）；本批在 Web Worker 中执行（评测期间界面不卡）"
+        },
+        {
+          "requestedAt": 16241.199999988079,
+          "observedAt": 16247.199999988079,
+          "runningBefore": false,
+          "runningAfter": false,
+          "generation": 1,
+          "slices": {
+            "count": 0,
+            "maxComputeMs": 0
+          },
+          "status": "完成：10 个种子 × 10 s（seed 24301 → 3235159734）· P50/P95 为跨种子分布；稳态 = 每次运行末段 40%（* 倾角/偏航为 SO(3) 小角分解，不受欧拉奇点影响）；未收敛率 = 单次 10 s 内未连续 1 s 总误差 <2° 的比例；统计口径：精确（逐样本）；本批在 Web Worker 中执行（评测期间界面不卡）"
+        },
+        {
+          "requestedAt": 16247.199999988079,
+          "observedAt": 16251.799999952316,
+          "runningBefore": false,
+          "runningAfter": false,
+          "generation": 1,
+          "slices": {
+            "count": 0,
+            "maxComputeMs": 0
+          },
+          "status": "完成：10 个种子 × 10 s（seed 24301 → 3235159734）· P50/P95 为跨种子分布；稳态 = 每次运行末段 40%（* 倾角/偏航为 SO(3) 小角分解，不受欧拉奇点影响）；未收敛率 = 单次 10 s 内未连续 1 s 总误差 <2° 的比例；统计口径：精确（逐样本）；本批在 Web Worker 中执行（评测期间界面不卡）"
+        },
+        {
+          "requestedAt": 16251.799999952316,
+          "observedAt": 16257.899999976158,
+          "runningBefore": false,
+          "runningAfter": false,
+          "generation": 1,
+          "slices": {
+            "count": 0,
+            "maxComputeMs": 0
+          },
+          "status": "完成：10 个种子 × 10 s（seed 24301 → 3235159734）· P50/P95 为跨种子分布；稳态 = 每次运行末段 40%（* 倾角/偏航为 SO(3) 小角分解，不受欧拉奇点影响）；未收敛率 = 单次 10 s 内未连续 1 s 总误差 <2° 的比例；统计口径：精确（逐样本）；本批在 Web Worker 中执行（评测期间界面不卡）"
+        },
+        {
+          "requestedAt": 16258,
+          "observedAt": 16262.899999976158,
+          "runningBefore": false,
+          "runningAfter": false,
+          "generation": 1,
+          "slices": {
+            "count": 0,
+            "maxComputeMs": 0
+          },
+          "status": "完成：10 个种子 × 10 s（seed 24301 → 3235159734）· P50/P95 为跨种子分布；稳态 = 每次运行末段 40%（* 倾角/偏航为 SO(3) 小角分解，不受欧拉奇点影响）；未收敛率 = 单次 10 s 内未连续 1 s 总误差 <2° 的比例；统计口径：精确（逐样本）；本批在 Web Worker 中执行（评测期间界面不卡）"
+        },
+        {
+          "requestedAt": 16263,
+          "observedAt": 16267.899999976158,
+          "runningBefore": false,
+          "runningAfter": false,
+          "generation": 1,
+          "slices": {
+            "count": 0,
+            "maxComputeMs": 0
+          },
+          "status": "完成：10 个种子 × 10 s（seed 24301 → 3235159734）· P50/P95 为跨种子分布；稳态 = 每次运行末段 40%（* 倾角/偏航为 SO(3) 小角分解，不受欧拉奇点影响）；未收敛率 = 单次 10 s 内未连续 1 s 总误差 <2° 的比例；统计口径：精确（逐样本）；本批在 Web Worker 中执行（评测期间界面不卡）"
+        },
+        {
+          "requestedAt": 16268,
+          "observedAt": 16272.799999952316,
+          "runningBefore": false,
+          "runningAfter": false,
+          "generation": 1,
+          "slices": {
+            "count": 0,
+            "maxComputeMs": 0
+          },
+          "status": "完成：10 个种子 × 10 s（seed 24301 → 3235159734）· P50/P95 为跨种子分布；稳态 = 每次运行末段 40%（* 倾角/偏航为 SO(3) 小角分解，不受欧拉奇点影响）；未收敛率 = 单次 10 s 内未连续 1 s 总误差 <2° 的比例；统计口径：精确（逐样本）；本批在 Web Worker 中执行（评测期间界面不卡）"
+        },
+        {
+          "requestedAt": 16272.799999952316,
+          "observedAt": 16280.099999964237,
+          "runningBefore": false,
+          "runningAfter": false,
+          "generation": 1,
+          "slices": {
+            "count": 0,
+            "maxComputeMs": 0
+          },
+          "status": "完成：10 个种子 × 10 s（seed 24301 → 3235159734）· P50/P95 为跨种子分布；稳态 = 每次运行末段 40%（* 倾角/偏航为 SO(3) 小角分解，不受欧拉奇点影响）；未收敛率 = 单次 10 s 内未连续 1 s 总误差 <2° 的比例；统计口径：精确（逐样本）；本批在 Web Worker 中执行（评测期间界面不卡）"
+        },
+        {
+          "requestedAt": 16280.099999964237,
+          "observedAt": 16285.799999952316,
+          "runningBefore": false,
+          "runningAfter": false,
+          "generation": 1,
+          "slices": {
+            "count": 0,
+            "maxComputeMs": 0
+          },
+          "status": "完成：10 个种子 × 10 s（seed 24301 → 3235159734）· P50/P95 为跨种子分布；稳态 = 每次运行末段 40%（* 倾角/偏航为 SO(3) 小角分解，不受欧拉奇点影响）；未收敛率 = 单次 10 s 内未连续 1 s 总误差 <2° 的比例；统计口径：精确（逐样本）；本批在 Web Worker 中执行（评测期间界面不卡）"
+        },
+        {
+          "requestedAt": 16285.899999976158,
+          "observedAt": 16290.899999976158,
+          "runningBefore": false,
+          "runningAfter": false,
+          "generation": 1,
+          "slices": {
+            "count": 0,
+            "maxComputeMs": 0
+          },
+          "status": "完成：10 个种子 × 10 s（seed 24301 → 3235159734）· P50/P95 为跨种子分布；稳态 = 每次运行末段 40%（* 倾角/偏航为 SO(3) 小角分解，不受欧拉奇点影响）；未收敛率 = 单次 10 s 内未连续 1 s 总误差 <2° 的比例；统计口径：精确（逐样本）；本批在 Web Worker 中执行（评测期间界面不卡）"
+        },
+        {
+          "requestedAt": 16290.899999976158,
+          "observedAt": 16295.5,
+          "runningBefore": false,
+          "runningAfter": false,
+          "generation": 1,
+          "slices": {
+            "count": 0,
+            "maxComputeMs": 0
+          },
+          "status": "完成：10 个种子 × 10 s（seed 24301 → 3235159734）· P50/P95 为跨种子分布；稳态 = 每次运行末段 40%（* 倾角/偏航为 SO(3) 小角分解，不受欧拉奇点影响）；未收敛率 = 单次 10 s 内未连续 1 s 总误差 <2° 的比例；统计口径：精确（逐样本）；本批在 Web Worker 中执行（评测期间界面不卡）"
+        },
+        {
+          "requestedAt": 16295.5,
+          "observedAt": 16301.099999964237,
+          "runningBefore": false,
+          "runningAfter": false,
+          "generation": 1,
+          "slices": {
+            "count": 0,
+            "maxComputeMs": 0
+          },
+          "status": "完成：10 个种子 × 10 s（seed 24301 → 3235159734）· P50/P95 为跨种子分布；稳态 = 每次运行末段 40%（* 倾角/偏航为 SO(3) 小角分解，不受欧拉奇点影响）；未收敛率 = 单次 10 s 内未连续 1 s 总误差 <2° 的比例；统计口径：精确（逐样本）；本批在 Web Worker 中执行（评测期间界面不卡）"
+        },
+        {
+          "requestedAt": 16301.099999964237,
+          "observedAt": 16311,
+          "runningBefore": false,
+          "runningAfter": false,
+          "generation": 1,
+          "slices": {
+            "count": 0,
+            "maxComputeMs": 0
+          },
+          "status": "完成：10 个种子 × 10 s（seed 24301 → 3235159734）· P50/P95 为跨种子分布；稳态 = 每次运行末段 40%（* 倾角/偏航为 SO(3) 小角分解，不受欧拉奇点影响）；未收敛率 = 单次 10 s 内未连续 1 s 总误差 <2° 的比例；统计口径：精确（逐样本）；本批在 Web Worker 中执行（评测期间界面不卡）"
+        },
+        {
+          "requestedAt": 16311.099999964237,
+          "observedAt": 16315.799999952316,
+          "runningBefore": false,
+          "runningAfter": false,
+          "generation": 1,
+          "slices": {
+            "count": 0,
+            "maxComputeMs": 0
+          },
+          "status": "完成：10 个种子 × 10 s（seed 24301 → 3235159734）· P50/P95 为跨种子分布；稳态 = 每次运行末段 40%（* 倾角/偏航为 SO(3) 小角分解，不受欧拉奇点影响）；未收敛率 = 单次 10 s 内未连续 1 s 总误差 <2° 的比例；统计口径：精确（逐样本）；本批在 Web Worker 中执行（评测期间界面不卡）"
+        },
+        {
+          "requestedAt": 16315.899999976158,
+          "observedAt": 16324.399999976158,
+          "runningBefore": false,
+          "runningAfter": false,
+          "generation": 1,
+          "slices": {
+            "count": 0,
+            "maxComputeMs": 0
+          },
+          "status": "完成：10 个种子 × 10 s（seed 24301 → 3235159734）· P50/P95 为跨种子分布；稳态 = 每次运行末段 40%（* 倾角/偏航为 SO(3) 小角分解，不受欧拉奇点影响）；未收敛率 = 单次 10 s 内未连续 1 s 总误差 <2° 的比例；统计口径：精确（逐样本）；本批在 Web Worker 中执行（评测期间界面不卡）"
+        },
+        {
+          "requestedAt": 16324.399999976158,
+          "observedAt": 16328.799999952316,
+          "runningBefore": false,
+          "runningAfter": false,
+          "generation": 1,
+          "slices": {
+            "count": 0,
+            "maxComputeMs": 0
+          },
+          "status": "完成：10 个种子 × 10 s（seed 24301 → 3235159734）· P50/P95 为跨种子分布；稳态 = 每次运行末段 40%（* 倾角/偏航为 SO(3) 小角分解，不受欧拉奇点影响）；未收敛率 = 单次 10 s 内未连续 1 s 总误差 <2° 的比例；统计口径：精确（逐样本）；本批在 Web Worker 中执行（评测期间界面不卡）"
+        },
+        {
+          "requestedAt": 16328.899999976158,
+          "observedAt": 16333.799999952316,
+          "runningBefore": false,
+          "runningAfter": false,
+          "generation": 1,
+          "slices": {
+            "count": 0,
+            "maxComputeMs": 0
+          },
+          "status": "完成：10 个种子 × 10 s（seed 24301 → 3235159734）· P50/P95 为跨种子分布；稳态 = 每次运行末段 40%（* 倾角/偏航为 SO(3) 小角分解，不受欧拉奇点影响）；未收敛率 = 单次 10 s 内未连续 1 s 总误差 <2° 的比例；统计口径：精确（逐样本）；本批在 Web Worker 中执行（评测期间界面不卡）"
+        },
+        {
+          "requestedAt": 16333.799999952316,
+          "observedAt": 16338.799999952316,
+          "runningBefore": false,
+          "runningAfter": false,
+          "generation": 1,
+          "slices": {
+            "count": 0,
+            "maxComputeMs": 0
+          },
+          "status": "完成：10 个种子 × 10 s（seed 24301 → 3235159734）· P50/P95 为跨种子分布；稳态 = 每次运行末段 40%（* 倾角/偏航为 SO(3) 小角分解，不受欧拉奇点影响）；未收敛率 = 单次 10 s 内未连续 1 s 总误差 <2° 的比例；统计口径：精确（逐样本）；本批在 Web Worker 中执行（评测期间界面不卡）"
+        },
+        {
+          "requestedAt": 16338.799999952316,
+          "observedAt": 16343.799999952316,
+          "runningBefore": false,
+          "runningAfter": false,
+          "generation": 1,
+          "slices": {
+            "count": 0,
+            "maxComputeMs": 0
+          },
+          "status": "完成：10 个种子 × 10 s（seed 24301 → 3235159734）· P50/P95 为跨种子分布；稳态 = 每次运行末段 40%（* 倾角/偏航为 SO(3) 小角分解，不受欧拉奇点影响）；未收敛率 = 单次 10 s 内未连续 1 s 总误差 <2° 的比例；统计口径：精确（逐样本）；本批在 Web Worker 中执行（评测期间界面不卡）"
+        }
+      ],
+      "kind": "setTimeout(0) event-loop latency, not input",
+      "allDuringBatch": false,
+      "count": 40,
+      "p50": 4.800000011920929,
+      "p95": 8.5,
+      "max": 9.900000035762787,
+      "percentileMethod": "nearest rank",
+      "frame": {
+        "at": 16351.299999952316,
+        "timeOrigin": 1794903852073.6,
+        "state": {
+          "running": false,
+          "activeJob": 0,
+          "cancels": 0,
+          "button": "运行批量评测",
+          "generation": 1,
+          "mode": "worker",
+          "cancelLatencyMs": null,
+          "partialSeeds": 0,
+          "workerDisabled": true,
+          "slices": {
+            "count": 0,
+            "maxComputeMs": 0
+          },
+          "cancelTiming": {
+            "requestedAt": null,
+            "runnerStoppedAt": null,
+            "postAwaitAt": null
+          }
+        },
+        "status": "完成：10 个种子 × 10 s（seed 24301 → 3235159734）· P50/P95 为跨种子分布；稳态 = 每次运行末段 40%（* 倾角/偏航为 SO(3) 小角分解，不受欧拉奇点影响）；未收敛率 = 单次 10 s 内未连续 1 s 总误差 <2° 的比例；统计口径：精确（逐样本）；本批在 Web Worker 中执行（评测期间界面不卡）",
+        "frameTiming": {
+          "count": 6,
+          "max": {
+            "simulation": 1.100000023841858,
+            "scene": 4.300000011920929,
+            "ui": 3.299999952316284,
+            "metrics": 0.800000011920929,
+            "frame": 5.399999976158142
+          }
+        },
+        "visibilityState": "visible",
+        "hasFocus": true,
+        "activeElement": {
+          "id": "btn-batch",
+          "tag": "BUTTON"
+        },
+        "longTaskSupported": true,
+        "longTaskReason": null,
+        "longTasks": [
+          {
+            "start": 84.29999995231628,
+            "duration": 566
+          },
+          {
+            "start": 662.5,
+            "duration": 384
+          },
+          {
+            "start": 1668.199999988079,
+            "duration": 70
+          }
+        ]
+      }
+    },
+    "timerDuringBatch": {
+      "samples": [
+        4.699999988079071,
+        4,
+        4.199999988079071,
+        0,
+        0,
+        0,
+        8.800000011920929,
+        8.5,
+        9.900000035762787,
+        9,
+        8.899999976158142,
+        9,
+        8.199999988079071,
+        8.5,
+        9,
+        8.900000035762787,
+        9.199999988079071,
+        9.300000011920929,
+        16.19999998807907,
+        15.199999988079071,
+        10.900000035762787,
+        12.100000023841858,
+        8.699999988079071,
+        8.199999988079071,
+        12.600000023841858,
+        16,
+        12.399999976158142,
+        15.600000023841858,
+        8.800000011920929,
+        8.400000035762787,
+        15.100000023841858,
+        13.699999988079071,
+        9,
+        8.5,
+        8.399999976158142,
+        8.199999988079071,
+        9.300000011920929,
+        8.300000011920929,
+        8.199999988079071,
+        8.099999964237213
+      ],
+      "observations": [
+        {
+          "requestedAt": 16446.899999976158,
+          "observedAt": 16451.599999964237,
+          "runningBefore": true,
+          "runningAfter": true,
+          "generation": 2,
+          "slices": {
+            "count": 4,
+            "maxComputeMs": 5.899999976158142
+          },
+          "status": "批量评测准备中：30 个种子 × 30 s…"
+        },
+        {
+          "requestedAt": 16451.599999964237,
+          "observedAt": 16455.599999964237,
+          "runningBefore": true,
+          "runningAfter": true,
+          "generation": 2,
+          "slices": {
+            "count": 5,
+            "maxComputeMs": 5.899999976158142
+          },
+          "status": "批量评测准备中：30 个种子 × 30 s…"
+        },
+        {
+          "requestedAt": 16455.599999964237,
+          "observedAt": 16459.799999952316,
+          "runningBefore": true,
+          "runningAfter": true,
+          "generation": 2,
+          "slices": {
+            "count": 6,
+            "maxComputeMs": 5.899999976158142
+          },
+          "status": "批量评测准备中：30 个种子 × 30 s…"
+        },
+        {
+          "requestedAt": 16459.799999952316,
+          "observedAt": 16459.799999952316,
+          "runningBefore": true,
+          "runningAfter": true,
+          "generation": 2,
+          "slices": {
+            "count": 6,
+            "maxComputeMs": 5.899999976158142
+          },
+          "status": "批量评测准备中：30 个种子 × 30 s…"
+        },
+        {
+          "requestedAt": 16459.799999952316,
+          "observedAt": 16459.799999952316,
+          "runningBefore": true,
+          "runningAfter": true,
+          "generation": 2,
+          "slices": {
+            "count": 6,
+            "maxComputeMs": 5.899999976158142
+          },
+          "status": "批量评测准备中：30 个种子 × 30 s…"
+        },
+        {
+          "requestedAt": 16459.799999952316,
+          "observedAt": 16459.799999952316,
+          "runningBefore": true,
+          "runningAfter": true,
+          "generation": 2,
+          "slices": {
+            "count": 6,
+            "maxComputeMs": 5.899999976158142
+          },
+          "status": "批量评测准备中：30 个种子 × 30 s…"
+        },
+        {
+          "requestedAt": 16459.799999952316,
+          "observedAt": 16468.599999964237,
+          "runningBefore": true,
+          "runningAfter": true,
+          "generation": 2,
+          "slices": {
+            "count": 7,
+            "maxComputeMs": 5.899999976158142
+          },
+          "status": "批量评测准备中：30 个种子 × 30 s…"
+        },
+        {
+          "requestedAt": 16468.599999964237,
+          "observedAt": 16477.099999964237,
+          "runningBefore": true,
+          "runningAfter": true,
+          "generation": 2,
+          "slices": {
+            "count": 8,
+            "maxComputeMs": 5.899999976158142
+          },
+          "status": "批量评测准备中：30 个种子 × 30 s…"
+        },
+        {
+          "requestedAt": 16477.099999964237,
+          "observedAt": 16487,
+          "runningBefore": true,
+          "runningAfter": true,
+          "generation": 2,
+          "slices": {
+            "count": 9,
+            "maxComputeMs": 5.899999976158142
+          },
+          "status": "批量评测准备中：30 个种子 × 30 s…"
+        },
+        {
+          "requestedAt": 16487.099999964237,
+          "observedAt": 16496.099999964237,
+          "runningBefore": true,
+          "runningAfter": true,
+          "generation": 2,
+          "slices": {
+            "count": 10,
+            "maxComputeMs": 5.899999976158142
+          },
+          "status": "批量评测准备中：30 个种子 × 30 s…"
+        },
+        {
+          "requestedAt": 16496.19999998808,
+          "observedAt": 16505.099999964237,
+          "runningBefore": true,
+          "runningAfter": true,
+          "generation": 2,
+          "slices": {
+            "count": 11,
+            "maxComputeMs": 5.899999976158142
+          },
+          "status": "批量评测准备中：30 个种子 × 30 s…"
+        },
+        {
+          "requestedAt": 16505.099999964237,
+          "observedAt": 16514.099999964237,
+          "runningBefore": true,
+          "runningAfter": true,
+          "generation": 2,
+          "slices": {
+            "count": 12,
+            "maxComputeMs": 5.899999976158142
+          },
+          "status": "批量评测准备中：30 个种子 × 30 s…"
+        },
+        {
+          "requestedAt": 16514.19999998808,
+          "observedAt": 16522.399999976158,
+          "runningBefore": true,
+          "runningAfter": true,
+          "generation": 2,
+          "slices": {
+            "count": 13,
+            "maxComputeMs": 5.899999976158142
+          },
+          "status": "批量评测准备中：30 个种子 × 30 s…"
+        },
+        {
+          "requestedAt": 16522.5,
+          "observedAt": 16531,
+          "runningBefore": true,
+          "runningAfter": true,
+          "generation": 2,
+          "slices": {
+            "count": 14,
+            "maxComputeMs": 5.899999976158142
+          },
+          "status": "批量评测准备中：30 个种子 × 30 s…"
+        },
+        {
+          "requestedAt": 16531.099999964237,
+          "observedAt": 16540.099999964237,
+          "runningBefore": true,
+          "runningAfter": true,
+          "generation": 2,
+          "slices": {
+            "count": 15,
+            "maxComputeMs": 5.899999976158142
+          },
+          "status": "批量评测准备中：30 个种子 × 30 s…"
+        },
+        {
+          "requestedAt": 16540.099999964237,
+          "observedAt": 16549,
+          "runningBefore": true,
+          "runningAfter": true,
+          "generation": 2,
+          "slices": {
+            "count": 16,
+            "maxComputeMs": 5.899999976158142
+          },
+          "status": "批量评测准备中：30 个种子 × 30 s…"
+        },
+        {
+          "requestedAt": 16549.099999964237,
+          "observedAt": 16558.299999952316,
+          "runningBefore": true,
+          "runningAfter": true,
+          "generation": 2,
+          "slices": {
+            "count": 17,
+            "maxComputeMs": 5.899999976158142
+          },
+          "status": "批量评测准备中：30 个种子 × 30 s…"
+        },
+        {
+          "requestedAt": 16558.399999976158,
+          "observedAt": 16567.69999998808,
+          "runningBefore": true,
+          "runningAfter": true,
+          "generation": 2,
+          "slices": {
+            "count": 18,
+            "maxComputeMs": 5.899999976158142
+          },
+          "status": "批量评测准备中：30 个种子 × 30 s…"
+        },
+        {
+          "requestedAt": 16567.69999998808,
+          "observedAt": 16583.899999976158,
+          "runningBefore": true,
+          "runningAfter": true,
+          "generation": 2,
+          "slices": {
+            "count": 19,
+            "maxComputeMs": 5.899999976158142
+          },
+          "status": "批量评测准备中：30 个种子 × 30 s…"
+        },
+        {
+          "requestedAt": 16584,
+          "observedAt": 16599.19999998808,
+          "runningBefore": true,
+          "runningAfter": true,
+          "generation": 2,
+          "slices": {
+            "count": 20,
+            "maxComputeMs": 5.899999976158142
+          },
+          "status": "批量评测准备中：30 个种子 × 30 s…"
+        },
+        {
+          "requestedAt": 16599.299999952316,
+          "observedAt": 16610.19999998808,
+          "runningBefore": true,
+          "runningAfter": true,
+          "generation": 2,
+          "slices": {
+            "count": 21,
+            "maxComputeMs": 5.899999976158142
+          },
+          "status": "批量评测准备中：30 个种子 × 30 s…"
+        },
+        {
+          "requestedAt": 16610.299999952316,
+          "observedAt": 16622.399999976158,
+          "runningBefore": true,
+          "runningAfter": true,
+          "generation": 2,
+          "slices": {
+            "count": 22,
+            "maxComputeMs": 5.899999976158142
+          },
+          "status": "批量评测准备中：30 个种子 × 30 s…"
+        },
+        {
+          "requestedAt": 16622.399999976158,
+          "observedAt": 16631.099999964237,
+          "runningBefore": true,
+          "runningAfter": true,
+          "generation": 2,
+          "slices": {
+            "count": 23,
+            "maxComputeMs": 5.899999976158142
+          },
+          "status": "批量评测准备中：30 个种子 × 30 s…"
+        },
+        {
+          "requestedAt": 16631.099999964237,
+          "observedAt": 16639.299999952316,
+          "runningBefore": true,
+          "runningAfter": true,
+          "generation": 2,
+          "slices": {
+            "count": 24,
+            "maxComputeMs": 5.899999976158142
+          },
+          "status": "批量评测准备中：30 个种子 × 30 s…"
+        },
+        {
+          "requestedAt": 16639.299999952316,
+          "observedAt": 16651.899999976158,
+          "runningBefore": true,
+          "runningAfter": true,
+          "generation": 2,
+          "slices": {
+            "count": 25,
+            "maxComputeMs": 5.899999976158142
+          },
+          "status": "批量评测准备中：30 个种子 × 30 s…"
+        },
+        {
+          "requestedAt": 16652,
+          "observedAt": 16668,
+          "runningBefore": true,
+          "runningAfter": true,
+          "generation": 2,
+          "slices": {
+            "count": 26,
+            "maxComputeMs": 5.899999976158142
+          },
+          "status": "批量评测准备中：30 个种子 × 30 s…"
+        },
+        {
+          "requestedAt": 16668,
+          "observedAt": 16680.399999976158,
+          "runningBefore": true,
+          "runningAfter": true,
+          "generation": 2,
+          "slices": {
+            "count": 27,
+            "maxComputeMs": 6
+          },
+          "status": "批量评测准备中：30 个种子 × 30 s…"
+        },
+        {
+          "requestedAt": 16680.399999976158,
+          "observedAt": 16696,
+          "runningBefore": true,
+          "runningAfter": true,
+          "generation": 2,
+          "slices": {
+            "count": 28,
+            "maxComputeMs": 7.5
+          },
+          "status": "批量评测准备中：30 个种子 × 30 s…"
+        },
+        {
+          "requestedAt": 16696.299999952316,
+          "observedAt": 16705.099999964237,
+          "runningBefore": true,
+          "runningAfter": true,
+          "generation": 2,
+          "slices": {
+            "count": 29,
+            "maxComputeMs": 7.5
+          },
+          "status": "批量评测准备中：30 个种子 × 30 s…"
+        },
+        {
+          "requestedAt": 16705.099999964237,
+          "observedAt": 16713.5,
+          "runningBefore": true,
+          "runningAfter": true,
+          "generation": 2,
+          "slices": {
+            "count": 30,
+            "maxComputeMs": 7.5
+          },
+          "status": "批量评测准备中：30 个种子 × 30 s…"
+        },
+        {
+          "requestedAt": 16713.599999964237,
+          "observedAt": 16728.69999998808,
+          "runningBefore": true,
+          "runningAfter": true,
+          "generation": 2,
+          "slices": {
+            "count": 31,
+            "maxComputeMs": 7.5
+          },
+          "status": "批量评测准备中：30 个种子 × 30 s…"
+        },
+        {
+          "requestedAt": 16728.69999998808,
+          "observedAt": 16742.399999976158,
+          "runningBefore": true,
+          "runningAfter": true,
+          "generation": 2,
+          "slices": {
+            "count": 32,
+            "maxComputeMs": 7.5
+          },
+          "status": "批量评测准备中：30 个种子 × 30 s…"
+        },
+        {
+          "requestedAt": 16742.399999976158,
+          "observedAt": 16751.399999976158,
+          "runningBefore": true,
+          "runningAfter": true,
+          "generation": 2,
+          "slices": {
+            "count": 33,
+            "maxComputeMs": 7.5
+          },
+          "status": "批量评测准备中：30 个种子 × 30 s…"
+        },
+        {
+          "requestedAt": 16751.399999976158,
+          "observedAt": 16759.899999976158,
+          "runningBefore": true,
+          "runningAfter": true,
+          "generation": 2,
+          "slices": {
+            "count": 34,
+            "maxComputeMs": 7.5
+          },
+          "status": "批量评测准备中：30 个种子 × 30 s…"
+        },
+        {
+          "requestedAt": 16759.899999976158,
+          "observedAt": 16768.299999952316,
+          "runningBefore": true,
+          "runningAfter": true,
+          "generation": 2,
+          "slices": {
+            "count": 35,
+            "maxComputeMs": 7.5
+          },
+          "status": "批量评测准备中：30 个种子 × 30 s…"
+        },
+        {
+          "requestedAt": 16768.399999976158,
+          "observedAt": 16776.599999964237,
+          "runningBefore": true,
+          "runningAfter": true,
+          "generation": 2,
+          "slices": {
+            "count": 36,
+            "maxComputeMs": 7.5
+          },
+          "status": "批量评测准备中：30 个种子 × 30 s…"
+        },
+        {
+          "requestedAt": 16776.599999964237,
+          "observedAt": 16785.899999976158,
+          "runningBefore": true,
+          "runningAfter": true,
+          "generation": 2,
+          "slices": {
+            "count": 37,
+            "maxComputeMs": 7.5
+          },
+          "status": "批量评测准备中：30 个种子 × 30 s…"
+        },
+        {
+          "requestedAt": 16785.899999976158,
+          "observedAt": 16794.19999998808,
+          "runningBefore": true,
+          "runningAfter": true,
+          "generation": 2,
+          "slices": {
+            "count": 38,
+            "maxComputeMs": 7.5
+          },
+          "status": "批量评测准备中：30 个种子 × 30 s…"
+        },
+        {
+          "requestedAt": 16794.19999998808,
+          "observedAt": 16802.399999976158,
+          "runningBefore": true,
+          "runningAfter": true,
+          "generation": 2,
+          "slices": {
+            "count": 39,
+            "maxComputeMs": 7.5
+          },
+          "status": "批量评测准备中：30 个种子 × 30 s…"
+        },
+        {
+          "requestedAt": 16802.5,
+          "observedAt": 16810.599999964237,
+          "runningBefore": true,
+          "runningAfter": true,
+          "generation": 2,
+          "slices": {
+            "count": 40,
+            "maxComputeMs": 7.5
+          },
+          "status": "批量评测准备中：30 个种子 × 30 s…"
+        }
+      ],
+      "kind": "setTimeout(0) event-loop latency, not input",
+      "allDuringBatch": true,
+      "count": 40,
+      "p50": 8.800000011920929,
+      "p95": 15.600000023841858,
+      "max": 16.19999998807907,
+      "percentileMethod": "nearest rank"
+    },
+    "beforeCancellation": {
+      "at": 16819.69999998808,
+      "timeOrigin": 1794903852073.6,
+      "state": {
+        "running": true,
+        "activeJob": 0,
+        "cancels": 0,
+        "button": "取消本次评测",
+        "generation": 2,
+        "mode": "worker",
+        "cancelLatencyMs": null,
+        "partialSeeds": 0,
+        "workerDisabled": true,
+        "slices": {
+          "count": 41,
+          "maxComputeMs": 7.5
+        },
+        "cancelTiming": {
+          "requestedAt": null,
+          "runnerStoppedAt": null,
+          "postAwaitAt": null
+        }
+      },
+      "status": "批量评测准备中：30 个种子 × 30 s…",
+      "frameTiming": {
+        "count": 12,
+        "max": {
+          "simulation": 3.199999988079071,
+          "scene": 4.599999964237213,
+          "ui": 4.600000023841858,
+          "metrics": 0,
+          "frame": 7.799999952316284
+        }
+      },
+      "visibilityState": "visible",
+      "hasFocus": true,
+      "activeElement": {
+        "id": "btn-batch",
+        "tag": "BUTTON"
+      },
+      "longTaskSupported": true,
+      "longTaskReason": null,
+      "longTasks": [
+        {
+          "start": 84.29999995231628,
+          "duration": 566
+        },
+        {
+          "start": 662.5,
+          "duration": 384
+        },
+        {
+          "start": 1668.199999988079,
+          "duration": 70
+        }
+      ]
+    },
+    "cancelInput": {
+      "kind": "click-producing mouseup dispatch",
+      "sentEpochMs": 1794903869045.2544,
+      "returnedEpochMs": 1794903869053.9966,
+      "x": 1355.125,
+      "y": 281.5625
+    },
+    "afterCancellation": {
+      "at": 17120.099999964237,
+      "timeOrigin": 1794903852073.6,
+      "state": {
+        "running": false,
+        "activeJob": 0,
+        "cancels": 1,
+        "button": "运行批量评测",
+        "generation": 3,
+        "mode": "worker",
+        "cancelLatencyMs": 121.69999998807907,
+        "partialSeeds": 1,
+        "workerDisabled": true,
+        "slices": {
+          "count": 50,
+          "maxComputeMs": 20.099999964237213
+        },
+        "cancelTiming": {
+          "requestedAt": 16974.899999976158,
+          "runnerStoppedAt": 17007.299999952316,
+          "postAwaitAt": 17096.599999964237
+        }
+      },
+      "status": "已取消批量评测（用户取消）",
+      "frameTiming": {
+        "count": 23,
+        "max": {
+          "simulation": 3.199999988079071,
+          "scene": 6.199999988079071,
+          "ui": 9.5,
+          "metrics": 0.5,
+          "frame": 11.600000023841858
+        }
+      },
+      "visibilityState": "visible",
+      "hasFocus": true,
+      "activeElement": {
+        "id": "btn-batch",
+        "tag": "BUTTON"
+      },
+      "longTaskSupported": true,
+      "longTaskReason": null,
+      "longTasks": [
+        {
+          "start": 84.29999995231628,
+          "duration": 566
+        },
+        {
+          "start": 662.5,
+          "duration": 384
+        },
+        {
+          "start": 1668.199999988079,
+          "duration": 70
+        }
+      ],
+      "input": {
+        "handlerAt": 16974.599999964237,
+        "eventTimeStamp": 16972.19999998808,
+        "timeOrigin": 1794903852073.6,
+        "trusted": true,
+        "hasFocus": true,
+        "visibilityState": "visible",
+        "activeElementId": "btn-batch",
+        "stateBeforeHandler": {
+          "running": true,
+          "activeJob": 0,
+          "cancels": 0,
+          "button": "取消本次评测",
+          "generation": 2,
+          "mode": "worker",
+          "cancelLatencyMs": null,
+          "partialSeeds": 0,
+          "workerDisabled": true,
+          "slices": {
+            "count": 50,
+            "maxComputeMs": 20.099999964237213
+          },
+          "cancelTiming": {
+            "requestedAt": null,
+            "runnerStoppedAt": null,
+            "postAwaitAt": null
+          }
+        },
+        "postHandlerAt": 17006.099999964237
+      },
+      "observedAt": 17125.5,
+      "result": {
+        "generation": 1,
+        "seeds": [
+          1365145197,
+          2682685793,
+          40415518,
+          863273770,
+          3951895519,
+          2066689950,
+          3811395989,
+          1312811519,
+          1941031831,
+          3235159734
+        ],
+        "summary": [
+          {
+            "id": "pure",
+            "label": "纯陀螺仪积分",
+            "runs": 10,
+            "rmseP50": 5.741606224883876,
+            "rmseP95": 5.7667340286296,
+            "rmseMean": 5.7403349262061045,
+            "steadyRmseP50": 8.030946269486654,
+            "steadyRmseP95": 8.07067311834401,
+            "nonConvergedPct": 0,
+            "tiltRmseP95": 5.351013214189517,
+            "yawRmseP95": 2.3081753320126297,
+            "tiltSo3P95": 5.348923535183061,
+            "yawSo3P95": 2.1654370946968253
+          },
+          {
+            "id": "comp",
+            "label": "互补滤波",
+            "runs": 10,
+            "rmseP50": 1.5055193860565426,
+            "rmseP95": 1.5199960660984533,
+            "rmseMean": 1.5039960216469515,
+            "steadyRmseP50": 1.5988629218131516,
+            "steadyRmseP95": 1.6273952671913265,
+            "nonConvergedPct": 0,
+            "tiltRmseP95": 1.0718840574726867,
+            "yawRmseP95": 1.083710134625564,
+            "tiltSo3P95": 1.0718825134038832,
+            "yawSo3P95": 1.0816066332438583
+          },
+          {
+            "id": "mahony",
+            "label": "Mahony",
+            "runs": 10,
+            "rmseP50": 1.353545730970807,
+            "rmseP95": 1.3618305900915566,
+            "rmseMean": 1.3482952151406622,
+            "steadyRmseP50": 1.1590328136922068,
+            "steadyRmseP95": 1.1819849751608011,
+            "nonConvergedPct": 0,
+            "tiltRmseP95": 1.013801849035526,
+            "yawRmseP95": 0.918929111931345,
+            "tiltSo3P95": 1.0138015240286207,
+            "yawSo3P95": 0.9170248509622013
+          },
+          {
+            "id": "madg",
+            "label": "Madgwick",
+            "runs": 10,
+            "rmseP50": 1.3622291913827507,
+            "rmseP95": 1.3935318748659116,
+            "rmseMean": 1.3639254840941093,
+            "steadyRmseP50": 1.2922904108765585,
+            "steadyRmseP95": 1.3301462492550062,
+            "nonConvergedPct": 0,
+            "tiltRmseP95": 1.1112203580051725,
+            "yawRmseP95": 0.8435456703286738,
+            "tiltSo3P95": 1.111197749048424,
+            "yawSo3P95": 0.8421969966907795
+          },
+          {
+            "id": "kalman",
+            "label": "卡尔曼滤波",
+            "runs": 10,
+            "rmseP50": 1.3327277914047806,
+            "rmseP95": 1.3438700789597104,
+            "rmseMean": 1.3323621746945626,
+            "steadyRmseP50": 1.1259412090712089,
+            "steadyRmseP95": 1.133617018010536,
+            "nonConvergedPct": 0,
+            "tiltRmseP95": 1.181033981073261,
+            "yawRmseP95": 0.6524799388700013,
+            "tiltSo3P95": 1.1810046943951058,
+            "yawSo3P95": 0.6488544579935874
+          }
+        ]
+      },
+      "body": ""
+    },
+    "cancellation": {
+      "rawTiming": {
+        "requestedAt": 16974.899999976158,
+        "runnerStoppedAt": 17007.299999952316,
+        "postAwaitAt": 17096.599999964237
+      },
+      "cancelledSeen": true,
+      "runnerSettled": true,
+      "runnerExisted": true,
+      "stopSource": "runner-stop",
+      "nodeInputToHandlerMs": 2.94580078125,
+      "eventToHandlerMs": 2.399999976158142,
+      "handlerToRunnerStopMs": 32.69999998807907,
+      "requestToRunnerStopMs": 32.39999997615814,
+      "runnerStopToPostAwaitMs": 89.30000001192093,
+      "requestToPostAwaitMs": 121.69999998807907,
+      "eventToRunnerStopMs": 35.09999996423721,
+      "nodeInputToRunnerStopMs": 35.645751953125,
+      "observedAfterStopMs": 118.20000004768372,
+      "clockNote": "Node/browser epoch uses timeOrigin+performance.now; event/runner/await use page monotonic time"
+    },
+    "final": {
+      "at": 17127.899999976158,
+      "timeOrigin": 1794903852073.6,
+      "state": {
+        "running": false,
+        "activeJob": 0,
+        "cancels": 1,
+        "button": "运行批量评测",
+        "generation": 3,
+        "mode": "worker",
+        "cancelLatencyMs": 121.69999998807907,
+        "partialSeeds": 1,
+        "workerDisabled": true,
+        "slices": {
+          "count": 50,
+          "maxComputeMs": 20.099999964237213
+        },
+        "cancelTiming": {
+          "requestedAt": 16974.899999976158,
+          "runnerStoppedAt": 17007.299999952316,
+          "postAwaitAt": 17096.599999964237
+        }
+      },
+      "status": "已取消批量评测（用户取消）",
+      "frameTiming": {
+        "count": 24,
+        "max": {
+          "simulation": 3.199999988079071,
+          "scene": 6.199999988079071,
+          "ui": 9.5,
+          "metrics": 0.5,
+          "frame": 11.600000023841858
+        }
+      },
+      "visibilityState": "visible",
+      "hasFocus": true,
+      "activeElement": {
+        "id": "btn-batch",
+        "tag": "BUTTON"
+      },
+      "longTaskSupported": true,
+      "longTaskReason": null,
+      "longTasks": [
+        {
+          "start": 84.29999995231628,
+          "duration": 566
+        },
+        {
+          "start": 662.5,
+          "duration": 384
+        },
+        {
+          "start": 1668.199999988079,
+          "duration": 70
+        }
+      ]
+    }
+  },
+  "pass": true
+}

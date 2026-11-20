@@ -10,8 +10,9 @@
  * （例如复算基准由 doccheck 负责，不在这里重复判）。
  */
 import { readFileSync } from "node:fs";
+import { replaySwitchProblems } from "./teaching-load.mjs";
 
-const SOAK_KINDS = new Set(["software-soak-batch", "software-soak-reconnect"]);
+const SOAK_KINDS = new Set(["software-soak-batch", "software-soak-reconnect", "software-soak-teaching"]);
 const RECOGNIZED = new Set([
   ...SOAK_KINDS,
   "software-smoke-stability",
@@ -33,6 +34,24 @@ function parseSoak(raw) {
   if (typeof raw.seconds !== "number" || !(raw.seconds >= 600)) completeness.push(`时长 ${raw.seconds} s 不足 600 s`);
   if (raw.withBatch === true && v?.batchOk !== true) completeness.push("批量判据未通过");
   if (raw.withReconnect === true && v?.reconnectOk !== true) completeness.push("重连判据未通过");
+  if (raw.withTeaching === true) {
+    if (v?.teachingOk !== true) completeness.push("教学负载判据未通过");
+    if (v?.coverageOk !== true) completeness.push("教学负载采样覆盖不足");
+    if (v?.clockAdvanced !== true) completeness.push("教学负载时钟未推进");
+    if (typeof v?.actionErrors === "number" && v.actionErrors > 0) completeness.push("教学负载存在动作失败");
+    if (v?.stopQuiesced !== true) completeness.push("停采后回看/事件仍在新增");
+    if (typeof v?.sourceSwitches !== "number" || v.sourceSwitches < 1) completeness.push("教学负载未覆盖换源");
+    if (raw.loadSchema !== "teaching-load/v2") completeness.push("旧教学量具未证明真实 replay 换源，不能用于当前验收");
+    const transitions = Array.isArray(raw.sourceTransitions) ? raw.sourceTransitions : [];
+    if (!transitions.length) completeness.push("缺少真实换源三阶段记录");
+    const transitionProblems = transitions.flatMap(replaySwitchProblems);
+    if (transitionProblems.length) completeness.push(`真实换源失败：${transitionProblems.join("；")}`);
+    const verifiedSwitches = transitions.filter((evidence) => replaySwitchProblems(evidence).length === 0).length;
+    if (v?.sourceSwitches !== verifiedSwitches) completeness.push("换源汇总与三阶段记录不一致");
+    if (!Number.isSafeInteger(v?.actionErrors) || v.actionErrors !== 0) completeness.push("教学动作没有全部成功");
+    const samples = Array.isArray(raw.samples) ? raw.samples : [];
+    if (samples.length < 2 || samples.at(-1).at - samples[0].at < raw.seconds * 1000 * 0.95) completeness.push("教学负载真实墙钟覆盖不足");
+  }
   if (v && v.heapGateOk !== true) completeness.push("堆判据未通过");
   if (v && v.errorsOk === false) completeness.push("控制台有错误");
   // SW-08：堆的四个判据（水位/峰值/趋势/末段）与采样覆盖都要能自证
@@ -129,12 +148,23 @@ function parseVisual(raw) {
   if (!shots || !shots.length) completeness.push("没有任何截图");
   else {
     for (const s of shots) {
-      if (!isObj(s) || !str(s.name) || !str(s.file) || !str(s.sha256)) { completeness.push(`截图条目不完整：${JSON.stringify(s)?.slice(0, 60)}`); continue; }
+      if (!isObj(s) || !str(s.name) || !str(s.file) || !/^[0-9a-f]{64}$/.test(s.sha256 ?? "")) { completeness.push(`截图条目不完整：${JSON.stringify(s)?.slice(0, 60)}`); continue; }
       if (!isObj(s.viewport)) completeness.push(`截图 ${s.name} 缺视口信息`);
+      if (s.metrics?.scrollW > s.metrics?.innerW) completeness.push(`截图 ${s.name} 有横向溢出`);
     }
   }
   const consoleErrors = Array.isArray(raw.consoleErrors) ? raw.consoleErrors : [];
   if (consoleErrors.length) completeness.push(`采集时有 ${consoleErrors.length} 条控制台错误`);
+  for (const field of ["servedProblems", "driftProblems"]) {
+    if (Array.isArray(raw[field]) && raw[field].length) completeness.push(`${field}：${raw[field].join("；")}`);
+  }
+  if (raw.captureId !== undefined) {
+    if (!/^[0-9a-f-]{36}$/.test(raw.captureId)) completeness.push("captureId 不是采集唯一 id");
+    if (raw.localOnly !== true) completeness.push("本地视觉采集必须声明 localOnly: true");
+    if (!str(raw.sourceDigest) || !str(raw.buildId)) completeness.push("版本化截图目录缺少 sourceDigest/buildId");
+    const prefix = `screenshots/visual-${raw.sourceDigest}/${raw.buildId}/${raw.captureId}/`;
+    if (!shots?.every((s) => str(s?.file)?.startsWith(prefix))) completeness.push("截图不在 sourceDigest/buildId/captureId 独立目录");
+  }
   return {
     recognized: true,
     ok: true,
@@ -148,6 +178,10 @@ function parseVisual(raw) {
       browserVersion: str(raw.browserVersion),
       runnerOs: null,
       runs: null,
+      localOnly: typeof raw.localOnly === "boolean" ? raw.localOnly : null,
+      captureId: str(raw.captureId),
+      startedAt: str(raw.startedAt),
+      finishedAt: str(raw.finishedAt),
     },
     pixels: (shots ?? []).filter((s) => isObj(s) && str(s.file) && str(s.sha256)).map((s) => ({ name: s.name, file: s.file, sha256: s.sha256 })),
   };
@@ -230,6 +264,12 @@ function parseSize(raw) {
   const groups = raw.mainAttribution?.groups;
   if (!Array.isArray(groups) || !groups.length) completeness.push("缺少主包按职责归因（无法回答体积长在哪儿）");
   if (!str(raw.distHash)) completeness.push("缺少被测产物的 distHash（归因必须指向某一份产物）");
+  if (Array.isArray(raw.driftProblems) && raw.driftProblems.length) completeness.push(`体积采集身份漂移：${raw.driftProblems.join("；")}`);
+  if (raw.totals && chunks) {
+    if (raw.totals.gzipSum !== chunks.reduce((sum, c) => sum + c.gzip, 0) || raw.totals.rawSum !== chunks.reduce((sum, c) => sum + c.raw, 0) || raw.totals.files !== chunks.length) {
+      completeness.push("体积分项与 totals 对账失败");
+    }
+  }
   return {
     recognized: true,
     ok: true,

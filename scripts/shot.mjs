@@ -21,6 +21,7 @@
 import puppeteer from "puppeteer-core";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { testArtifactTempDir, cleanupArtifactDir } from "./test-artifacts.mjs";
 
 const args = Object.fromEntries(
   process.argv.slice(2).map((a) => {
@@ -49,10 +50,13 @@ const dpr = Number(args.dpr ?? 1);
 const name = args.name ?? `shot-${width}x${height}`;
 const shots = join(process.cwd(), "screenshots");
 if (!existsSync(shots)) mkdirSync(shots);
+const profileDir = testArtifactTempDir("screenshots", "shot-");
+process.on("exit", () => cleanupArtifactDir(profileDir));
 
 const browser = await puppeteer.launch({
   executablePath,
   headless: "new",
+  userDataDir: profileDir,
   args: [
     "--no-sandbox",
     "--disable-dev-shm-usage",

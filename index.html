@@ -87,6 +87,8 @@
         <button type="button" class="pt-btn" id="panel-expand-all">全部展开</button>
         <button type="button" class="pt-btn" id="panel-collapse-all">全部收起</button>
       </div>
+      <div class="task-strip hidden" id="task-strip" role="region" aria-label="当前学习任务"></div>
+      <div class="param-feedback hidden" id="param-feedback" role="status" aria-live="polite"></div>
       <section class="panel-section section-tour collapsed" data-section="tour" id="sec-tour">
         <h2 class="panel-head"><button type="button" class="panel-toggle" aria-expanded="false" aria-controls="body-tour"><span class="ph-title">引导课程</span><span class="ph-summary" id="sum-tour">13 步 · 约 12 分钟</span><span class="ph-chev" aria-hidden="true"></span></button></h2>
         <div class="panel-body" id="body-tour">
@@ -227,6 +229,48 @@
             配置用于精确复现实验条件，CSV 用于外部数据分析。</p>
         </div>
       </div>
+      </section>
+
+      <section class="panel-section section-secondary section-compare collapsed" data-section="compare" id="sec-compare">
+        <h2 class="panel-head"><button type="button" class="panel-toggle" aria-expanded="false" aria-controls="body-compare"><span class="ph-title">单变量对照台</span><span class="ph-summary" id="sum-compare">单变量对照 · 未创建</span><span class="ph-chev" aria-hidden="true"></span></button></h2>
+        <div class="panel-body" id="body-compare">
+        <div class="cmp-card" id="cmp-card" data-state="empty">
+          <div class="cmp-baseline" id="cmp-baseline"><p>尚未固定基线：点击「固定当前配置为基线」冻结场景、种子与全部参数。</p></div>
+          <div class="cmp-vars" id="cmp-vars" role="group" aria-label="选择对照变量"></div>
+          <div class="cmp-estimators" id="cmp-estimators" role="group" aria-label="选择表格与曲线展示的算法"></div>
+          <div class="cmp-diff" id="cmp-diff"><p class="cmp-diff-muted">尚未创建对照：冻结基线并选择变量后显示完整配置差异。</p></div>
+          <p class="cmp-status" id="cmp-status" role="status" aria-live="polite">未创建对照：先冻结同一配置与种子，只改变一个变量后再运行。</p>
+          <div class="cmp-error" id="cmp-error" role="alert" hidden></div>
+          <div class="cmp-actions" role="group" aria-label="对照操作">
+            <button type="button" class="btn" id="btn-cmp-freeze">固定当前配置为基线</button>
+            <button type="button" class="btn" id="btn-cmp-run" disabled>运行对照</button>
+            <button type="button" class="btn" id="btn-cmp-cancel" disabled>取消</button>
+            <button type="button" class="btn" id="btn-cmp-swap" disabled>交换 A/B</button>
+            <button type="button" class="btn" id="btn-cmp-apply" disabled>将 B 应用到装置</button>
+            <button type="button" class="btn" id="btn-cmp-export" disabled>导出报告</button>
+            <button type="button" class="btn" id="btn-cmp-reset" disabled>重置对照</button>
+          </div>
+          <div class="tscroll cmp-table-wrap" id="cmp-table-wrap" hidden>
+            <table class="metrics-table" id="cmp-table">
+              <thead><tr><th scope="col">指标</th><th scope="col">单位</th><th scope="col">A（基线）</th><th scope="col">B（变量）</th><th scope="col">Δ = B − A</th><th scope="col">说明</th></tr></thead>
+              <tbody id="cmp-body"></tbody>
+            </table>
+          </div>
+          <div class="cmp-chart-wrap" id="cmp-chart-wrap" hidden>
+            <canvas id="cmp-canvas" aria-label="对照总误差曲线：完成运行后显示 A 与 B 两条曲线，单位度"></canvas>
+            <div class="cmp-legend" id="cmp-legend">A 实线 · B 虚线 · 总误差（°）</div>
+          </div>
+          <details class="cmp-alt" id="cmp-alt" hidden>
+            <summary>曲线的等价文本（A / B / Δ = B − A）</summary>
+            <div class="tscroll">
+              <table class="metrics-table" id="cmp-alt-table">
+                <thead><tr><th scope="col">指标</th><th scope="col">单位</th><th scope="col">A（基线）</th><th scope="col">B（变量）</th><th scope="col">Δ = B − A</th><th scope="col">说明</th></tr></thead>
+                <tbody id="cmp-alt-body"></tbody>
+              </table>
+            </div>
+          </details>
+        </div>
+        </div>
       </section>
 
       <section class="panel-section section-imu collapsed" data-section="imu" id="sec-imu">
@@ -667,6 +711,15 @@
         <div class="row check-row">
           <label><input type="checkbox" id="palette-toggle" /> 色觉友好配色（红/绿换成 Okabe–Ito 色板）</label>
         </div>
+        <div class="row">
+          <label for="font-tier">界面文字档位</label>
+          <select id="font-tier">
+            <option value="standard" selected>标准</option>
+            <option value="large">大</option>
+            <option value="xlarge">特大</option>
+          </select>
+        </div>
+        <p class="hint">课堂投影用大/特大，刷新后保留；Canvas 图表文字由 JS 绘制，不随档位缩放。</p>
         <p class="hint">曲线常同时在场 6–12 条，默认色里的「纯积分红 × Madgwick 绿」正是红色盲的典型混淆对。勾上后换成色觉研究通用的 Okabe–Ito 色板（朱红/黄/蓝/蓝绿/品红紫），色相与明度双重区分，深色底上也够亮。</p>
       </div>
       </section>
@@ -696,6 +749,30 @@
           收敛时两箭头重合；选纯陀螺仪积分可见白箭头缓慢转偏而品红不动——这就是漂移。
         </p>
       </div>
+      </section>
+
+      <section class="panel-section section-secondary section-diagnostics collapsed" data-section="diagnostics" id="sec-diagnostics">
+        <h2 class="panel-head"><button type="button" class="panel-toggle" aria-expanded="false" aria-controls="body-diagnostics"><span class="ph-title">教学诊断</span><span class="ph-summary" id="sum-diagnostics">按需开启 · 默认零采集</span><span class="ph-chev" aria-hidden="true"></span></button></h2>
+        <div class="panel-body" id="body-diagnostics">
+        <p class="hint">以下功能默认不加载、不采样。首次点击对应按钮才下载模块并开始记录；关闭页面或重置实验会清理缓冲。</p>
+        <div class="row btn-row" role="group" aria-label="教学诊断功能">
+          <button type="button" class="btn" id="btn-diag-obs" aria-pressed="false">误差与可观性</button>
+          <button type="button" class="btn" id="btn-diag-events" aria-pressed="false">事件时间轴</button>
+          <button type="button" class="btn" id="btn-diag-review" aria-pressed="false">历史回看</button>
+          <button type="button" class="btn" id="btn-diag-eskf" aria-pressed="false">ESKF 单步解剖</button>
+        </div>
+        <div class="row btn-row" role="group" aria-label="只读实验报告">
+          <button type="button" class="btn" id="btn-diag-report">实验报告</button>
+          <button type="button" class="btn" id="btn-diag-report-import">导入报告</button>
+          <input type="file" id="report-file" accept=".json,application/json" class="hidden" />
+        </div>
+        <div class="diag-status dim" id="diag-status" role="status" aria-live="polite">未开启任何诊断：实时路径不记录事件、回看帧或 ESKF 快照。</div>
+        <div id="diag-obs-host"></div>
+        <div id="diag-events-host"></div>
+        <div id="diag-review-host"></div>
+        <div id="diag-eskf-host"></div>
+        <div id="diag-report-host"></div>
+        </div>
       </section>
 
       <section class="panel-section section-secondary section-metrics" data-section="metrics" id="sec-metrics">
@@ -990,6 +1067,12 @@
 
   <div id="chart-cursor" class="ov-chip hidden"></div>
   <div id="toast-layer" class="toast-layer" role="status" aria-live="polite"></div>
+  <!-- 更新横幅只在已有 controller 且发现 waiting SW 时显示；首次安装不显示。
+       离线预热覆盖曾联网访问后已缓存的懒模块；首次离线不承诺。 -->
+  <div id="sw-banner" class="ov-chip" hidden role="status"
+       style="position:fixed;bottom:8px;left:8px">发现新版本。<button class="btn primary" id="sw-update">重新加载以更新</button></div>
+  <!-- 只读实验报告的打印根：屏幕隐藏，打印时由报告面板填充（见 report-panel.ts） -->
+  <div id="report-print-root" hidden></div>
 
   <footer id="app-footer">
     <span>NED 世界系 · q：机体系→世界系 · 解算 500 Hz（真实模式跟随采样率）</span>
@@ -1641,7 +1724,7 @@
             <div class="ctl-name">加速度计观测门控 <span class="ctl-range">开关</span></div>
             <p><span class="k k1">是什么</span>互补 / Mahony / Madgwick 三家共用的「观测可信度判断」：<b>幅度门控</b>（‖a‖ 偏离 g 超 35%）+ <b>方向门控</b>（实测重力方向与预测方向夹角超 20°）双层拒收。启动 ramp 期间自动关闭（否则初始偏差会被拒收卡死）。</p>
             <p><span class="k k2">起什么作用</span>机动线加速度污染观测时，垂直方向的污染对向量模长只有二阶影响（4 m/s² 侧向 → 范数仅偏 8%），幅度门控看不见它——<b>方向门控才是主手段</b>。被拒的一帧退化为纯陀螺积分，用短期精度换长期稳健。卡尔曼另有自己的 40° 新息门控，不受此开关影响。</p>
-            <p><span class="k k3">改了会怎样</span>用「方向门控救场」实验：门控开时误差曲线贴地，关掉后持续侧向加速度把姿态拽偏 20° 以上。注意高频振动是零均值污染，门控可能误伤——这也是 Fusion 类库设置「恢复窗」的原因；本装置为教学保持固定阈值。</p>
+            <p><span class="k k3">改了会怎样</span>用「方向门控救场」实验：默认基线（种子 24301、500 Hz、水平初态；线加速度 4 m/s²、零偏 1°/s、陀螺噪声 0.2°/s、加计噪声 0.1 m/s²、振动 0.1、磁噪声 0.8 μT；磁修正与启动 ramp 开、恢复窗关、方向阈值 20°、幅度阈值 35%），只开/关门控。20 s 内 Mahony 全程 RMSE 约 15.2°→12.5°（降幅约 2.7°），开侧拒绝 8272 帧，关侧 0 帧；两侧峰值仍约 57.6°。这只是有限窗口改善，不保证误差归零；同条件 10 s 窗口降幅约 0.6°。高频振动是零均值污染，门控可能误伤——这也是 Fusion 类库设置「恢复窗」的原因；本实验保持恢复窗关闭。</p>
           </div>
 
           <div class="ctl">
@@ -1659,8 +1742,8 @@
             <p><span class="k k1">是什么</span>积分增益：误差的<b>累积量</b>也参与修正。</p>
             <p><span class="k k2">起什么作用</span>稳态时比例项趋于零，积分项恰好收敛到「陀螺仪零偏的补偿值」——
               这是 Mahony 能自动消零偏的机制（数学上：e 的直流分量被积分器吸收）。</p>
-            <p><span class="k k3">改了会怎样</span>设 0：有零偏时收敛后仍留一个稳定小偏差；调大：消零偏更快，但过大会振荡超调。
-              配合「陀螺仪零偏」滑块做实验：Ki=0.05 时约几秒收敛到零误差，Ki=0 则永远差一点。
+            <p><span class="k k3">改了会怎样</span>设 0：有零偏时可能留下稳态偏差；增大积分增益可以加快补偿，但效果取决于观测、噪声和采样条件。
+              本页内嵌练习固定磁修正开启、零噪声，比较 20 s 窗口内的稳态 RMSE；它不证明“几秒归零”，也没有实测大 Ki 的振荡。
               实战锚点：Ki≈0.005（MPU6050 级器件）——比 Kp 小两三个数量级是常态，积分项要的是「慢而准」。</p>
           </div>
 
@@ -4068,7 +4151,7 @@ NEES = eᵀ·P⁻¹·e　　e = 真实 − 估计（仅仿真有真值时可用�
             <thead><tr><th>实验</th><th>改了什么</th><th>该看到什么</th><th>结论</th></tr></thead>
             <tbody>
               <tr><td>零偏漂移</td><td>陀螺零偏 3°/s</td><td>红线匀速直线爬升</td><td>斜率 = 零偏；无观测通道必漂</td></tr>
-              <tr><td>方向门控救场</td><td>机动线加速度 4 m/s²</td><td>门控开：曲线贴地；关：持续被拽偏</td><td>垂直方向的污染对范数只有二阶影响，方向门控才是主手段</td></tr>
+              <tr><td>方向门控救场</td><td>机动线加速度 4 m/s²；默认基线，磁修正与启动 ramp 开、恢复窗关</td><td>20 s 全程 RMSE：关→开约 15.2°→12.5°，开侧拒绝 8272 帧；两侧峰值仍约 57.6°</td><td>垂直于重力的污染对范数只有二阶影响；方向门控补充拒收，但有限窗口改善不保证归零</td></tr>
               <tr><td>电机振动</td><td>振动滑块拉满</td><td>所有融合曲线同步起毛刺</td><td>高频零均值污染：能平均掉，但增益越高抖得越厉害</td></tr>
               <tr><td>磁干扰与偏航</td><td>硬铁 + 交变干扰</td><td>MARG 开被拉偏、关则漂</td><td>磁力计能定北，但必须先标定</td></tr>
               <tr><td>初始对准</td><td>随机初始姿态偏差 20–35°</td><td>四家融合几秒内收敛，纯积分停在原处</td><td>启动增益 ramp / 大初始协方差是加速收敛的两条路</td></tr>
@@ -4088,6 +4171,19 @@ NEES = eᵀ·P⁻¹·e　　e = 真实 − 估计（仅仿真有真值时可用�
               <tr><td>4D 立体投影</td><td>连按「左乘 i」两次</td><td>姿态复原但 q 变号</td><td>双重覆盖：转 360° ≠ 没转</td></tr>
             </tbody>
           </table></div>
+          <div class="claim-row" aria-label="实验索引结论一键运行">
+            <div data-claim="claim-gate-rescue" data-claim-action="run-comparison" data-claim-target="accel-gate" data-claim-baseline="gate" data-claim-window="20">门控对照</div>
+            <div data-claim="claim-vibration" data-claim-action="run-experiment" data-claim-target="vibration">电机振动</div>
+            <div data-claim="claim-magnetic" data-claim-action="run-experiment" data-claim-target="magnetic">磁干扰偏航</div>
+            <div data-claim="claim-kalman-tuning" data-claim-action="run-experiment" data-claim-target="kalman-tuning">卡尔曼Q/R</div>
+            <div data-claim="claim-gimbal-lock" data-claim-action="run-experiment" data-claim-target="gimbal">万向节锁</div>
+            <div data-claim="claim-euler-singularity" data-claim-action="run-experiment" data-claim-target="lockAlgo">锁点后果</div>
+            <div data-claim="claim-slerp-euler" data-claim-action="run-experiment" data-claim-target="slerp">Slerp对比</div>
+            <div data-claim="claim-double-cover" data-claim-action="run-experiment" data-claim-target="proj">4D覆盖</div>
+            <div data-claim="claim-sensor-delay" data-claim-action="run-experiment" data-claim-target="sensorDelay">群延迟</div>
+            <div data-claim="claim-gyro-saturation" data-claim-action="run-experiment" data-claim-target="gyroSaturation">量程饱和</div>
+            <div data-claim="claim-solve-rate" data-claim-action="run-experiment" data-claim-target="solveRate">解算频率</div>
+          </div>
         </section>
 
         <section id="l-exercise">
@@ -4103,6 +4199,7 @@ NEES = eᵀ·P⁻¹·e　　e = 真实 − 估计（仅仿真有真值时可用�
             <p><span class="k k2">验证</span>实验「零偏漂移」，把零偏从 1 调到 3，看斜率是否变成三倍。读数看「本轮评测」的当前值。</p>
             <p><span class="k k3">答案</span>约 20°。误差 = 零偏 × 时间（b·t），恒定零偏积分出来是一次函数。若再打开「零偏随机游走」，零偏本身开始游走（E[b²] ∝ t），再积分后姿态误差方差典型按 t³ 增长（RMS 约 t^1.5）——这是统计趋势，单次曲线不一定规则，应该用多种子实验看 P50/P95。</p>
           </div>
+          <div data-claim="claim-drift-linear" data-claim-action="run-prediction" data-claim-target="drift-linear-10s">零偏漂移</div>
 
           <div class="ctl">
             <div class="ctl-name">第 2 题 · 门控看得见什么、看不见什么</div>
@@ -4117,6 +4214,7 @@ NEES = eᵀ·P⁻¹·e　　e = 真实 − 估计（仅仿真有真值时可用�
             <p><span class="k k2">验证</span>勾选「重置时给各算法随机初始姿态偏差」多按几次重置，观察误差曲线的收敛形态；再对照排障手册的「收敛」行。</p>
             <p><span class="k k3">答案</span>纯偏航偏差<b>不可观</b>——重力绕自身轴旋转没有变化，加计看不出任何异常，任何算法都拉不回来（打开 MARG 才能靠磁场拉）。横滚/俯仰偏差则一眼可见，几秒内收敛。这也是「初始对准必须借助磁力计或外部航向」的原因。</p>
           </div>
+          <div data-claim="claim-yaw-unobservable" data-claim-action="run-prediction" data-claim-target="accel-yaw-unobservable">偏航不可观</div>
 
           <div class="ctl">
             <div class="ctl-name">第 4 题 · β 与稳态误差（实测，不套公式）</div>
@@ -4128,8 +4226,8 @@ NEES = eᵀ·P⁻¹·e　　e = 真实 − 估计（仅仿真有真值时可用�
           <div class="ctl">
             <div class="ctl-name">第 5 题 · Ki 在记什么账</div>
             <p><span class="k k1">题</span>Mahony 的 Ki = 0 与 Ki = 0.05，在 2°/s 零偏下的长期行为差别是什么？把 Ki 拉到 0.5 会怎样？</p>
-            <p><span class="k k2">验证</span>打开玻璃盒看「∫e 用量」与「零偏估计」；切换 Ki 观察曲线尾部。</p>
-            <p><span class="k k3">答案</span>Ki = 0 时残余一个永久台阶（比例项只能把误差压到某个非零值）；Ki > 0 时积分项慢慢把零偏「记」进来，台阶最终归零，但收敛慢。Ki 过大（0.5）会在有噪声时来回振荡——积分的经典代价。</p>
+            <p><span class="k k2">验证</span>运行本页内嵌练习，比较固定 20 s 窗口的稳态 RMSE；玻璃盒可补充观察 Mahony 的「∫e 用量」，不要把它当成 ESKF 的零偏状态。</p>
+            <p><span class="k k3">答案</span>在可信重力和磁观测下，积分项可降低恒定零偏造成的残差。本题只验证 Ki=0.05 相对 Ki=0 的窗口改善；长期趋零需可观测、稳定增益等条件，大 Ki 也不保证在任何噪声或采样条件下更好。本题没有实测 Ki=0.5 的振荡。</p>
           </div>
 
           <div class="ctl">
@@ -5280,8 +5378,8 @@ export function applyMagCalibration(m, cal) {
             <li><b>数值</b>：姿态积分用精确指数映射（不是一阶欧拉）；两姿态夹角用相对四元数的 atan2（零角附近分辨率 ~1e-15 而非 acos 的 1e-8）；欧拉角在 ±90° 处按通行约定取 roll := 0。</li>
             <li><!-- facts:begin --><b>验证</b>：类型检查 + <b>126 项数值自检</b> + <b>10 项三维场景几何自检</b> + <b>15 项 HTML↔TS 契约检查</b> +
               <b>4 项文档基准检查</b> + 独立时间/schema/生命周期/Worker/trace/soak/status/budget/evidence 契约 +
-              <b>107 项浏览器端到端冒烟</b>（app / devices 两片）+ <b>14 项产物预算</b>。
-              <!-- verify: check=155 contracts=yes status=yes smoke=107 budget=14 evidence=yes --><!-- facts:end -->
+              <b>129 项浏览器端到端冒烟</b>（app / devices 两片）+ <b>19 项产物预算</b>。
+              <!-- verify: check=155 contracts=yes status=yes smoke=129 budget=19 evidence=yes --><!-- facts:end -->
               浏览器用例覆盖文档演示、15 页对比度、容器封顶、串口/BLE 重连、Worker 取消、UI/runner trace、
               校准历史、控件接线、档案事务（三类失败档案导入前后完好）、200% 文字缩放与深链往返；
               <span class="mono">evidence:check</span> 机器核对证据索引，长稳与视觉证据用

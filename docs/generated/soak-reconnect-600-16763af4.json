@@ -1,0 +1,6734 @@
+{
+  "generatedAt": "2026-11-16T12:55:16.531Z",
+  "commit": "7d5cf97fdddfb9f25d660d199075a3ec84006d30",
+  "sourceDigest": "16763af43b23d3b62a5cbfc87d6a7750",
+  "sourceFiles": 117,
+  "worktree": "dirty",
+  "buildId": "16763af43b23-0291a27770294e5f",
+  "distHash": "0291a27770294e5f",
+  "provenanceProblems": [],
+  "servedProblems": [],
+  "driftProblems": [],
+  "browserVersion": "Chrome/157.0.8103.78",
+  "startedAt": "2026-11-16T12:45:13.051Z",
+  "finishedAt": "2026-11-16T12:55:16.531Z",
+  "url": "http://127.0.0.1:4173/",
+  "seconds": 600,
+  "intervalMs": 5000,
+  "withBatch": false,
+  "withReconnect": true,
+  "expectedSeeds": 10,
+  "batchesExpected": 0,
+  "dropEverySec": 8,
+  "heapLimitMb": 24,
+  "allowNoHeap": false,
+  "tailObserveSeconds": 90,
+  "output": "D:\\凡\\四元数姿态解算\\docs\\generated\\soak-reconnect-600-16763af4.json",
+  "profile": "D:\\凡\\四元数姿态解算\\.audit-current\\soak-profiles\\profile-v7UIbI",
+  "samples": [
+    {
+      "at": 1794833116107,
+      "t": 0,
+      "logRows": 0,
+      "logRowsCap": 850,
+      "rawRows": 0,
+      "rawRowsCap": 30000,
+      "charts": [
+        0,
+        0,
+        0
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 0,
+      "insTrailCap": 1800,
+      "serialQueue": 1,
+      "serialQueueCap": 128,
+      "heapMb": 15.044398307800293,
+      "fps": "29 fps",
+      "serialFrames": 1,
+      "consumedFrames": 0,
+      "consumption": {
+        "count": 0,
+        "at": 0,
+        "t": 0
+      },
+      "reconnects": 0,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 0,
+      "opens": 1,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833121127,
+      "t": 4.188999999999957,
+      "logRows": 104,
+      "logRowsCap": 850,
+      "rawRows": 420,
+      "rawRowsCap": 30000,
+      "charts": [
+        104,
+        104,
+        104
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 208,
+      "insTrailCap": 1800,
+      "serialQueue": 1,
+      "serialQueueCap": 128,
+      "heapMb": 15.8064546585083,
+      "fps": "60 fps",
+      "serialFrames": 421,
+      "consumedFrames": 420,
+      "consumption": {
+        "count": 420,
+        "at": 1794833121113,
+        "t": 4.188999999999957
+      },
+      "reconnects": 0,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 0,
+      "opens": 1,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833126140,
+      "t": 7.473999999999887,
+      "logRows": 186,
+      "logRowsCap": 850,
+      "rawRows": 749,
+      "rawRowsCap": 30000,
+      "charts": [
+        186,
+        186,
+        186
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 372,
+      "insTrailCap": 1800,
+      "serialQueue": 1,
+      "serialQueueCap": 128,
+      "heapMb": 14.228235244750977,
+      "fps": "60 fps",
+      "serialFrames": 750,
+      "consumedFrames": 749,
+      "consumption": {
+        "count": 749,
+        "at": 1794833126128,
+        "t": 7.473999999999887
+      },
+      "reconnects": 1,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 1,
+      "opens": 2,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833131152,
+      "t": 11.358999999999808,
+      "logRows": 283,
+      "logRowsCap": 850,
+      "rawRows": 1138,
+      "rawRowsCap": 30000,
+      "charts": [
+        283,
+        283,
+        283
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 566,
+      "insTrailCap": 1800,
+      "serialQueue": 2,
+      "serialQueueCap": 128,
+      "heapMb": 12.048851013183594,
+      "fps": "53 fps",
+      "serialFrames": 1140,
+      "consumedFrames": 1138,
+      "consumption": {
+        "count": 1138,
+        "at": 1794833131126,
+        "t": 11.358999999999808
+      },
+      "reconnects": 1,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 1,
+      "opens": 2,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833136166,
+      "t": 14.353999999999745,
+      "logRows": 358,
+      "logRowsCap": 850,
+      "rawRows": 1438,
+      "rawRowsCap": 30000,
+      "charts": [
+        358,
+        358,
+        358
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 716,
+      "insTrailCap": 1800,
+      "serialQueue": 3,
+      "serialQueueCap": 128,
+      "heapMb": 14.79787826538086,
+      "fps": "45 fps",
+      "serialFrames": 1442,
+      "consumedFrames": 1438,
+      "consumption": {
+        "count": 1438,
+        "at": 1794833136140,
+        "t": 14.353999999999745
+      },
+      "reconnects": 2,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 2,
+      "opens": 3,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833141181,
+      "t": 18.037000000000013,
+      "logRows": 450,
+      "logRowsCap": 850,
+      "rawRows": 1808,
+      "rawRowsCap": 30000,
+      "charts": [
+        450,
+        450,
+        450
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 900,
+      "insTrailCap": 1800,
+      "serialQueue": 1,
+      "serialQueueCap": 128,
+      "heapMb": 16.3646183013916,
+      "fps": "44 fps",
+      "serialFrames": 1810,
+      "consumedFrames": 1808,
+      "consumption": {
+        "count": 1808,
+        "at": 1794833141173,
+        "t": 18.037000000000013
+      },
+      "reconnects": 2,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 2,
+      "opens": 3,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833146186,
+      "t": 20.952000000000467,
+      "logRows": 523,
+      "logRowsCap": 850,
+      "rawRows": 2100,
+      "rawRowsCap": 30000,
+      "charts": [
+        523,
+        523,
+        523
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1046,
+      "insTrailCap": 1800,
+      "serialQueue": 1,
+      "serialQueueCap": 128,
+      "heapMb": 16.139930725097656,
+      "fps": "41 fps",
+      "serialFrames": 2106,
+      "consumedFrames": 2100,
+      "consumption": {
+        "count": 2100,
+        "at": 1794833146173,
+        "t": 20.952000000000467
+      },
+      "reconnects": 3,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 3,
+      "opens": 4,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833151283,
+      "t": 24.452000000001014,
+      "logRows": 611,
+      "logRowsCap": 850,
+      "rawRows": 2450,
+      "rawRowsCap": 30000,
+      "charts": [
+        611,
+        611,
+        611
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1222,
+      "insTrailCap": 1800,
+      "serialQueue": 0,
+      "serialQueueCap": 128,
+      "heapMb": 13.567853927612305,
+      "fps": "41 fps",
+      "serialFrames": 2455,
+      "consumedFrames": 2450,
+      "consumption": {
+        "count": 2450,
+        "at": 1794833151087,
+        "t": 24.452000000001014
+      },
+      "reconnects": 3,
+      "serialRunning": false,
+      "reconnectPending": true,
+      "sourceKind": "serial",
+      "drops": 4,
+      "opens": 4,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833156353,
+      "t": 27.44700000000148,
+      "logRows": 686,
+      "logRowsCap": 850,
+      "rawRows": 2750,
+      "rawRowsCap": 30000,
+      "charts": [
+        686,
+        686,
+        686
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1372,
+      "insTrailCap": 1800,
+      "serialQueue": 7,
+      "serialQueueCap": 128,
+      "heapMb": 15.969541549682617,
+      "fps": "48 fps",
+      "serialFrames": 2762,
+      "consumedFrames": 2750,
+      "consumption": {
+        "count": 2750,
+        "at": 1794833156251,
+        "t": 27.44700000000148
+      },
+      "reconnects": 4,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 4,
+      "opens": 5,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833161364,
+      "t": 30.21200000000191,
+      "logRows": 755,
+      "logRowsCap": 850,
+      "rawRows": 3027,
+      "rawRowsCap": 30000,
+      "charts": [
+        755,
+        755,
+        755
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1510,
+      "insTrailCap": 1800,
+      "serialQueue": 4,
+      "serialQueueCap": 128,
+      "heapMb": 14.451889038085938,
+      "fps": "42 fps",
+      "serialFrames": 3036,
+      "consumedFrames": 3027,
+      "consumption": {
+        "count": 3027,
+        "at": 1794833161317,
+        "t": 30.21200000000191
+      },
+      "reconnects": 5,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 5,
+      "opens": 6,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833166380,
+      "t": 33.86500000000188,
+      "logRows": 846,
+      "logRowsCap": 850,
+      "rawRows": 3396,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1692,
+      "insTrailCap": 1800,
+      "serialQueue": 1,
+      "serialQueueCap": 128,
+      "heapMb": 17.56361961364746,
+      "fps": "42 fps",
+      "serialFrames": 3402,
+      "consumedFrames": 3396,
+      "consumption": {
+        "count": 3396,
+        "at": 1794833166374,
+        "t": 33.86500000000188
+      },
+      "reconnects": 5,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 5,
+      "opens": 6,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833171386,
+      "t": 36.53000000000135,
+      "logRows": 813,
+      "logRowsCap": 850,
+      "rawRows": 3663,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 1,
+      "serialQueueCap": 128,
+      "heapMb": 14.573122024536133,
+      "fps": "44 fps",
+      "serialFrames": 3676,
+      "consumedFrames": 3663,
+      "consumption": {
+        "count": 3663,
+        "at": 1794833171380,
+        "t": 36.53000000000135
+      },
+      "reconnects": 6,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 6,
+      "opens": 7,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833176394,
+      "t": 39.92000000000068,
+      "logRows": 798,
+      "logRowsCap": 850,
+      "rawRows": 4002,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 2,
+      "serialQueueCap": 128,
+      "heapMb": 15.340211868286133,
+      "fps": "42 fps",
+      "serialFrames": 4016,
+      "consumedFrames": 4002,
+      "consumption": {
+        "count": 4002,
+        "at": 1794833176379,
+        "t": 39.92000000000068
+      },
+      "reconnects": 6,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 6,
+      "opens": 7,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833181406,
+      "t": 42.605000000000146,
+      "logRows": 765,
+      "logRowsCap": 850,
+      "rawRows": 4271,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 2,
+      "serialQueueCap": 128,
+      "heapMb": 13.712852478027344,
+      "fps": "41 fps",
+      "serialFrames": 4290,
+      "consumedFrames": 4271,
+      "consumption": {
+        "count": 4271,
+        "at": 1794833181393,
+        "t": 42.605000000000146
+      },
+      "reconnects": 7,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 7,
+      "opens": 8,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833186435,
+      "t": 45.974999999999476,
+      "logRows": 849,
+      "logRowsCap": 850,
+      "rawRows": 4608,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 6,
+      "serialQueueCap": 128,
+      "heapMb": 13.356893539428711,
+      "fps": "43 fps",
+      "serialFrames": 4631,
+      "consumedFrames": 4608,
+      "consumption": {
+        "count": 4608,
+        "at": 1794833186341,
+        "t": 45.974999999999476
+      },
+      "reconnects": 7,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 7,
+      "opens": 8,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833191442,
+      "t": 48.759999999998925,
+      "logRows": 819,
+      "logRowsCap": 850,
+      "rawRows": 4887,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 0,
+      "serialQueueCap": 128,
+      "heapMb": 17.82297706604004,
+      "fps": "44 fps",
+      "serialFrames": 4909,
+      "consumedFrames": 4887,
+      "consumption": {
+        "count": 4887,
+        "at": 1794833191440,
+        "t": 48.759999999998925
+      },
+      "reconnects": 8,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 8,
+      "opens": 9,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833196453,
+      "t": 51.779999999998324,
+      "logRows": 794,
+      "logRowsCap": 850,
+      "rawRows": 5189,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 0,
+      "serialQueueCap": 128,
+      "heapMb": 15.696073532104492,
+      "fps": "41 fps",
+      "serialFrames": 5218,
+      "consumedFrames": 5189,
+      "consumption": {
+        "count": 5189,
+        "at": 1794833196056,
+        "t": 51.779999999998324
+      },
+      "reconnects": 8,
+      "serialRunning": false,
+      "reconnectPending": true,
+      "sourceKind": "serial",
+      "drops": 9,
+      "opens": 9,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833201470,
+      "t": 54.614999999997764,
+      "logRows": 765,
+      "logRowsCap": 850,
+      "rawRows": 5473,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 8,
+      "serialQueueCap": 128,
+      "heapMb": 15.045649528503418,
+      "fps": "39 fps",
+      "serialFrames": 5510,
+      "consumedFrames": 5473,
+      "consumption": {
+        "count": 5473,
+        "at": 1794833201356,
+        "t": 54.614999999997764
+      },
+      "reconnects": 9,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 9,
+      "opens": 10,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833206491,
+      "t": 57.489999999997195,
+      "logRows": 837,
+      "logRowsCap": 850,
+      "rawRows": 5761,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 2,
+      "serialQueueCap": 128,
+      "heapMb": 14.025997161865234,
+      "fps": "46 fps",
+      "serialFrames": 5793,
+      "consumedFrames": 5761,
+      "consumption": {
+        "count": 5761,
+        "at": 1794833206454,
+        "t": 57.489999999997195
+      },
+      "reconnects": 10,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 10,
+      "opens": 11,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833211497,
+      "t": 60.9999999999965,
+      "logRows": 825,
+      "logRowsCap": 850,
+      "rawRows": 6112,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 1,
+      "serialQueueCap": 128,
+      "heapMb": 14.763607025146484,
+      "fps": "46 fps",
+      "serialFrames": 6143,
+      "consumedFrames": 6112,
+      "consumption": {
+        "count": 6112,
+        "at": 1794833211484,
+        "t": 60.9999999999965
+      },
+      "reconnects": 10,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 10,
+      "opens": 11,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833216516,
+      "t": 63.71899999999597,
+      "logRows": 792,
+      "logRowsCap": 850,
+      "rawRows": 6385,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 3,
+      "serialQueueCap": 128,
+      "heapMb": 19.583343505859375,
+      "fps": "45 fps",
+      "serialFrames": 6420,
+      "consumedFrames": 6385,
+      "consumption": {
+        "count": 6385,
+        "at": 1794833216483,
+        "t": 63.71899999999597
+      },
+      "reconnects": 11,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 11,
+      "opens": 12,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833221520,
+      "t": 67.18999999999741,
+      "logRows": 779,
+      "logRowsCap": 850,
+      "rawRows": 6737,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 6,
+      "serialQueueCap": 128,
+      "heapMb": 19.687639236450195,
+      "fps": "47 fps",
+      "serialFrames": 6775,
+      "consumedFrames": 6737,
+      "consumption": {
+        "count": 6737,
+        "at": 1794833221448,
+        "t": 67.18999999999741
+      },
+      "reconnects": 11,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 11,
+      "opens": 12,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833226528,
+      "t": 70.05499999999887,
+      "logRows": 751,
+      "logRowsCap": 850,
+      "rawRows": 7024,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 2,
+      "serialQueueCap": 128,
+      "heapMb": 21.081462860107422,
+      "fps": "46 fps",
+      "serialFrames": 7058,
+      "consumedFrames": 7024,
+      "consumption": {
+        "count": 7024,
+        "at": 1794833226513,
+        "t": 70.05499999999887
+      },
+      "reconnects": 12,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 12,
+      "opens": 13,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833231542,
+      "t": 73.6450000000007,
+      "logRows": 841,
+      "logRowsCap": 850,
+      "rawRows": 7383,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 1,
+      "serialQueueCap": 128,
+      "heapMb": 15.549360275268555,
+      "fps": "46 fps",
+      "serialFrames": 7416,
+      "consumedFrames": 7383,
+      "consumption": {
+        "count": 7383,
+        "at": 1794833231527,
+        "t": 73.6450000000007
+      },
+      "reconnects": 12,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 12,
+      "opens": 13,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833236555,
+      "t": 76.40000000000211,
+      "logRows": 810,
+      "logRowsCap": 850,
+      "rawRows": 7659,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 5,
+      "serialQueueCap": 128,
+      "heapMb": 19.976242065429688,
+      "fps": "48 fps",
+      "serialFrames": 7704,
+      "consumedFrames": 7659,
+      "consumption": {
+        "count": 7659,
+        "at": 1794833236493,
+        "t": 76.40000000000211
+      },
+      "reconnects": 13,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 13,
+      "opens": 14,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833241564,
+      "t": 79.7000000000038,
+      "logRows": 792,
+      "logRowsCap": 850,
+      "rawRows": 7989,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 0,
+      "serialQueueCap": 128,
+      "heapMb": 13.647660255432129,
+      "fps": "46 fps",
+      "serialFrames": 8033,
+      "consumedFrames": 7989,
+      "consumption": {
+        "count": 7989,
+        "at": 1794833241196,
+        "t": 79.7000000000038
+      },
+      "reconnects": 13,
+      "serialRunning": false,
+      "reconnectPending": true,
+      "sourceKind": "serial",
+      "drops": 14,
+      "opens": 14,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833246573,
+      "t": 82.72500000000534,
+      "logRows": 768,
+      "logRowsCap": 850,
+      "rawRows": 8292,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 3,
+      "serialQueueCap": 128,
+      "heapMb": 24.42664337158203,
+      "fps": "46 fps",
+      "serialFrames": 8339,
+      "consumedFrames": 8292,
+      "consumption": {
+        "count": 8292,
+        "at": 1794833246523,
+        "t": 82.72500000000534
+      },
+      "reconnects": 14,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 14,
+      "opens": 15,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833251590,
+      "t": 85.4100000000067,
+      "logRows": 835,
+      "logRowsCap": 850,
+      "rawRows": 8561,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 8,
+      "serialQueueCap": 128,
+      "heapMb": 15.249338150024414,
+      "fps": "46 fps",
+      "serialFrames": 8618,
+      "consumedFrames": 8561,
+      "consumption": {
+        "count": 8561,
+        "at": 1794833251472,
+        "t": 85.4100000000067
+      },
+      "reconnects": 15,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 15,
+      "opens": 16,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833256596,
+      "t": 89.02000000000855,
+      "logRows": 825,
+      "logRowsCap": 850,
+      "rawRows": 8922,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 2,
+      "serialQueueCap": 128,
+      "heapMb": 22.95185661315918,
+      "fps": "46 fps",
+      "serialFrames": 8973,
+      "consumedFrames": 8922,
+      "consumption": {
+        "count": 8922,
+        "at": 1794833256569,
+        "t": 89.02000000000855
+      },
+      "reconnects": 15,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 15,
+      "opens": 16,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833261606,
+      "t": 91.88500000001001,
+      "logRows": 797,
+      "logRowsCap": 850,
+      "rawRows": 9209,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 1,
+      "serialQueueCap": 128,
+      "heapMb": 15.284810066223145,
+      "fps": "42 fps",
+      "serialFrames": 9259,
+      "consumedFrames": 9209,
+      "consumption": {
+        "count": 9209,
+        "at": 1794833261602,
+        "t": 91.88500000001001
+      },
+      "reconnects": 16,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 16,
+      "opens": 17,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833266623,
+      "t": 95.48500000001185,
+      "logRows": 787,
+      "logRowsCap": 850,
+      "rawRows": 9569,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 2,
+      "serialQueueCap": 128,
+      "heapMb": 15.650501251220703,
+      "fps": "46 fps",
+      "serialFrames": 9620,
+      "consumedFrames": 9569,
+      "consumption": {
+        "count": 9569,
+        "at": 1794833266600,
+        "t": 95.48500000001185
+      },
+      "reconnects": 16,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 16,
+      "opens": 17,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833271634,
+      "t": 98.29000000001328,
+      "logRows": 757,
+      "logRowsCap": 850,
+      "rawRows": 9850,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 0,
+      "serialQueueCap": 128,
+      "heapMb": 17.953020095825195,
+      "fps": "47 fps",
+      "serialFrames": 9902,
+      "consumedFrames": 9850,
+      "consumption": {
+        "count": 9850,
+        "at": 1794833271633,
+        "t": 98.29000000001328
+      },
+      "reconnects": 17,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 17,
+      "opens": 18,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833276640,
+      "t": 101.83000000001509,
+      "logRows": 845,
+      "logRowsCap": 850,
+      "rawRows": 10204,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 6,
+      "serialQueueCap": 128,
+      "heapMb": 25.534153938293457,
+      "fps": "47 fps",
+      "serialFrames": 10262,
+      "consumedFrames": 10204,
+      "consumption": {
+        "count": 10204,
+        "at": 1794833276564,
+        "t": 101.83000000001509
+      },
+      "reconnects": 17,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 17,
+      "opens": 18,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833281649,
+      "t": 104.65500000001653,
+      "logRows": 816,
+      "logRowsCap": 850,
+      "rawRows": 10487,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 3,
+      "serialQueueCap": 128,
+      "heapMb": 17.982699394226074,
+      "fps": "45 fps",
+      "serialFrames": 10543,
+      "consumedFrames": 10487,
+      "consumption": {
+        "count": 10487,
+        "at": 1794833281613,
+        "t": 104.65500000001653
+      },
+      "reconnects": 18,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 18,
+      "opens": 19,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833286653,
+      "t": 107.98500000001823,
+      "logRows": 799,
+      "logRowsCap": 850,
+      "rawRows": 10820,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 0,
+      "serialQueueCap": 128,
+      "heapMb": 16.49098491668701,
+      "fps": "45 fps",
+      "serialFrames": 10873,
+      "consumedFrames": 10820,
+      "consumption": {
+        "count": 10820,
+        "at": 1794833286328,
+        "t": 107.98500000001823
+      },
+      "reconnects": 18,
+      "serialRunning": false,
+      "reconnectPending": true,
+      "sourceKind": "serial",
+      "drops": 19,
+      "opens": 19,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833291657,
+      "t": 111.01000000001977,
+      "logRows": 775,
+      "logRowsCap": 850,
+      "rawRows": 11123,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 2,
+      "serialQueueCap": 128,
+      "heapMb": 22.129414558410645,
+      "fps": "45 fps",
+      "serialFrames": 11178,
+      "consumedFrames": 11123,
+      "consumption": {
+        "count": 11123,
+        "at": 1794833291643,
+        "t": 111.01000000001977
+      },
+      "reconnects": 19,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 19,
+      "opens": 20,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833296680,
+      "t": 113.87500000002123,
+      "logRows": 846,
+      "logRowsCap": 850,
+      "rawRows": 11410,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 0,
+      "serialQueueCap": 128,
+      "heapMb": 23.930344581604004,
+      "fps": "46 fps",
+      "serialFrames": 11463,
+      "consumedFrames": 11410,
+      "consumption": {
+        "count": 11410,
+        "at": 1794833296675,
+        "t": 113.87500000002123
+      },
+      "reconnects": 20,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 20,
+      "opens": 21,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833301696,
+      "t": 117.39500000002303,
+      "logRows": 834,
+      "logRowsCap": 850,
+      "rawRows": 11762,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 3,
+      "serialQueueCap": 128,
+      "heapMb": 17.163519859313965,
+      "fps": "43 fps",
+      "serialFrames": 11818,
+      "consumedFrames": 11762,
+      "consumption": {
+        "count": 11762,
+        "at": 1794833301657,
+        "t": 117.39500000002303
+      },
+      "reconnects": 20,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 20,
+      "opens": 21,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833306702,
+      "t": 120.11000000002441,
+      "logRows": 802,
+      "logRowsCap": 850,
+      "rawRows": 12034,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 2,
+      "serialQueueCap": 128,
+      "heapMb": 25.994887351989746,
+      "fps": "42 fps",
+      "serialFrames": 12094,
+      "consumedFrames": 12034,
+      "consumption": {
+        "count": 12034,
+        "at": 1794833306688,
+        "t": 120.11000000002441
+      },
+      "reconnects": 21,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 21,
+      "opens": 22,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833311720,
+      "t": 123.72000000002626,
+      "logRows": 793,
+      "logRowsCap": 850,
+      "rawRows": 12395,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 2,
+      "serialQueueCap": 128,
+      "heapMb": 20.62938690185547,
+      "fps": "43 fps",
+      "serialFrames": 12455,
+      "consumedFrames": 12395,
+      "consumption": {
+        "count": 12395,
+        "at": 1794833311703,
+        "t": 123.72000000002626
+      },
+      "reconnects": 21,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 21,
+      "opens": 22,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833316726,
+      "t": 126.48500000002767,
+      "logRows": 762,
+      "logRowsCap": 850,
+      "rawRows": 12672,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 7,
+      "serialQueueCap": 128,
+      "heapMb": 24.02552318572998,
+      "fps": "46 fps",
+      "serialFrames": 12737,
+      "consumedFrames": 12672,
+      "consumption": {
+        "count": 12672,
+        "at": 1794833316636,
+        "t": 126.48500000002767
+      },
+      "reconnects": 22,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 22,
+      "opens": 23,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833321743,
+      "t": 129.908000000026,
+      "logRows": 847,
+      "logRowsCap": 850,
+      "rawRows": 13028,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 7,
+      "serialQueueCap": 128,
+      "heapMb": 14.300888061523438,
+      "fps": "46 fps",
+      "serialFrames": 13093,
+      "consumedFrames": 13028,
+      "consumption": {
+        "count": 13028,
+        "at": 1794833321650,
+        "t": 129.908000000026
+      },
+      "reconnects": 22,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 22,
+      "opens": 23,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833326756,
+      "t": 132.75200000002334,
+      "logRows": 818,
+      "logRowsCap": 850,
+      "rawRows": 13314,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 1,
+      "serialQueueCap": 128,
+      "heapMb": 23.85647964477539,
+      "fps": "41 fps",
+      "serialFrames": 13373,
+      "consumedFrames": 13314,
+      "consumption": {
+        "count": 13314,
+        "at": 1794833326749,
+        "t": 132.75200000002334
+      },
+      "reconnects": 23,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 23,
+      "opens": 24,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833331775,
+      "t": 136.04200000002035,
+      "logRows": 801,
+      "logRowsCap": 850,
+      "rawRows": 13643,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 0,
+      "serialQueueCap": 128,
+      "heapMb": 17.846622467041016,
+      "fps": "44 fps",
+      "serialFrames": 13702,
+      "consumedFrames": 13643,
+      "consumption": {
+        "count": 13643,
+        "at": 1794833331381,
+        "t": 136.04200000002035
+      },
+      "reconnects": 23,
+      "serialRunning": false,
+      "reconnectPending": true,
+      "sourceKind": "serial",
+      "drops": 24,
+      "opens": 24,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833336783,
+      "t": 139.01700000001765,
+      "logRows": 775,
+      "logRowsCap": 850,
+      "rawRows": 13941,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 10,
+      "serialQueueCap": 128,
+      "heapMb": 22.626754760742188,
+      "fps": "46 fps",
+      "serialFrames": 14010,
+      "consumedFrames": 13941,
+      "consumption": {
+        "count": 13941,
+        "at": 1794833336630,
+        "t": 139.01700000001765
+      },
+      "reconnects": 24,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 24,
+      "opens": 25,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833341788,
+      "t": 141.87200000001505,
+      "logRows": 846,
+      "logRowsCap": 850,
+      "rawRows": 14227,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 1,
+      "serialQueueCap": 128,
+      "heapMb": 14.7246732711792,
+      "fps": "46 fps",
+      "serialFrames": 14290,
+      "consumedFrames": 14227,
+      "consumption": {
+        "count": 14227,
+        "at": 1794833341781,
+        "t": 141.87200000001505
+      },
+      "reconnects": 25,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 25,
+      "opens": 26,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833346792,
+      "t": 145.222000000012,
+      "logRows": 830,
+      "logRowsCap": 850,
+      "rawRows": 14562,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 10,
+      "serialQueueCap": 128,
+      "heapMb": 25.803942680358887,
+      "fps": "41 fps",
+      "serialFrames": 14634,
+      "consumedFrames": 14562,
+      "consumption": {
+        "count": 14562,
+        "at": 1794833346645,
+        "t": 145.222000000012
+      },
+      "reconnects": 25,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 25,
+      "opens": 26,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833351816,
+      "t": 148.22700000000927,
+      "logRows": 805,
+      "logRowsCap": 850,
+      "rawRows": 14863,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 0,
+      "serialQueueCap": 128,
+      "heapMb": 15.56052017211914,
+      "fps": "42 fps",
+      "serialFrames": 14925,
+      "consumedFrames": 14863,
+      "consumption": {
+        "count": 14863,
+        "at": 1794833351808,
+        "t": 148.22700000000927
+      },
+      "reconnects": 26,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 26,
+      "opens": 27,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833356824,
+      "t": 151.67700000000613,
+      "logRows": 791,
+      "logRowsCap": 850,
+      "rawRows": 15208,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 0,
+      "serialQueueCap": 128,
+      "heapMb": 22.18899154663086,
+      "fps": "43 fps",
+      "serialFrames": 15270,
+      "consumedFrames": 15208,
+      "consumption": {
+        "count": 15208,
+        "at": 1794833356823,
+        "t": 151.67700000000613
+      },
+      "reconnects": 26,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 26,
+      "opens": 27,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833361838,
+      "t": 154.4720000000036,
+      "logRows": 761,
+      "logRowsCap": 850,
+      "rawRows": 15488,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 2,
+      "serialQueueCap": 128,
+      "heapMb": 19.108295440673828,
+      "fps": "44 fps",
+      "serialFrames": 15558,
+      "consumedFrames": 15488,
+      "consumption": {
+        "count": 15488,
+        "at": 1794833361821,
+        "t": 154.4720000000036
+      },
+      "reconnects": 27,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 27,
+      "opens": 28,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833366846,
+      "t": 158.02200000000036,
+      "logRows": 850,
+      "logRowsCap": 850,
+      "rawRows": 15843,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 2,
+      "serialQueueCap": 128,
+      "heapMb": 25.523295402526855,
+      "fps": "40 fps",
+      "serialFrames": 15913,
+      "consumedFrames": 15843,
+      "consumption": {
+        "count": 15843,
+        "at": 1794833366838,
+        "t": 158.02200000000036
+      },
+      "reconnects": 27,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 27,
+      "opens": 28,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833371859,
+      "t": 160.74699999999788,
+      "logRows": 818,
+      "logRowsCap": 850,
+      "rawRows": 16116,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 8,
+      "serialQueueCap": 128,
+      "heapMb": 17.319220542907715,
+      "fps": "41 fps",
+      "serialFrames": 16192,
+      "consumedFrames": 16116,
+      "consumption": {
+        "count": 16116,
+        "at": 1794833371735,
+        "t": 160.74699999999788
+      },
+      "reconnects": 28,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 28,
+      "opens": 29,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833376883,
+      "t": 163.99699999999493,
+      "logRows": 799,
+      "logRowsCap": 850,
+      "rawRows": 16441,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 0,
+      "serialQueueCap": 128,
+      "heapMb": 20.44753646850586,
+      "fps": "43 fps",
+      "serialFrames": 16511,
+      "consumedFrames": 16441,
+      "consumption": {
+        "count": 16441,
+        "at": 1794833376450,
+        "t": 163.99699999999493
+      },
+      "reconnects": 28,
+      "serialRunning": false,
+      "reconnectPending": true,
+      "sourceKind": "serial",
+      "drops": 29,
+      "opens": 29,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833381898,
+      "t": 167.1119999999921,
+      "logRows": 777,
+      "logRowsCap": 850,
+      "rawRows": 16753,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 4,
+      "serialQueueCap": 128,
+      "heapMb": 18.388654708862305,
+      "fps": "43 fps",
+      "serialFrames": 16827,
+      "consumedFrames": 16753,
+      "consumption": {
+        "count": 16753,
+        "at": 1794833381848,
+        "t": 167.1119999999921
+      },
+      "reconnects": 29,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 29,
+      "opens": 30,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833386912,
+      "t": 169.88699999998957,
+      "logRows": 847,
+      "logRowsCap": 850,
+      "rawRows": 17031,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 4,
+      "serialQueueCap": 128,
+      "heapMb": 23.472606658935547,
+      "fps": "41 fps",
+      "serialFrames": 17105,
+      "consumedFrames": 17031,
+      "consumption": {
+        "count": 17031,
+        "at": 1794833386864,
+        "t": 169.88699999998957
+      },
+      "reconnects": 30,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 30,
+      "opens": 31,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833391930,
+      "t": 173.4669999999863,
+      "logRows": 836,
+      "logRowsCap": 850,
+      "rawRows": 17389,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 0,
+      "serialQueueCap": 128,
+      "heapMb": 18.194457054138184,
+      "fps": "41 fps",
+      "serialFrames": 17459,
+      "consumedFrames": 17389,
+      "consumption": {
+        "count": 17389,
+        "at": 1794833391928,
+        "t": 173.4669999999863
+      },
+      "reconnects": 30,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 30,
+      "opens": 31,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833396939,
+      "t": 176.16199999998386,
+      "logRows": 804,
+      "logRowsCap": 850,
+      "rawRows": 17659,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 1,
+      "serialQueueCap": 128,
+      "heapMb": 21.598227500915527,
+      "fps": "41 fps",
+      "serialFrames": 17739,
+      "consumedFrames": 17659,
+      "consumption": {
+        "count": 17659,
+        "at": 1794833396927,
+        "t": 176.16199999998386
+      },
+      "reconnects": 31,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 31,
+      "opens": 32,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833401954,
+      "t": 179.7419999999806,
+      "logRows": 793,
+      "logRowsCap": 850,
+      "rawRows": 18017,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 3,
+      "serialQueueCap": 128,
+      "heapMb": 20.61039447784424,
+      "fps": "44 fps",
+      "serialFrames": 18099,
+      "consumedFrames": 18017,
+      "consumption": {
+        "count": 18017,
+        "at": 1794833401925,
+        "t": 179.7419999999806
+      },
+      "reconnects": 31,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 31,
+      "opens": 32,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833406964,
+      "t": 182.44699999997815,
+      "logRows": 761,
+      "logRowsCap": 850,
+      "rawRows": 18288,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 8,
+      "serialQueueCap": 128,
+      "heapMb": 21.068978309631348,
+      "fps": "44 fps",
+      "serialFrames": 18381,
+      "consumedFrames": 18288,
+      "consumption": {
+        "count": 18288,
+        "at": 1794833406857,
+        "t": 182.44699999997815
+      },
+      "reconnects": 32,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 32,
+      "opens": 33,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833411982,
+      "t": 185.97699999997494,
+      "logRows": 849,
+      "logRowsCap": 850,
+      "rawRows": 18641,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 5,
+      "serialQueueCap": 128,
+      "heapMb": 27.629448890686035,
+      "fps": "44 fps",
+      "serialFrames": 18731,
+      "consumedFrames": 18641,
+      "consumption": {
+        "count": 18641,
+        "at": 1794833411905,
+        "t": 185.97699999997494
+      },
+      "reconnects": 32,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 32,
+      "opens": 33,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833416989,
+      "t": 188.7619999999724,
+      "logRows": 819,
+      "logRowsCap": 850,
+      "rawRows": 18920,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 2,
+      "serialQueueCap": 128,
+      "heapMb": 18.325775146484375,
+      "fps": "43 fps",
+      "serialFrames": 19013,
+      "consumedFrames": 18920,
+      "consumption": {
+        "count": 18920,
+        "at": 1794833416971,
+        "t": 188.7619999999724
+      },
+      "reconnects": 33,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 33,
+      "opens": 34,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833421995,
+      "t": 192.04199999996942,
+      "logRows": 801,
+      "logRowsCap": 850,
+      "rawRows": 19248,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 0,
+      "serialQueueCap": 128,
+      "heapMb": 16.223751068115234,
+      "fps": "42 fps",
+      "serialFrames": 19339,
+      "consumedFrames": 19248,
+      "consumption": {
+        "count": 19248,
+        "at": 1794833421570,
+        "t": 192.04199999996942
+      },
+      "reconnects": 33,
+      "serialRunning": false,
+      "reconnectPending": true,
+      "sourceKind": "serial",
+      "drops": 34,
+      "opens": 34,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833427001,
+      "t": 195.1369999999666,
+      "logRows": 778,
+      "logRowsCap": 850,
+      "rawRows": 19558,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 1,
+      "serialQueueCap": 128,
+      "heapMb": 32.40198612213135,
+      "fps": "39 fps",
+      "serialFrames": 19650,
+      "consumedFrames": 19558,
+      "consumption": {
+        "count": 19558,
+        "at": 1794833426984,
+        "t": 195.1369999999666
+      },
+      "reconnects": 34,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 34,
+      "opens": 35,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833432019,
+      "t": 197.95199999996404,
+      "logRows": 848,
+      "logRowsCap": 850,
+      "rawRows": 19840,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 0,
+      "serialQueueCap": 128,
+      "heapMb": 20.408843994140625,
+      "fps": "41 fps",
+      "serialFrames": 19933,
+      "consumedFrames": 19840,
+      "consumption": {
+        "count": 19840,
+        "at": 1794833432016,
+        "t": 197.95199999996404
+      },
+      "reconnects": 35,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 35,
+      "opens": 36,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833437028,
+      "t": 201.4119999999609,
+      "logRows": 835,
+      "logRowsCap": 850,
+      "rawRows": 20186,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 2,
+      "serialQueueCap": 128,
+      "heapMb": 18.589391708374023,
+      "fps": "43 fps",
+      "serialFrames": 20281,
+      "consumedFrames": 20186,
+      "consumption": {
+        "count": 20186,
+        "at": 1794833436997,
+        "t": 201.4119999999609
+      },
+      "reconnects": 35,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 35,
+      "opens": 36,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833442045,
+      "t": 204.13699999995842,
+      "logRows": 803,
+      "logRowsCap": 850,
+      "rawRows": 20459,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 7,
+      "serialQueueCap": 128,
+      "heapMb": 35.47036552429199,
+      "fps": "45 fps",
+      "serialFrames": 20559,
+      "consumedFrames": 20459,
+      "consumption": {
+        "count": 20459,
+        "at": 1794833441937,
+        "t": 204.13699999995842
+      },
+      "reconnects": 36,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 36,
+      "opens": 37,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833447056,
+      "t": 207.62699999995525,
+      "logRows": 790,
+      "logRowsCap": 850,
+      "rawRows": 20808,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 6,
+      "serialQueueCap": 128,
+      "heapMb": 28.374813079833984,
+      "fps": "46 fps",
+      "serialFrames": 20907,
+      "consumedFrames": 20808,
+      "consumption": {
+        "count": 20808,
+        "at": 1794833446978,
+        "t": 207.62699999995525
+      },
+      "reconnects": 36,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 36,
+      "opens": 37,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833452062,
+      "t": 210.50199999995263,
+      "logRows": 762,
+      "logRowsCap": 850,
+      "rawRows": 21096,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 1,
+      "serialQueueCap": 128,
+      "heapMb": 19.546942710876465,
+      "fps": "40 fps",
+      "serialFrames": 21190,
+      "consumedFrames": 21096,
+      "consumption": {
+        "count": 21096,
+        "at": 1794833452060,
+        "t": 210.50199999995263
+      },
+      "reconnects": 37,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 37,
+      "opens": 38,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833457067,
+      "t": 214.01199999994944,
+      "logRows": 850,
+      "logRowsCap": 850,
+      "rawRows": 21447,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 6,
+      "serialQueueCap": 128,
+      "heapMb": 17.79978847503662,
+      "fps": "44 fps",
+      "serialFrames": 21546,
+      "consumedFrames": 21447,
+      "consumption": {
+        "count": 21447,
+        "at": 1794833456991,
+        "t": 214.01199999994944
+      },
+      "reconnects": 37,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 37,
+      "opens": 38,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833462077,
+      "t": 216.7969999999469,
+      "logRows": 819,
+      "logRowsCap": 850,
+      "rawRows": 21726,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 3,
+      "serialQueueCap": 128,
+      "heapMb": 33.40175724029541,
+      "fps": "44 fps",
+      "serialFrames": 21827,
+      "consumedFrames": 21726,
+      "consumption": {
+        "count": 21726,
+        "at": 1794833462040,
+        "t": 216.7969999999469
+      },
+      "reconnects": 38,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 38,
+      "opens": 39,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833467092,
+      "t": 220.11699999994389,
+      "logRows": 802,
+      "logRowsCap": 850,
+      "rawRows": 22058,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 0,
+      "serialQueueCap": 128,
+      "heapMb": 24.528067588806152,
+      "fps": "41 fps",
+      "serialFrames": 22156,
+      "consumedFrames": 22058,
+      "consumption": {
+        "count": 22058,
+        "at": 1794833466638,
+        "t": 220.11699999994389
+      },
+      "reconnects": 38,
+      "serialRunning": false,
+      "reconnectPending": true,
+      "sourceKind": "serial",
+      "drops": 39,
+      "opens": 39,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833472123,
+      "t": 223.22199999994106,
+      "logRows": 780,
+      "logRowsCap": 850,
+      "rawRows": 22369,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 0,
+      "serialQueueCap": 128,
+      "heapMb": 21.672648429870605,
+      "fps": "42 fps",
+      "serialFrames": 22467,
+      "consumedFrames": 22369,
+      "consumption": {
+        "count": 22369,
+        "at": 1794833472120,
+        "t": 223.22199999994106
+      },
+      "reconnects": 39,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 39,
+      "opens": 40,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833477165,
+      "t": 226.84699999993776,
+      "logRows": 771,
+      "logRowsCap": 850,
+      "rawRows": 22732,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 0,
+      "serialQueueCap": 128,
+      "heapMb": 39.458868980407715,
+      "fps": "47 fps",
+      "serialFrames": 22840,
+      "consumedFrames": 22732,
+      "consumption": {
+        "count": 22732,
+        "at": 1794833477155,
+        "t": 226.84699999993776
+      },
+      "reconnects": 40,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 40,
+      "opens": 41,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833482208,
+      "t": 231.7669999999333,
+      "logRows": 794,
+      "logRowsCap": 850,
+      "rawRows": 23224,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 13,
+      "serialQueueCap": 128,
+      "heapMb": 33.01630401611328,
+      "fps": "44 fps",
+      "serialFrames": 23345,
+      "consumedFrames": 23224,
+      "consumption": {
+        "count": 23224,
+        "at": 1794833482084,
+        "t": 231.7669999999333
+      },
+      "reconnects": 40,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 40,
+      "opens": 41,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833487223,
+      "t": 234.70199999993062,
+      "logRows": 767,
+      "logRowsCap": 850,
+      "rawRows": 23518,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 3,
+      "serialQueueCap": 128,
+      "heapMb": 20.648131370544434,
+      "fps": "44 fps",
+      "serialFrames": 23637,
+      "consumedFrames": 23518,
+      "consumption": {
+        "count": 23518,
+        "at": 1794833487199,
+        "t": 234.70199999993062
+      },
+      "reconnects": 41,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 41,
+      "opens": 42,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833492237,
+      "t": 238.28199999992736,
+      "logRows": 757,
+      "logRowsCap": 850,
+      "rawRows": 23876,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 2,
+      "serialQueueCap": 128,
+      "heapMb": 19.467307090759277,
+      "fps": "44 fps",
+      "serialFrames": 23994,
+      "consumedFrames": 23876,
+      "consumption": {
+        "count": 23876,
+        "at": 1794833492222,
+        "t": 238.28199999992736
+      },
+      "reconnects": 41,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 41,
+      "opens": 42,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833497247,
+      "t": 240.9869999999249,
+      "logRows": 824,
+      "logRowsCap": 850,
+      "rawRows": 24147,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 7,
+      "serialQueueCap": 128,
+      "heapMb": 32.615641593933105,
+      "fps": "44 fps",
+      "serialFrames": 24270,
+      "consumedFrames": 24147,
+      "consumption": {
+        "count": 24147,
+        "at": 1794833497145,
+        "t": 240.9869999999249
+      },
+      "reconnects": 42,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 42,
+      "opens": 43,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833502263,
+      "t": 244.57699999992164,
+      "logRows": 814,
+      "logRowsCap": 850,
+      "rawRows": 24506,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 6,
+      "serialQueueCap": 128,
+      "heapMb": 25.560166358947754,
+      "fps": "45 fps",
+      "serialFrames": 24628,
+      "consumedFrames": 24506,
+      "consumption": {
+        "count": 24506,
+        "at": 1794833502178,
+        "t": 244.57699999992164
+      },
+      "reconnects": 42,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 42,
+      "opens": 43,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833507267,
+      "t": 247.45199999991902,
+      "logRows": 786,
+      "logRowsCap": 850,
+      "rawRows": 24794,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 1,
+      "serialQueueCap": 128,
+      "heapMb": 16.68535804748535,
+      "fps": "48 fps",
+      "serialFrames": 24911,
+      "consumedFrames": 24794,
+      "consumption": {
+        "count": 24794,
+        "at": 1794833507259,
+        "t": 247.45199999991902
+      },
+      "reconnects": 43,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 43,
+      "opens": 44,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833512280,
+      "t": 250.58199999991618,
+      "logRows": 764,
+      "logRowsCap": 850,
+      "rawRows": 25107,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 0,
+      "serialQueueCap": 128,
+      "heapMb": 39.49659442901611,
+      "fps": "47 fps",
+      "serialFrames": 25225,
+      "consumedFrames": 25107,
+      "consumption": {
+        "count": 25107,
+        "at": 1794833511707,
+        "t": 250.58199999991618
+      },
+      "reconnects": 43,
+      "serialRunning": false,
+      "reconnectPending": true,
+      "sourceKind": "serial",
+      "drops": 44,
+      "opens": 44,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833517288,
+      "t": 253.72699999991332,
+      "logRows": 843,
+      "logRowsCap": 850,
+      "rawRows": 25422,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 1,
+      "serialQueueCap": 128,
+      "heapMb": 31.004267692565918,
+      "fps": "42 fps",
+      "serialFrames": 25541,
+      "consumedFrames": 25422,
+      "consumption": {
+        "count": 25422,
+        "at": 1794833517273,
+        "t": 253.72699999991332
+      },
+      "reconnects": 44,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 44,
+      "opens": 45,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833522301,
+      "t": 256.3649999999109,
+      "logRows": 809,
+      "logRowsCap": 850,
+      "rawRows": 25693,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 1,
+      "serialQueueCap": 128,
+      "heapMb": 20.9003267288208,
+      "fps": "43 fps",
+      "serialFrames": 25820,
+      "consumedFrames": 25693,
+      "consumption": {
+        "count": 25693,
+        "at": 1794833522288,
+        "t": 256.3649999999109
+      },
+      "reconnects": 45,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 45,
+      "opens": 46,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833527308,
+      "t": 259.83999999991033,
+      "logRows": 796,
+      "logRowsCap": 850,
+      "rawRows": 26052,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 0,
+      "serialQueueCap": 128,
+      "heapMb": 19.504490852355957,
+      "fps": "42 fps",
+      "serialFrames": 26178,
+      "consumedFrames": 26052,
+      "consumption": {
+        "count": 26052,
+        "at": 1794833527303,
+        "t": 259.83999999991033
+      },
+      "reconnects": 45,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 45,
+      "opens": 46,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833532315,
+      "t": 262.62399999990805,
+      "logRows": 765,
+      "logRowsCap": 850,
+      "rawRows": 26332,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 2,
+      "serialQueueCap": 128,
+      "heapMb": 35.778011322021484,
+      "fps": "46 fps",
+      "serialFrames": 26460,
+      "consumedFrames": 26332,
+      "consumption": {
+        "count": 26332,
+        "at": 1794833532303,
+        "t": 262.62399999990805
+      },
+      "reconnects": 46,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 46,
+      "opens": 47,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833537323,
+      "t": 266.23399999990477,
+      "logRows": 755,
+      "logRowsCap": 850,
+      "rawRows": 26693,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 1,
+      "serialQueueCap": 128,
+      "heapMb": 29.57085418701172,
+      "fps": "43 fps",
+      "serialFrames": 26820,
+      "consumedFrames": 26693,
+      "consumption": {
+        "count": 26693,
+        "at": 1794833537317,
+        "t": 266.23399999990477
+      },
+      "reconnects": 46,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 46,
+      "opens": 47,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833542332,
+      "t": 268.99899999990225,
+      "logRows": 824,
+      "logRowsCap": 850,
+      "rawRows": 26970,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 1,
+      "serialQueueCap": 128,
+      "heapMb": 21.277884483337402,
+      "fps": "47 fps",
+      "serialFrames": 27103,
+      "consumedFrames": 26970,
+      "consumption": {
+        "count": 26970,
+        "at": 1794833542328,
+        "t": 268.99899999990225
+      },
+      "reconnects": 47,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 47,
+      "opens": 48,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833547345,
+      "t": 272.52899999989904,
+      "logRows": 813,
+      "logRowsCap": 850,
+      "rawRows": 27323,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 2,
+      "serialQueueCap": 128,
+      "heapMb": 20.068982124328613,
+      "fps": "43 fps",
+      "serialFrames": 27457,
+      "consumedFrames": 27323,
+      "consumption": {
+        "count": 27323,
+        "at": 1794833547330,
+        "t": 272.52899999989904
+      },
+      "reconnects": 47,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 47,
+      "opens": 48,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833552358,
+      "t": 275.28399999989654,
+      "logRows": 782,
+      "logRowsCap": 850,
+      "rawRows": 27599,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 1,
+      "serialQueueCap": 128,
+      "heapMb": 33.84285259246826,
+      "fps": "48 fps",
+      "serialFrames": 27734,
+      "consumedFrames": 27599,
+      "consumption": {
+        "count": 27599,
+        "at": 1794833552346,
+        "t": 275.28399999989654
+      },
+      "reconnects": 48,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 48,
+      "opens": 49,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833557372,
+      "t": 278.34399999989375,
+      "logRows": 758,
+      "logRowsCap": 850,
+      "rawRows": 27905,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 0,
+      "serialQueueCap": 128,
+      "heapMb": 23.99512004852295,
+      "fps": "47 fps",
+      "serialFrames": 28042,
+      "consumedFrames": 27905,
+      "consumption": {
+        "count": 27905,
+        "at": 1794833556777,
+        "t": 278.34399999989375
+      },
+      "reconnects": 48,
+      "serialRunning": false,
+      "reconnectPending": true,
+      "sourceKind": "serial",
+      "drops": 49,
+      "opens": 49,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833562381,
+      "t": 281.4689999998909,
+      "logRows": 836,
+      "logRowsCap": 850,
+      "rawRows": 28218,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 4,
+      "serialQueueCap": 128,
+      "heapMb": 21.315771102905273,
+      "fps": "46 fps",
+      "serialFrames": 28359,
+      "consumedFrames": 28218,
+      "consumption": {
+        "count": 28218,
+        "at": 1794833562326,
+        "t": 281.4689999998909
+      },
+      "reconnects": 49,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 49,
+      "opens": 50,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833567392,
+      "t": 284.1439999998885,
+      "logRows": 803,
+      "logRowsCap": 850,
+      "rawRows": 28486,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 3,
+      "serialQueueCap": 128,
+      "heapMb": 37.54707050323486,
+      "fps": "45 fps",
+      "serialFrames": 28634,
+      "consumedFrames": 28486,
+      "consumption": {
+        "count": 28486,
+        "at": 1794833567359,
+        "t": 284.1439999998885
+      },
+      "reconnects": 50,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 50,
+      "opens": 51,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833572396,
+      "t": 287.7339999998852,
+      "logRows": 793,
+      "logRowsCap": 850,
+      "rawRows": 28845,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 1,
+      "serialQueueCap": 128,
+      "heapMb": 31.618833541870117,
+      "fps": "42 fps",
+      "serialFrames": 28991,
+      "consumedFrames": 28845,
+      "consumption": {
+        "count": 28845,
+        "at": 1794833572389,
+        "t": 287.7339999998852
+      },
+      "reconnects": 50,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 50,
+      "opens": 51,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833577407,
+      "t": 290.4789999998827,
+      "logRows": 761,
+      "logRowsCap": 850,
+      "rawRows": 29120,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 7,
+      "serialQueueCap": 128,
+      "heapMb": 22.27544593811035,
+      "fps": "43 fps",
+      "serialFrames": 29272,
+      "consumedFrames": 29120,
+      "consumption": {
+        "count": 29120,
+        "at": 1794833577304,
+        "t": 290.4789999998827
+      },
+      "reconnects": 51,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 51,
+      "opens": 52,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833582420,
+      "t": 294.08899999987943,
+      "logRows": 752,
+      "logRowsCap": 850,
+      "rawRows": 29481,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 2,
+      "serialQueueCap": 128,
+      "heapMb": 21.28475570678711,
+      "fps": "43 fps",
+      "serialFrames": 29628,
+      "consumedFrames": 29481,
+      "consumption": {
+        "count": 29481,
+        "at": 1794833582399,
+        "t": 294.08899999987943
+      },
+      "reconnects": 51,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 51,
+      "opens": 52,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833587438,
+      "t": 296.8739999998769,
+      "logRows": 821,
+      "logRowsCap": 850,
+      "rawRows": 29760,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 4,
+      "serialQueueCap": 128,
+      "heapMb": 35.09375,
+      "fps": "47 fps",
+      "serialFrames": 29910,
+      "consumedFrames": 29760,
+      "consumption": {
+        "count": 29760,
+        "at": 1794833587384,
+        "t": 296.8739999998769
+      },
+      "reconnects": 52,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 52,
+      "opens": 53,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833592447,
+      "t": 300.3639999998737,
+      "logRows": 809,
+      "logRowsCap": 850,
+      "rawRows": 25109,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 7,
+      "serialQueueCap": 128,
+      "heapMb": 28.93613910675049,
+      "fps": "46 fps",
+      "serialFrames": 30262,
+      "consumedFrames": 30109,
+      "consumption": {
+        "count": 30109,
+        "at": 1794833592349,
+        "t": 300.3639999998737
+      },
+      "reconnects": 52,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 52,
+      "opens": 53,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833597455,
+      "t": 303.19899999987115,
+      "logRows": 779,
+      "logRowsCap": 850,
+      "rawRows": 25393,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 1,
+      "serialQueueCap": 128,
+      "heapMb": 19.177067756652832,
+      "fps": "41 fps",
+      "serialFrames": 30541,
+      "consumedFrames": 30393,
+      "consumption": {
+        "count": 30393,
+        "at": 1794833597449,
+        "t": 303.19899999987115
+      },
+      "reconnects": 53,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 53,
+      "opens": 54,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833602471,
+      "t": 306.25899999986837,
+      "logRows": 756,
+      "logRowsCap": 850,
+      "rawRows": 25699,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 0,
+      "serialQueueCap": 128,
+      "heapMb": 41.740479469299316,
+      "fps": "44 fps",
+      "serialFrames": 30855,
+      "consumedFrames": 30699,
+      "consumption": {
+        "count": 30699,
+        "at": 1794833601746,
+        "t": 306.25899999986837
+      },
+      "reconnects": 53,
+      "serialRunning": false,
+      "reconnectPending": true,
+      "sourceKind": "serial",
+      "drops": 54,
+      "opens": 54,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833607481,
+      "t": 309.4939999998654,
+      "logRows": 837,
+      "logRowsCap": 850,
+      "rawRows": 26023,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 2,
+      "serialQueueCap": 128,
+      "heapMb": 33.5838680267334,
+      "fps": "43 fps",
+      "serialFrames": 31181,
+      "consumedFrames": 31023,
+      "consumption": {
+        "count": 31023,
+        "at": 1794833607445,
+        "t": 309.4939999998654
+      },
+      "reconnects": 54,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 54,
+      "opens": 55,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833612491,
+      "t": 312.2589999998629,
+      "logRows": 806,
+      "logRowsCap": 850,
+      "rawRows": 26300,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 4,
+      "serialQueueCap": 128,
+      "heapMb": 21.850531578063965,
+      "fps": "38 fps",
+      "serialFrames": 31465,
+      "consumedFrames": 31300,
+      "consumption": {
+        "count": 31300,
+        "at": 1794833612427,
+        "t": 312.2589999998629
+      },
+      "reconnects": 55,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 55,
+      "opens": 56,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833617498,
+      "t": 315.7889999998597,
+      "logRows": 794,
+      "logRowsCap": 850,
+      "rawRows": 26653,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 1,
+      "serialQueueCap": 128,
+      "heapMb": 20.026164054870605,
+      "fps": "37 fps",
+      "serialFrames": 31815,
+      "consumedFrames": 31653,
+      "consumption": {
+        "count": 31653,
+        "at": 1794833617492,
+        "t": 315.7889999998597
+      },
+      "reconnects": 55,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 55,
+      "opens": 56,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833622502,
+      "t": 318.48399999985725,
+      "logRows": 762,
+      "logRowsCap": 850,
+      "rawRows": 26923,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 4,
+      "serialQueueCap": 128,
+      "heapMb": 35.12077045440674,
+      "fps": "44 fps",
+      "serialFrames": 32092,
+      "consumedFrames": 31923,
+      "consumption": {
+        "count": 31923,
+        "at": 1794833622457,
+        "t": 318.48399999985725
+      },
+      "reconnects": 56,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 56,
+      "opens": 57,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833627513,
+      "t": 321.87399999985416,
+      "logRows": 846,
+      "logRowsCap": 850,
+      "rawRows": 27262,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 10,
+      "serialQueueCap": 128,
+      "heapMb": 27.971872329711914,
+      "fps": "39 fps",
+      "serialFrames": 32437,
+      "consumedFrames": 32262,
+      "consumption": {
+        "count": 32262,
+        "at": 1794833627372,
+        "t": 321.87399999985416
+      },
+      "reconnects": 56,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 56,
+      "opens": 57,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833632532,
+      "t": 324.5889999998517,
+      "logRows": 814,
+      "logRowsCap": 850,
+      "rawRows": 27534,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 10,
+      "serialQueueCap": 128,
+      "heapMb": 19.81293773651123,
+      "fps": "40 fps",
+      "serialFrames": 32712,
+      "consumedFrames": 32534,
+      "consumption": {
+        "count": 32534,
+        "at": 1794833632387,
+        "t": 324.5889999998517
+      },
+      "reconnects": 57,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 57,
+      "opens": 58,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833637547,
+      "t": 328.2189999998484,
+      "logRows": 805,
+      "logRowsCap": 850,
+      "rawRows": 27897,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 5,
+      "serialQueueCap": 128,
+      "heapMb": 18.698735237121582,
+      "fps": "43 fps",
+      "serialFrames": 33070,
+      "consumedFrames": 32897,
+      "consumption": {
+        "count": 32897,
+        "at": 1794833637486,
+        "t": 328.2189999998484
+      },
+      "reconnects": 57,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 57,
+      "opens": 58,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833642563,
+      "t": 331.02399999984584,
+      "logRows": 775,
+      "logRowsCap": 850,
+      "rawRows": 28178,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 1,
+      "serialQueueCap": 128,
+      "heapMb": 33.3618688583374,
+      "fps": "44 fps",
+      "serialFrames": 33351,
+      "consumedFrames": 33178,
+      "consumption": {
+        "count": 33178,
+        "at": 1794833642550,
+        "t": 331.02399999984584
+      },
+      "reconnects": 58,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 58,
+      "opens": 59,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833647580,
+      "t": 334.07399999984307,
+      "logRows": 751,
+      "logRowsCap": 850,
+      "rawRows": 28483,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 0,
+      "serialQueueCap": 128,
+      "heapMb": 23.521860122680664,
+      "fps": "43 fps",
+      "serialFrames": 33657,
+      "consumedFrames": 33483,
+      "consumption": {
+        "count": 33483,
+        "at": 1794833646933,
+        "t": 334.07399999984307
+      },
+      "reconnects": 58,
+      "serialRunning": false,
+      "reconnectPending": true,
+      "sourceKind": "serial",
+      "drops": 59,
+      "opens": 59,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833652589,
+      "t": 337.2389999998402,
+      "logRows": 830,
+      "logRowsCap": 850,
+      "rawRows": 28800,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 8,
+      "serialQueueCap": 128,
+      "heapMb": 20.936094284057617,
+      "fps": "44 fps",
+      "serialFrames": 33982,
+      "consumedFrames": 33800,
+      "consumption": {
+        "count": 33800,
+        "at": 1794833652498,
+        "t": 337.2389999998402
+      },
+      "reconnects": 59,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 59,
+      "opens": 60,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833657592,
+      "t": 340.04399999983764,
+      "logRows": 801,
+      "logRowsCap": 850,
+      "rawRows": 29081,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 1,
+      "serialQueueCap": 128,
+      "heapMb": 38.288442611694336,
+      "fps": "45 fps",
+      "serialFrames": 34261,
+      "consumedFrames": 34081,
+      "consumption": {
+        "count": 34081,
+        "at": 1794833657579,
+        "t": 340.04399999983764
+      },
+      "reconnects": 60,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 60,
+      "opens": 61,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833662608,
+      "t": 343.4939999998345,
+      "logRows": 787,
+      "logRowsCap": 850,
+      "rawRows": 29426,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 1,
+      "serialQueueCap": 128,
+      "heapMb": 31.42247772216797,
+      "fps": "41 fps",
+      "serialFrames": 34606,
+      "consumedFrames": 34426,
+      "consumption": {
+        "count": 34426,
+        "at": 1794833662595,
+        "t": 343.4939999998345
+      },
+      "reconnects": 60,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 60,
+      "opens": 61,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833667627,
+      "t": 346.1289999998321,
+      "logRows": 753,
+      "logRowsCap": 850,
+      "rawRows": 29690,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 10,
+      "serialQueueCap": 128,
+      "heapMb": 22.533089637756348,
+      "fps": "41 fps",
+      "serialFrames": 34886,
+      "consumedFrames": 34690,
+      "consumption": {
+        "count": 34690,
+        "at": 1794833667493,
+        "t": 346.1289999998321
+      },
+      "reconnects": 61,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 61,
+      "opens": 62,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833672640,
+      "t": 349.6789999998289,
+      "logRows": 841,
+      "logRowsCap": 850,
+      "rawRows": 25045,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 2,
+      "serialQueueCap": 128,
+      "heapMb": 19.549689292907715,
+      "fps": "43 fps",
+      "serialFrames": 35233,
+      "consumedFrames": 35045,
+      "consumption": {
+        "count": 35045,
+        "at": 1794833672625,
+        "t": 349.6789999998289
+      },
+      "reconnects": 61,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 61,
+      "opens": 62,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833677654,
+      "t": 352.4139999998264,
+      "logRows": 810,
+      "logRowsCap": 850,
+      "rawRows": 25319,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 5,
+      "serialQueueCap": 128,
+      "heapMb": 33.474416732788086,
+      "fps": "43 fps",
+      "serialFrames": 35512,
+      "consumedFrames": 35319,
+      "consumption": {
+        "count": 35319,
+        "at": 1794833677590,
+        "t": 352.4139999998264
+      },
+      "reconnects": 62,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 62,
+      "opens": 63,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833682670,
+      "t": 355.9439999998232,
+      "logRows": 798,
+      "logRowsCap": 850,
+      "rawRows": 25672,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 3,
+      "serialQueueCap": 128,
+      "heapMb": 25.517592430114746,
+      "fps": "44 fps",
+      "serialFrames": 35863,
+      "consumedFrames": 35672,
+      "consumption": {
+        "count": 35672,
+        "at": 1794833682622,
+        "t": 355.9439999998232
+      },
+      "reconnects": 62,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 62,
+      "opens": 63,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833687677,
+      "t": 358.71899999982065,
+      "logRows": 767,
+      "logRowsCap": 850,
+      "rawRows": 25950,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 6,
+      "serialQueueCap": 128,
+      "heapMb": 17.170702934265137,
+      "fps": "41 fps",
+      "serialFrames": 36147,
+      "consumedFrames": 35950,
+      "consumption": {
+        "count": 35950,
+        "at": 1794833687603,
+        "t": 358.71899999982065
+      },
+      "reconnects": 63,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 63,
+      "opens": 64,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833692688,
+      "t": 361.8589999998178,
+      "logRows": 846,
+      "logRowsCap": 850,
+      "rawRows": 26264,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 0,
+      "serialQueueCap": 128,
+      "heapMb": 40.26810646057129,
+      "fps": "44 fps",
+      "serialFrames": 36455,
+      "consumedFrames": 36264,
+      "consumption": {
+        "count": 36264,
+        "at": 1794833692054,
+        "t": 361.8589999998178
+      },
+      "reconnects": 63,
+      "serialRunning": false,
+      "reconnectPending": true,
+      "sourceKind": "serial",
+      "drops": 64,
+      "opens": 64,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833697697,
+      "t": 365.11399999981484,
+      "logRows": 827,
+      "logRowsCap": 850,
+      "rawRows": 26590,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 5,
+      "serialQueueCap": 128,
+      "heapMb": 31.918519020080566,
+      "fps": "45 fps",
+      "serialFrames": 36786,
+      "consumedFrames": 36590,
+      "consumption": {
+        "count": 36590,
+        "at": 1794833697617,
+        "t": 365.11399999981484
+      },
+      "reconnects": 64,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 64,
+      "opens": 65,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833702706,
+      "t": 367.86899999981233,
+      "logRows": 796,
+      "logRowsCap": 850,
+      "rawRows": 26866,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 9,
+      "serialQueueCap": 128,
+      "heapMb": 20.86276149749756,
+      "fps": "42 fps",
+      "serialFrames": 37066,
+      "consumedFrames": 36866,
+      "consumption": {
+        "count": 36866,
+        "at": 1794833702583,
+        "t": 367.86899999981233
+      },
+      "reconnects": 65,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 65,
+      "opens": 66,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833707723,
+      "t": 371.45899999980907,
+      "logRows": 786,
+      "logRowsCap": 850,
+      "rawRows": 27225,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 4,
+      "serialQueueCap": 128,
+      "heapMb": 19.549839973449707,
+      "fps": "44 fps",
+      "serialFrames": 37420,
+      "consumedFrames": 37225,
+      "consumption": {
+        "count": 37225,
+        "at": 1794833707665,
+        "t": 371.45899999980907
+      },
+      "reconnects": 65,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 65,
+      "opens": 66,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833712732,
+      "t": 374.1739999998066,
+      "logRows": 754,
+      "logRowsCap": 850,
+      "rawRows": 27497,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 0,
+      "serialQueueCap": 128,
+      "heapMb": 34.773213386535645,
+      "fps": "46 fps",
+      "serialFrames": 37691,
+      "consumedFrames": 37497,
+      "consumption": {
+        "count": 37497,
+        "at": 1794833712729,
+        "t": 374.1739999998066
+      },
+      "reconnects": 66,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 66,
+      "opens": 67,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833716108,
+      "t": 376.55399999980443,
+      "logRows": 813,
+      "logRowsCap": 850,
+      "rawRows": 27735,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 3,
+      "serialQueueCap": 128,
+      "heapMb": 19.124961853027344,
+      "fps": "45 fps",
+      "serialFrames": 37932,
+      "consumedFrames": 37735,
+      "consumption": {
+        "count": 37735,
+        "at": 1794833716078,
+        "t": 376.55399999980443
+      },
+      "reconnects": 66,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 66,
+      "opens": 67,
+      "batchGeneration": 0
+    },
+    {
+      "at": 1794833716116,
+      "t": 376.55399999980443,
+      "logRows": 813,
+      "logRowsCap": 850,
+      "rawRows": 27735,
+      "rawRowsCap": 30000,
+      "charts": [
+        758,
+        758,
+        758
+      ],
+      "chartCaps": [
+        758,
+        758,
+        758
+      ],
+      "insTrail": 1800,
+      "insTrailCap": 1800,
+      "serialQueue": 4,
+      "serialQueueCap": 128,
+      "heapMb": 19.124961853027344,
+      "fps": "45 fps",
+      "serialFrames": 37933,
+      "consumedFrames": 37735,
+      "consumption": {
+        "count": 37735,
+        "at": 1794833716078,
+        "t": 376.55399999980443
+      },
+      "reconnects": 66,
+      "serialRunning": true,
+      "reconnectPending": false,
+      "sourceKind": "serial",
+      "drops": 66,
+      "opens": 67,
+      "batchGeneration": 0
+    }
+  ],
+  "tailSamples": [],
+  "tailPhase": {
+    "ran": false,
+    "seconds": 0,
+    "samples": 0,
+    "settledMb": null,
+    "baseFloorMb": null,
+    "fellBack": null,
+    "note": "未触发（末段水位不可疑）"
+  },
+  "batchLog": [],
+  "reconnectEvents": [
+    {
+      "type": "open",
+      "segment": 1,
+      "at": 1794833116039,
+      "consumption": {
+        "count": 0,
+        "at": 0,
+        "t": 0
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 1,
+      "at": 1794833116108,
+      "consumption": {
+        "count": 1,
+        "at": 1794833116108,
+        "t": 0.005
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 1,
+      "at": 1794833124050,
+      "consumption": {
+        "count": 667,
+        "at": 1794833124044,
+        "t": 6.658999999999905
+      }
+    },
+    {
+      "type": "open",
+      "segment": 2,
+      "at": 1794833125063,
+      "consumption": {
+        "count": 667,
+        "at": 1794833124044,
+        "t": 6.658999999999905
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 2,
+      "at": 1794833125094,
+      "consumption": {
+        "count": 668,
+        "at": 1794833125094,
+        "t": 6.663999999999905
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 2,
+      "at": 1794833133068,
+      "consumption": {
+        "count": 1281,
+        "at": 1794833133042,
+        "t": 12.788999999999778
+      }
+    },
+    {
+      "type": "open",
+      "segment": 3,
+      "at": 1794833134074,
+      "consumption": {
+        "count": 1281,
+        "at": 1794833133042,
+        "t": 12.788999999999778
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 3,
+      "at": 1794833134102,
+      "consumption": {
+        "count": 1282,
+        "at": 1794833134102,
+        "t": 12.793999999999778
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 3,
+      "at": 1794833142074,
+      "consumption": {
+        "count": 1871,
+        "at": 1794833142006,
+        "t": 18.66700000000011
+      }
+    },
+    {
+      "type": "open",
+      "segment": 4,
+      "at": 1794833143085,
+      "consumption": {
+        "count": 1871,
+        "at": 1794833142006,
+        "t": 18.66700000000011
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 4,
+      "at": 1794833143105,
+      "consumption": {
+        "count": 1872,
+        "at": 1794833143105,
+        "t": 18.67200000000011
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 4,
+      "at": 1794833151090,
+      "consumption": {
+        "count": 2450,
+        "at": 1794833151087,
+        "t": 24.452000000001014
+      }
+    },
+    {
+      "type": "open",
+      "segment": 5,
+      "at": 1794833152098,
+      "consumption": {
+        "count": 2450,
+        "at": 1794833151087,
+        "t": 24.452000000001014
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 5,
+      "at": 1794833152197,
+      "consumption": {
+        "count": 2451,
+        "at": 1794833152197,
+        "t": 24.457000000001013
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 5,
+      "at": 1794833160102,
+      "consumption": {
+        "count": 3014,
+        "at": 1794833160100,
+        "t": 30.087000000001893
+      }
+    },
+    {
+      "type": "open",
+      "segment": 6,
+      "at": 1794833161104,
+      "consumption": {
+        "count": 3014,
+        "at": 1794833160100,
+        "t": 30.087000000001893
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 6,
+      "at": 1794833161132,
+      "consumption": {
+        "count": 3015,
+        "at": 1794833161132,
+        "t": 30.092000000001892
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 6,
+      "at": 1794833169108,
+      "consumption": {
+        "count": 3576,
+        "at": 1794833168981,
+        "t": 35.66500000000152
+      }
+    },
+    {
+      "type": "open",
+      "segment": 7,
+      "at": 1794833170127,
+      "consumption": {
+        "count": 3576,
+        "at": 1794833168981,
+        "t": 35.66500000000152
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 7,
+      "at": 1794833170201,
+      "consumption": {
+        "count": 3577,
+        "at": 1794833170201,
+        "t": 35.67000000000152
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 7,
+      "at": 1794833178131,
+      "consumption": {
+        "count": 4116,
+        "at": 1794833178045,
+        "t": 41.06000000000045
+      }
+    },
+    {
+      "type": "open",
+      "segment": 8,
+      "at": 1794833179141,
+      "consumption": {
+        "count": 4116,
+        "at": 1794833178045,
+        "t": 41.06000000000045
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 8,
+      "at": 1794833179270,
+      "consumption": {
+        "count": 4117,
+        "at": 1794833179270,
+        "t": 41.06500000000045
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 8,
+      "at": 1794833187145,
+      "consumption": {
+        "count": 4659,
+        "at": 1794833187076,
+        "t": 46.484999999999374
+      }
+    },
+    {
+      "type": "open",
+      "segment": 9,
+      "at": 1794833188161,
+      "consumption": {
+        "count": 4659,
+        "at": 1794833187076,
+        "t": 46.484999999999374
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 9,
+      "at": 1794833188266,
+      "consumption": {
+        "count": 4660,
+        "at": 1794833188266,
+        "t": 46.48999999999938
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 9,
+      "at": 1794833196169,
+      "consumption": {
+        "count": 5189,
+        "at": 1794833196056,
+        "t": 51.779999999998324
+      }
+    },
+    {
+      "type": "open",
+      "segment": 10,
+      "at": 1794833197175,
+      "consumption": {
+        "count": 5189,
+        "at": 1794833196056,
+        "t": 51.779999999998324
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 10,
+      "at": 1794833197303,
+      "consumption": {
+        "count": 5190,
+        "at": 1794833197303,
+        "t": 51.78499999999833
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 10,
+      "at": 1794833205179,
+      "consumption": {
+        "count": 5744,
+        "at": 1794833205169,
+        "t": 57.324999999997225
+      }
+    },
+    {
+      "type": "open",
+      "segment": 11,
+      "at": 1794833206197,
+      "consumption": {
+        "count": 5744,
+        "at": 1794833205169,
+        "t": 57.324999999997225
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 11,
+      "at": 1794833206219,
+      "consumption": {
+        "count": 5745,
+        "at": 1794833206219,
+        "t": 57.32999999999723
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 11,
+      "at": 1794833214200,
+      "consumption": {
+        "count": 6295,
+        "at": 1794833214166,
+        "t": 62.82999999999613
+      }
+    },
+    {
+      "type": "open",
+      "segment": 12,
+      "at": 1794833215202,
+      "consumption": {
+        "count": 6295,
+        "at": 1794833214166,
+        "t": 62.82999999999613
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 12,
+      "at": 1794833215233,
+      "consumption": {
+        "count": 6296,
+        "at": 1794833215233,
+        "t": 62.834999999996136
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 12,
+      "at": 1794833223215,
+      "consumption": {
+        "count": 6860,
+        "at": 1794833223196,
+        "t": 68.41999999999804
+      }
+    },
+    {
+      "type": "open",
+      "segment": 13,
+      "at": 1794833224231,
+      "consumption": {
+        "count": 6860,
+        "at": 1794833223196,
+        "t": 68.41999999999804
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 13,
+      "at": 1794833224288,
+      "consumption": {
+        "count": 6861,
+        "at": 1794833224288,
+        "t": 68.42499999999804
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 13,
+      "at": 1794833232243,
+      "consumption": {
+        "count": 7426,
+        "at": 1794833232127,
+        "t": 74.07500000000093
+      }
+    },
+    {
+      "type": "open",
+      "segment": 14,
+      "at": 1794833233251,
+      "consumption": {
+        "count": 7426,
+        "at": 1794833232127,
+        "t": 74.07500000000093
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 14,
+      "at": 1794833233317,
+      "consumption": {
+        "count": 7427,
+        "at": 1794833233317,
+        "t": 74.08000000000092
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 14,
+      "at": 1794833241260,
+      "consumption": {
+        "count": 7989,
+        "at": 1794833241196,
+        "t": 79.7000000000038
+      }
+    },
+    {
+      "type": "open",
+      "segment": 15,
+      "at": 1794833242266,
+      "consumption": {
+        "count": 7989,
+        "at": 1794833241196,
+        "t": 79.7000000000038
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 15,
+      "at": 1794833242291,
+      "consumption": {
+        "count": 7990,
+        "at": 1794833242291,
+        "t": 79.70500000000379
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 15,
+      "at": 1794833250274,
+      "consumption": {
+        "count": 8549,
+        "at": 1794833250190,
+        "t": 85.29500000000665
+      }
+    },
+    {
+      "type": "open",
+      "segment": 16,
+      "at": 1794833251279,
+      "consumption": {
+        "count": 8549,
+        "at": 1794833250190,
+        "t": 85.29500000000665
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 16,
+      "at": 1794833251413,
+      "consumption": {
+        "count": 8550,
+        "at": 1794833251413,
+        "t": 85.30000000000665
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 16,
+      "at": 1794833259279,
+      "consumption": {
+        "count": 9114,
+        "at": 1794833259269,
+        "t": 90.94000000000953
+      }
+    },
+    {
+      "type": "open",
+      "segment": 17,
+      "at": 1794833260287,
+      "consumption": {
+        "count": 9114,
+        "at": 1794833259269,
+        "t": 90.94000000000953
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 17,
+      "at": 1794833260328,
+      "consumption": {
+        "count": 9115,
+        "at": 1794833260328,
+        "t": 90.94500000000953
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 17,
+      "at": 1794833268296,
+      "consumption": {
+        "count": 9682,
+        "at": 1794833268249,
+        "t": 96.61500000001243
+      }
+    },
+    {
+      "type": "open",
+      "segment": 18,
+      "at": 1794833269301,
+      "consumption": {
+        "count": 9682,
+        "at": 1794833268249,
+        "t": 96.61500000001243
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 18,
+      "at": 1794833269333,
+      "consumption": {
+        "count": 9683,
+        "at": 1794833269333,
+        "t": 96.62000000001242
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 18,
+      "at": 1794833277303,
+      "consumption": {
+        "count": 10254,
+        "at": 1794833277280,
+        "t": 102.33000000001535
+      }
+    },
+    {
+      "type": "open",
+      "segment": 19,
+      "at": 1794833278319,
+      "consumption": {
+        "count": 10254,
+        "at": 1794833277280,
+        "t": 102.33000000001535
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 19,
+      "at": 1794833278347,
+      "consumption": {
+        "count": 10255,
+        "at": 1794833278347,
+        "t": 102.33500000001534
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 19,
+      "at": 1794833286334,
+      "consumption": {
+        "count": 10820,
+        "at": 1794833286328,
+        "t": 107.98500000001823
+      }
+    },
+    {
+      "type": "open",
+      "segment": 20,
+      "at": 1794833287344,
+      "consumption": {
+        "count": 10820,
+        "at": 1794833286328,
+        "t": 107.98500000001823
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 20,
+      "at": 1794833287407,
+      "consumption": {
+        "count": 10821,
+        "at": 1794833287407,
+        "t": 107.99000000001823
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 20,
+      "at": 1794833295345,
+      "consumption": {
+        "count": 11388,
+        "at": 1794833295337,
+        "t": 113.66000000002113
+      }
+    },
+    {
+      "type": "open",
+      "segment": 21,
+      "at": 1794833296357,
+      "consumption": {
+        "count": 11388,
+        "at": 1794833295337,
+        "t": 113.66000000002113
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 21,
+      "at": 1794833296459,
+      "consumption": {
+        "count": 11389,
+        "at": 1794833296459,
+        "t": 113.66500000002112
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 21,
+      "at": 1794833304366,
+      "consumption": {
+        "count": 11943,
+        "at": 1794833304272,
+        "t": 119.20500000002396
+      }
+    },
+    {
+      "type": "open",
+      "segment": 22,
+      "at": 1794833305375,
+      "consumption": {
+        "count": 11943,
+        "at": 1794833304272,
+        "t": 119.20500000002396
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 22,
+      "at": 1794833305405,
+      "consumption": {
+        "count": 11944,
+        "at": 1794833305405,
+        "t": 119.21000000002395
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 22,
+      "at": 1794833313375,
+      "consumption": {
+        "count": 12515,
+        "at": 1794833313369,
+        "t": 124.92000000002687
+      }
+    },
+    {
+      "type": "open",
+      "segment": 23,
+      "at": 1794833314380,
+      "consumption": {
+        "count": 12515,
+        "at": 1794833313369,
+        "t": 124.92000000002687
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 23,
+      "at": 1794833314426,
+      "consumption": {
+        "count": 12516,
+        "at": 1794833314426,
+        "t": 124.92500000002687
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 23,
+      "at": 1794833322385,
+      "consumption": {
+        "count": 13081,
+        "at": 1794833322383,
+        "t": 130.42700000002546
+      }
+    },
+    {
+      "type": "open",
+      "segment": 24,
+      "at": 1794833323391,
+      "consumption": {
+        "count": 13081,
+        "at": 1794833322383,
+        "t": 130.42700000002546
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 24,
+      "at": 1794833323449,
+      "consumption": {
+        "count": 13082,
+        "at": 1794833323449,
+        "t": 130.43200000002545
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 24,
+      "at": 1794833331392,
+      "consumption": {
+        "count": 13643,
+        "at": 1794833331381,
+        "t": 136.04200000002035
+      }
+    },
+    {
+      "type": "open",
+      "segment": 25,
+      "at": 1794833332399,
+      "consumption": {
+        "count": 13643,
+        "at": 1794833331381,
+        "t": 136.04200000002035
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 25,
+      "at": 1794833332513,
+      "consumption": {
+        "count": 13644,
+        "at": 1794833332513,
+        "t": 136.04700000002035
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 25,
+      "at": 1794833340407,
+      "consumption": {
+        "count": 14201,
+        "at": 1794833340345,
+        "t": 141.61700000001528
+      }
+    },
+    {
+      "type": "open",
+      "segment": 26,
+      "at": 1794833341412,
+      "consumption": {
+        "count": 14201,
+        "at": 1794833340345,
+        "t": 141.61700000001528
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 26,
+      "at": 1794833341444,
+      "consumption": {
+        "count": 14202,
+        "at": 1794833341444,
+        "t": 141.62200000001528
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 26,
+      "at": 1794833349415,
+      "consumption": {
+        "count": 14759,
+        "at": 1794833349407,
+        "t": 147.1920000000102
+      }
+    },
+    {
+      "type": "open",
+      "segment": 27,
+      "at": 1794833350426,
+      "consumption": {
+        "count": 14759,
+        "at": 1794833349407,
+        "t": 147.1920000000102
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 27,
+      "at": 1794833350478,
+      "consumption": {
+        "count": 14760,
+        "at": 1794833350478,
+        "t": 147.1970000000102
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 27,
+      "at": 1794833358428,
+      "consumption": {
+        "count": 15321,
+        "at": 1794833358338,
+        "t": 152.8070000000051
+      }
+    },
+    {
+      "type": "open",
+      "segment": 28,
+      "at": 1794833359440,
+      "consumption": {
+        "count": 15321,
+        "at": 1794833358338,
+        "t": 152.8070000000051
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 28,
+      "at": 1794833359566,
+      "consumption": {
+        "count": 15322,
+        "at": 1794833359566,
+        "t": 152.8120000000051
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 28,
+      "at": 1794833367455,
+      "consumption": {
+        "count": 15888,
+        "at": 1794833367454,
+        "t": 158.47199999999995
+      }
+    },
+    {
+      "type": "open",
+      "segment": 29,
+      "at": 1794833368463,
+      "consumption": {
+        "count": 15888,
+        "at": 1794833367454,
+        "t": 158.47199999999995
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 29,
+      "at": 1794833368539,
+      "consumption": {
+        "count": 15889,
+        "at": 1794833368539,
+        "t": 158.47699999999995
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 29,
+      "at": 1794833376472,
+      "consumption": {
+        "count": 16441,
+        "at": 1794833376450,
+        "t": 163.99699999999493
+      }
+    },
+    {
+      "type": "open",
+      "segment": 30,
+      "at": 1794833377494,
+      "consumption": {
+        "count": 16441,
+        "at": 1794833376450,
+        "t": 163.99699999999493
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 30,
+      "at": 1794833377534,
+      "consumption": {
+        "count": 16442,
+        "at": 1794833377534,
+        "t": 164.00199999999492
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 30,
+      "at": 1794833385499,
+      "consumption": {
+        "count": 17009,
+        "at": 1794833385498,
+        "t": 169.67199999998977
+      }
+    },
+    {
+      "type": "open",
+      "segment": 31,
+      "at": 1794833386504,
+      "consumption": {
+        "count": 17009,
+        "at": 1794833385498,
+        "t": 169.67199999998977
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 31,
+      "at": 1794833386592,
+      "consumption": {
+        "count": 17010,
+        "at": 1794833386592,
+        "t": 169.67699999998976
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 31,
+      "at": 1794833394507,
+      "consumption": {
+        "count": 17557,
+        "at": 1794833394378,
+        "t": 175.14699999998479
+      }
+    },
+    {
+      "type": "open",
+      "segment": 32,
+      "at": 1794833395522,
+      "consumption": {
+        "count": 17557,
+        "at": 1794833394378,
+        "t": 175.14699999998479
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 32,
+      "at": 1794833395610,
+      "consumption": {
+        "count": 17558,
+        "at": 1794833395610,
+        "t": 175.15199999998478
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 32,
+      "at": 1794833403537,
+      "consumption": {
+        "count": 18128,
+        "at": 1794833403442,
+        "t": 180.8519999999796
+      }
+    },
+    {
+      "type": "open",
+      "segment": 33,
+      "at": 1794833404548,
+      "consumption": {
+        "count": 18128,
+        "at": 1794833403442,
+        "t": 180.8519999999796
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 33,
+      "at": 1794833404574,
+      "consumption": {
+        "count": 18129,
+        "at": 1794833404574,
+        "t": 180.8569999999796
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 33,
+      "at": 1794833412561,
+      "consumption": {
+        "count": 18681,
+        "at": 1794833412472,
+        "t": 186.37699999997457
+      }
+    },
+    {
+      "type": "open",
+      "segment": 34,
+      "at": 1794833413570,
+      "consumption": {
+        "count": 18681,
+        "at": 1794833412472,
+        "t": 186.37699999997457
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 34,
+      "at": 1794833413664,
+      "consumption": {
+        "count": 18682,
+        "at": 1794833413664,
+        "t": 186.38199999997457
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 34,
+      "at": 1794833421571,
+      "consumption": {
+        "count": 19248,
+        "at": 1794833421570,
+        "t": 192.04199999996942
+      }
+    },
+    {
+      "type": "open",
+      "segment": 35,
+      "at": 1794833422586,
+      "consumption": {
+        "count": 19248,
+        "at": 1794833421570,
+        "t": 192.04199999996942
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 35,
+      "at": 1794833422680,
+      "consumption": {
+        "count": 19249,
+        "at": 1794833422680,
+        "t": 192.04699999996942
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 35,
+      "at": 1794833430593,
+      "consumption": {
+        "count": 19810,
+        "at": 1794833430558,
+        "t": 197.6569999999643
+      }
+    },
+    {
+      "type": "open",
+      "segment": 36,
+      "at": 1794833431601,
+      "consumption": {
+        "count": 19810,
+        "at": 1794833430558,
+        "t": 197.6569999999643
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 36,
+      "at": 1794833431633,
+      "consumption": {
+        "count": 19811,
+        "at": 1794833431633,
+        "t": 197.6619999999643
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 36,
+      "at": 1794833439602,
+      "consumption": {
+        "count": 20369,
+        "at": 1794833439597,
+        "t": 203.24199999995923
+      }
+    },
+    {
+      "type": "open",
+      "segment": 37,
+      "at": 1794833440608,
+      "consumption": {
+        "count": 20369,
+        "at": 1794833439597,
+        "t": 203.24199999995923
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 37,
+      "at": 1794833440696,
+      "consumption": {
+        "count": 20370,
+        "at": 1794833440696,
+        "t": 203.24699999995923
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 37,
+      "at": 1794833448621,
+      "consumption": {
+        "count": 20924,
+        "at": 1794833448612,
+        "t": 208.7869999999542
+      }
+    },
+    {
+      "type": "open",
+      "segment": 38,
+      "at": 1794833449629,
+      "consumption": {
+        "count": 20924,
+        "at": 1794833448612,
+        "t": 208.7869999999542
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 38,
+      "at": 1794833449741,
+      "consumption": {
+        "count": 20925,
+        "at": 1794833449741,
+        "t": 208.7919999999542
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 38,
+      "at": 1794833457636,
+      "consumption": {
+        "count": 21486,
+        "at": 1794833457541,
+        "t": 214.40199999994908
+      }
+    },
+    {
+      "type": "open",
+      "segment": 39,
+      "at": 1794833458640,
+      "consumption": {
+        "count": 21486,
+        "at": 1794833457541,
+        "t": 214.40199999994908
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 39,
+      "at": 1794833458657,
+      "consumption": {
+        "count": 21487,
+        "at": 1794833458657,
+        "t": 214.40699999994908
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 39,
+      "at": 1794833466653,
+      "consumption": {
+        "count": 22058,
+        "at": 1794833466638,
+        "t": 220.11699999994389
+      }
+    },
+    {
+      "type": "open",
+      "segment": 40,
+      "at": 1794833467660,
+      "consumption": {
+        "count": 22058,
+        "at": 1794833466638,
+        "t": 220.11699999994389
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 40,
+      "at": 1794833467744,
+      "consumption": {
+        "count": 22059,
+        "at": 1794833467744,
+        "t": 220.12199999994388
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 40,
+      "at": 1794833475660,
+      "consumption": {
+        "count": 22685,
+        "at": 1794833475554,
+        "t": 226.3819999999382
+      }
+    },
+    {
+      "type": "open",
+      "segment": 41,
+      "at": 1794833476676,
+      "consumption": {
+        "count": 22685,
+        "at": 1794833475554,
+        "t": 226.3819999999382
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 41,
+      "at": 1794833476714,
+      "consumption": {
+        "count": 22686,
+        "at": 1794833476714,
+        "t": 226.38699999993818
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 41,
+      "at": 1794833484680,
+      "consumption": {
+        "count": 23413,
+        "at": 1794833484551,
+        "t": 233.65699999993157
+      }
+    },
+    {
+      "type": "open",
+      "segment": 42,
+      "at": 1794833485692,
+      "consumption": {
+        "count": 23413,
+        "at": 1794833484551,
+        "t": 233.65699999993157
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 42,
+      "at": 1794833485767,
+      "consumption": {
+        "count": 23414,
+        "at": 1794833485767,
+        "t": 233.66199999993157
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 42,
+      "at": 1794833493698,
+      "consumption": {
+        "count": 23981,
+        "at": 1794833493697,
+        "t": 239.3319999999264
+      }
+    },
+    {
+      "type": "open",
+      "segment": 43,
+      "at": 1794833494707,
+      "consumption": {
+        "count": 23981,
+        "at": 1794833493697,
+        "t": 239.3319999999264
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 43,
+      "at": 1794833494784,
+      "consumption": {
+        "count": 23982,
+        "at": 1794833494784,
+        "t": 239.3369999999264
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 43,
+      "at": 1794833502717,
+      "consumption": {
+        "count": 24545,
+        "at": 1794833502711,
+        "t": 244.96699999992128
+      }
+    },
+    {
+      "type": "open",
+      "segment": 44,
+      "at": 1794833503723,
+      "consumption": {
+        "count": 24545,
+        "at": 1794833502711,
+        "t": 244.96699999992128
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 44,
+      "at": 1794833503791,
+      "consumption": {
+        "count": 24546,
+        "at": 1794833503791,
+        "t": 244.97199999992128
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 44,
+      "at": 1794833511733,
+      "consumption": {
+        "count": 25107,
+        "at": 1794833511707,
+        "t": 250.58199999991618
+      }
+    },
+    {
+      "type": "open",
+      "segment": 45,
+      "at": 1794833512736,
+      "consumption": {
+        "count": 25107,
+        "at": 1794833511707,
+        "t": 250.58199999991618
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 45,
+      "at": 1794833512772,
+      "consumption": {
+        "count": 25108,
+        "at": 1794833512772,
+        "t": 250.58699999991617
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 45,
+      "at": 1794833520743,
+      "consumption": {
+        "count": 25655,
+        "at": 1794833520624,
+        "t": 256.00199999991094
+      }
+    },
+    {
+      "type": "open",
+      "segment": 46,
+      "at": 1794833521746,
+      "consumption": {
+        "count": 25655,
+        "at": 1794833520624,
+        "t": 256.00199999991094
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 46,
+      "at": 1794833521856,
+      "consumption": {
+        "count": 25656,
+        "at": 1794833521856,
+        "t": 256.00699999991093
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 46,
+      "at": 1794833529757,
+      "consumption": {
+        "count": 26225,
+        "at": 1794833529752,
+        "t": 261.558999999909
+      }
+    },
+    {
+      "type": "open",
+      "segment": 47,
+      "at": 1794833530771,
+      "consumption": {
+        "count": 26225,
+        "at": 1794833529752,
+        "t": 261.558999999909
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 47,
+      "at": 1794833530860,
+      "consumption": {
+        "count": 26226,
+        "at": 1794833530860,
+        "t": 261.563999999909
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 47,
+      "at": 1794833538771,
+      "consumption": {
+        "count": 26791,
+        "at": 1794833538667,
+        "t": 267.2139999999039
+      }
+    },
+    {
+      "type": "open",
+      "segment": 48,
+      "at": 1794833539783,
+      "consumption": {
+        "count": 26791,
+        "at": 1794833538667,
+        "t": 267.2139999999039
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 48,
+      "at": 1794833539899,
+      "consumption": {
+        "count": 26792,
+        "at": 1794833539899,
+        "t": 267.2189999999039
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 48,
+      "at": 1794833547797,
+      "consumption": {
+        "count": 27353,
+        "at": 1794833547763,
+        "t": 272.82899999989877
+      }
+    },
+    {
+      "type": "open",
+      "segment": 49,
+      "at": 1794833548807,
+      "consumption": {
+        "count": 27353,
+        "at": 1794833547763,
+        "t": 272.82899999989877
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 49,
+      "at": 1794833548830,
+      "consumption": {
+        "count": 27354,
+        "at": 1794833548830,
+        "t": 272.83399999989877
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 49,
+      "at": 1794833556821,
+      "consumption": {
+        "count": 27905,
+        "at": 1794833556777,
+        "t": 278.34399999989375
+      }
+    },
+    {
+      "type": "open",
+      "segment": 50,
+      "at": 1794833557824,
+      "consumption": {
+        "count": 27905,
+        "at": 1794833556777,
+        "t": 278.34399999989375
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 50,
+      "at": 1794833557856,
+      "consumption": {
+        "count": 27906,
+        "at": 1794833557856,
+        "t": 278.34899999989375
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 50,
+      "at": 1794833565834,
+      "consumption": {
+        "count": 28454,
+        "at": 1794833565708,
+        "t": 283.82899999988877
+      }
+    },
+    {
+      "type": "open",
+      "segment": 51,
+      "at": 1794833566843,
+      "consumption": {
+        "count": 28454,
+        "at": 1794833565708,
+        "t": 283.82899999988877
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 51,
+      "at": 1794833566931,
+      "consumption": {
+        "count": 28455,
+        "at": 1794833566931,
+        "t": 283.83399999988876
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 51,
+      "at": 1794833574846,
+      "consumption": {
+        "count": 29016,
+        "at": 1794833574840,
+        "t": 289.44399999988366
+      }
+    },
+    {
+      "type": "open",
+      "segment": 52,
+      "at": 1794833575855,
+      "consumption": {
+        "count": 29016,
+        "at": 1794833574840,
+        "t": 289.44399999988366
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 52,
+      "at": 1794833575938,
+      "consumption": {
+        "count": 29017,
+        "at": 1794833575938,
+        "t": 289.44899999988365
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 52,
+      "at": 1794833583858,
+      "consumption": {
+        "count": 29583,
+        "at": 1794833583852,
+        "t": 295.1089999998785
+      }
+    },
+    {
+      "type": "open",
+      "segment": 53,
+      "at": 1794833584862,
+      "consumption": {
+        "count": 29583,
+        "at": 1794833583852,
+        "t": 295.1089999998785
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 53,
+      "at": 1794833584885,
+      "consumption": {
+        "count": 29584,
+        "at": 1794833584885,
+        "t": 295.1139999998785
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 53,
+      "at": 1794833592866,
+      "consumption": {
+        "count": 30146,
+        "at": 1794833592849,
+        "t": 300.7339999998734
+      }
+    },
+    {
+      "type": "open",
+      "segment": 54,
+      "at": 1794833593876,
+      "consumption": {
+        "count": 30146,
+        "at": 1794833592849,
+        "t": 300.7339999998734
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 54,
+      "at": 1794833593946,
+      "consumption": {
+        "count": 30147,
+        "at": 1794833593946,
+        "t": 300.7389999998734
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 54,
+      "at": 1794833601879,
+      "consumption": {
+        "count": 30699,
+        "at": 1794833601746,
+        "t": 306.25899999986837
+      }
+    },
+    {
+      "type": "open",
+      "segment": 55,
+      "at": 1794833602894,
+      "consumption": {
+        "count": 30699,
+        "at": 1794833601746,
+        "t": 306.25899999986837
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 55,
+      "at": 1794833602998,
+      "consumption": {
+        "count": 30700,
+        "at": 1794833602998,
+        "t": 306.26399999986836
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 55,
+      "at": 1794833610904,
+      "consumption": {
+        "count": 31262,
+        "at": 1794833610811,
+        "t": 311.88399999986325
+      }
+    },
+    {
+      "type": "open",
+      "segment": 56,
+      "at": 1794833611911,
+      "consumption": {
+        "count": 31262,
+        "at": 1794833610811,
+        "t": 311.88399999986325
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 56,
+      "at": 1794833612015,
+      "consumption": {
+        "count": 31263,
+        "at": 1794833612015,
+        "t": 311.88899999986324
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 56,
+      "at": 1794833619921,
+      "consumption": {
+        "count": 31816,
+        "at": 1794833619858,
+        "t": 317.4189999998582
+      }
+    },
+    {
+      "type": "open",
+      "segment": 57,
+      "at": 1794833620926,
+      "consumption": {
+        "count": 31816,
+        "at": 1794833619858,
+        "t": 317.4189999998582
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 57,
+      "at": 1794833620957,
+      "consumption": {
+        "count": 31817,
+        "at": 1794833620957,
+        "t": 317.4239999998582
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 57,
+      "at": 1794833628934,
+      "consumption": {
+        "count": 32367,
+        "at": 1794833628871,
+        "t": 322.9239999998532
+      }
+    },
+    {
+      "type": "open",
+      "segment": 58,
+      "at": 1794833629936,
+      "consumption": {
+        "count": 32367,
+        "at": 1794833628871,
+        "t": 322.9239999998532
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 58,
+      "at": 1794833630094,
+      "consumption": {
+        "count": 32368,
+        "at": 1794833630094,
+        "t": 322.9289999998532
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 58,
+      "at": 1794833637936,
+      "consumption": {
+        "count": 32924,
+        "at": 1794833637869,
+        "t": 328.48899999984815
+      }
+    },
+    {
+      "type": "open",
+      "segment": 59,
+      "at": 1794833638953,
+      "consumption": {
+        "count": 32924,
+        "at": 1794833637869,
+        "t": 328.48899999984815
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 59,
+      "at": 1794833638969,
+      "consumption": {
+        "count": 32925,
+        "at": 1794833638969,
+        "t": 328.49399999984814
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 59,
+      "at": 1794833646968,
+      "consumption": {
+        "count": 33483,
+        "at": 1794833646933,
+        "t": 334.07399999984307
+      }
+    },
+    {
+      "type": "open",
+      "segment": 60,
+      "at": 1794833647976,
+      "consumption": {
+        "count": 33483,
+        "at": 1794833646933,
+        "t": 334.07399999984307
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 60,
+      "at": 1794833647999,
+      "consumption": {
+        "count": 33484,
+        "at": 1794833647999,
+        "t": 334.07899999984306
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 60,
+      "at": 1794833655982,
+      "consumption": {
+        "count": 34043,
+        "at": 1794833655897,
+        "t": 339.668999999838
+      }
+    },
+    {
+      "type": "open",
+      "segment": 61,
+      "at": 1794833657002,
+      "consumption": {
+        "count": 34043,
+        "at": 1794833655897,
+        "t": 339.668999999838
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 61,
+      "at": 1794833657147,
+      "consumption": {
+        "count": 34044,
+        "at": 1794833657147,
+        "t": 339.673999999838
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 61,
+      "at": 1794833665007,
+      "consumption": {
+        "count": 34589,
+        "at": 1794833664894,
+        "t": 345.123999999833
+      }
+    },
+    {
+      "type": "open",
+      "segment": 62,
+      "at": 1794833666012,
+      "consumption": {
+        "count": 34589,
+        "at": 1794833664894,
+        "t": 345.123999999833
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 62,
+      "at": 1794833666143,
+      "consumption": {
+        "count": 34590,
+        "at": 1794833666143,
+        "t": 345.128999999833
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 62,
+      "at": 1794833674023,
+      "consumption": {
+        "count": 35137,
+        "at": 1794833673991,
+        "t": 350.59899999982804
+      }
+    },
+    {
+      "type": "open",
+      "segment": 63,
+      "at": 1794833675040,
+      "consumption": {
+        "count": 35137,
+        "at": 1794833673991,
+        "t": 350.59899999982804
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 63,
+      "at": 1794833675119,
+      "consumption": {
+        "count": 35138,
+        "at": 1794833675119,
+        "t": 350.60399999982803
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 63,
+      "at": 1794833683047,
+      "consumption": {
+        "count": 35698,
+        "at": 1794833682988,
+        "t": 356.20399999982294
+      }
+    },
+    {
+      "type": "open",
+      "segment": 64,
+      "at": 1794833684056,
+      "consumption": {
+        "count": 35698,
+        "at": 1794833682988,
+        "t": 356.20399999982294
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 64,
+      "at": 1794833684072,
+      "consumption": {
+        "count": 35699,
+        "at": 1794833684072,
+        "t": 356.20899999982294
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 64,
+      "at": 1794833692056,
+      "consumption": {
+        "count": 36264,
+        "at": 1794833692054,
+        "t": 361.8589999998178
+      }
+    },
+    {
+      "type": "open",
+      "segment": 65,
+      "at": 1794833693066,
+      "consumption": {
+        "count": 36264,
+        "at": 1794833692054,
+        "t": 361.8589999998178
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 65,
+      "at": 1794833693146,
+      "consumption": {
+        "count": 36265,
+        "at": 1794833693146,
+        "t": 361.8639999998178
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 65,
+      "at": 1794833701068,
+      "consumption": {
+        "count": 36832,
+        "at": 1794833701066,
+        "t": 367.53399999981264
+      }
+    },
+    {
+      "type": "open",
+      "segment": 66,
+      "at": 1794833702079,
+      "consumption": {
+        "count": 36832,
+        "at": 1794833701066,
+        "t": 367.53399999981264
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 66,
+      "at": 1794833702142,
+      "consumption": {
+        "count": 36833,
+        "at": 1794833702142,
+        "t": 367.53899999981263
+      }
+    },
+    {
+      "type": "drop",
+      "segment": 66,
+      "at": 1794833710082,
+      "consumption": {
+        "count": 37384,
+        "at": 1794833710030,
+        "t": 373.0489999998076
+      }
+    },
+    {
+      "type": "open",
+      "segment": 67,
+      "at": 1794833711087,
+      "consumption": {
+        "count": 37384,
+        "at": 1794833710030,
+        "t": 373.0489999998076
+      }
+    },
+    {
+      "type": "firstFrame",
+      "segment": 67,
+      "at": 1794833711114,
+      "consumption": {
+        "count": 37385,
+        "at": 1794833711114,
+        "t": 373.0539999998076
+      }
+    },
+    {
+      "type": "end",
+      "segment": 67,
+      "at": 1794833716115,
+      "consumption": {
+        "count": 37735,
+        "at": 1794833716078,
+        "t": 376.55399999980443
+      }
+    }
+  ],
+  "failure": null,
+  "verdict": {
+    "errorsOk": true,
+    "identityOk": true,
+    "coverageOk": true,
+    "coverageProblems": [],
+    "capped": true,
+    "heapMeasured": true,
+    "heapOk": true,
+    "heapStatus": "PASS",
+    "heapWaived": false,
+    "heapGateOk": true,
+    "heapGrowMb": 5.121851921081543,
+    "heapEndpointMb": 3.318507194519043,
+    "heapPeakGrowthMb": 25.934024810791016,
+    "heapTrendMb": 14.065726589662344,
+    "heapPeakOk": true,
+    "heapTrendOk": true,
+    "heapPeakLimitMb": 48,
+    "tailStatus": "PASS",
+    "tailSuspect": false,
+    "tailResolved": false,
+    "tailRequired": false,
+    "tailMeasured": true,
+    "tailWindow": 6,
+    "tailFloorMb": 19.124961853027344,
+    "baseFloorMb": 12.048851013183594,
+    "tailFloorRiseMb": 7.07611083984375,
+    "tailSustained": 1,
+    "tailAtFloor": 0.6666666666666666,
+    "tailMedianMb": 20.206300735473633,
+    "tailTrendMb": -7.708258765084403,
+    "tailEvidence": [],
+    "clockAdvanced": true,
+    "clockGrowthSec": 376.55399999980443,
+    "reconnectOk": true,
+    "reconnectRecoveryOk": true,
+    "actualDrops": 66,
+    "recoveredSegments": 66,
+    "batchOk": true,
+    "problems": [],
+    "identityProblems": [],
+    "consoleErrors": [],
+    "pass": true
+  }
+}

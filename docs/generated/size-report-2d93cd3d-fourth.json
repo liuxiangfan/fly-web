@@ -1,0 +1,198 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-11-19T07:23:24.036Z",
+  "sourceCommit": "7d5cf97fdddfb9f25d660d199075a3ec84006d30",
+  "sourceDigest": "2d93cd3d5131d3eb6eeb9f594c4346c6",
+  "distHash": "15c789e0829d1fe9",
+  "buildId": "2d93cd3d5131-15c789e0829d1fe9",
+  "driftProblems": [],
+  "note": "体积归因用的是一次**带 sourcemap 的独立重建**（临时目录，测完即删），不修改 dist/；chunk 级 raw/gzip 与 dist/ 同源同配置。",
+  "chunks": [
+    {
+      "name": "three-BuqgYaqT.js",
+      "file": "assets/three-BuqgYaqT.js",
+      "kind": "vendor-three",
+      "raw": 529419,
+      "gzip": 128071
+    },
+    {
+      "name": "index-DvVXExl6.js",
+      "file": "assets/index-DvVXExl6.js",
+      "kind": "main",
+      "raw": 180971,
+      "gzip": 67626
+    },
+    {
+      "name": "worker-core-CA_XhKgT.js",
+      "file": "assets/worker-core-CA_XhKgT.js",
+      "kind": "main",
+      "raw": 108070,
+      "gzip": 37759
+    },
+    {
+      "name": "teaching-ui-XFp57gwZ.js",
+      "file": "assets/teaching-ui-XFp57gwZ.js",
+      "kind": "lazy-teaching-ui",
+      "raw": 98626,
+      "gzip": 33822
+    },
+    {
+      "name": "diagnostics-ui-Ckpup_tS.js",
+      "file": "assets/diagnostics-ui-Ckpup_tS.js",
+      "kind": "lazy-diagnostics-ui",
+      "raw": 49053,
+      "gzip": 16824
+    },
+    {
+      "name": "comparison-ui-5bjR1rFm.js",
+      "file": "assets/comparison-ui-5bjR1rFm.js",
+      "kind": "lazy-comparison-ui",
+      "raw": 18110,
+      "gzip": 7146
+    },
+    {
+      "name": "runner-BeWcSq6D.js",
+      "file": "assets/runner-BeWcSq6D.js",
+      "kind": "shared-runner",
+      "raw": 10692,
+      "gzip": 4450
+    },
+    {
+      "name": "tour-CfNPnQik.js",
+      "file": "assets/tour-CfNPnQik.js",
+      "kind": "lazy-tour",
+      "raw": 2727,
+      "gzip": 1329
+    },
+    {
+      "name": "comparison.worker-BLRn0pK4.js",
+      "file": "assets/comparison.worker-BLRn0pK4.js",
+      "kind": "worker-entry",
+      "raw": 2018,
+      "gzip": 1007
+    },
+    {
+      "name": "batch.worker-DuxdDaaG.js",
+      "file": "assets/batch.worker-DuxdDaaG.js",
+      "kind": "worker-entry",
+      "raw": 1372,
+      "gzip": 692
+    },
+    {
+      "name": "sw.js",
+      "file": "sw.js",
+      "kind": "service-worker",
+      "raw": 1313,
+      "gzip": 607
+    },
+    {
+      "name": "app-shared-DXYVim0I.js",
+      "file": "assets/app-shared-DXYVim0I.js",
+      "kind": "shared-app",
+      "raw": 147,
+      "gzip": 109
+    }
+  ],
+  "totals": {
+    "gzipSum": 299442,
+    "rawSum": 1002518,
+    "files": 12
+  },
+  "mainAttribution": {
+    "groups": [
+      {
+        "group": "装配层(main.ts)",
+        "sourceBytes": 381872
+      },
+      {
+        "group": "场景渲染",
+        "sourceBytes": 70762
+      },
+      {
+        "group": "数据通路/存档",
+        "sourceBytes": 27571
+      },
+      {
+        "group": "界面",
+        "sourceBytes": 27190
+      }
+    ],
+    "topModules": [
+      {
+        "module": "main.ts",
+        "group": "装配层(main.ts)",
+        "bytes": 381872
+      },
+      {
+        "module": "scene/quatview.ts",
+        "group": "场景渲染",
+        "bytes": 28465
+      },
+      {
+        "module": "scene/gimbal.ts",
+        "group": "场景渲染",
+        "bytes": 19324
+      },
+      {
+        "module": "scene/setup.ts",
+        "group": "场景渲染",
+        "bytes": 14249
+      },
+      {
+        "module": "core/archive-ui.ts",
+        "group": "数据通路/存档",
+        "bytes": 14225
+      },
+      {
+        "module": "core/experiment-archive.ts",
+        "group": "数据通路/存档",
+        "bytes": 9958
+      },
+      {
+        "module": "ui/calib-panel.ts",
+        "group": "界面",
+        "bytes": 8036
+      },
+      {
+        "module": "scene/quad.ts",
+        "group": "场景渲染",
+        "bytes": 7014
+      },
+      {
+        "module": "ui/doc-search.ts",
+        "group": "界面",
+        "bytes": 5414
+      },
+      {
+        "module": "ui/ins-view.ts",
+        "group": "界面",
+        "bytes": 3986
+      },
+      {
+        "module": "core/csv-export.ts",
+        "group": "数据通路/存档",
+        "bytes": 3388
+      },
+      {
+        "module": "ui/formula-copy.ts",
+        "group": "界面",
+        "bytes": 3379
+      },
+      {
+        "module": "ui/batch-table.ts",
+        "group": "界面",
+        "bytes": 2923
+      },
+      {
+        "module": "scene/labels.ts",
+        "group": "场景渲染",
+        "bytes": 1710
+      },
+      {
+        "module": "ui/canvas-util.ts",
+        "group": "界面",
+        "bytes": 1697
+      }
+    ]
+  }
+}

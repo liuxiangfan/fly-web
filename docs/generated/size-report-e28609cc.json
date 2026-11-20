@@ -1,0 +1,178 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-11-16T14:57:03.032Z",
+  "sourceCommit": "7d5cf97fdddfb9f25d660d199075a3ec84006d30",
+  "sourceDigest": "e28609cc5ea2b4f108581231b6e21879",
+  "distHash": "e6c5f82d8aabda2c",
+  "buildId": "e28609cc5ea2-e6c5f82d8aabda2c",
+  "note": "体积归因用的是一次**带 sourcemap 的独立重建**（dist-size/），不修改 dist/；chunk 级 raw/gzip 与 dist/ 同源同配置。",
+  "chunks": [
+    {
+      "name": "three-CQ_FSzSd.js",
+      "file": "three-CQ_FSzSd.js",
+      "kind": "vendor-three",
+      "raw": 530610,
+      "gzip": 128349
+    },
+    {
+      "name": "index-BElZOGyw.js",
+      "file": "index-BElZOGyw.js",
+      "kind": "main",
+      "raw": 181207,
+      "gzip": 67507
+    },
+    {
+      "name": "teaching-ui-DiVL3xBk.js",
+      "file": "teaching-ui-DiVL3xBk.js",
+      "kind": "main",
+      "raw": 127385,
+      "gzip": 43284
+    },
+    {
+      "name": "worker-core-Dc4d2Q6D.js",
+      "file": "worker-core-Dc4d2Q6D.js",
+      "kind": "main",
+      "raw": 108162,
+      "gzip": 37802
+    },
+    {
+      "name": "doc-demos-DljgrATb.js",
+      "file": "doc-demos-DljgrATb.js",
+      "kind": "lazy-doc-demos",
+      "raw": 18288,
+      "gzip": 7252
+    },
+    {
+      "name": "runner-D3s-KyxW.js",
+      "file": "runner-D3s-KyxW.js",
+      "kind": "shared-runner",
+      "raw": 10789,
+      "gzip": 4511
+    },
+    {
+      "name": "tour-nVVj_Zkj.js",
+      "file": "tour-nVVj_Zkj.js",
+      "kind": "lazy-tour",
+      "raw": 2775,
+      "gzip": 1366
+    },
+    {
+      "name": "comparison.worker-BeslFqkb.js",
+      "file": "comparison.worker-BeslFqkb.js",
+      "kind": "worker-entry",
+      "raw": 2078,
+      "gzip": 1052
+    },
+    {
+      "name": "batch.worker-E0pfngw3.js",
+      "file": "batch.worker-E0pfngw3.js",
+      "kind": "worker-entry",
+      "raw": 1427,
+      "gzip": 733
+    },
+    {
+      "name": "app-shared-Dl7IEgEy.js",
+      "file": "app-shared-Dl7IEgEy.js",
+      "kind": "main",
+      "raw": 199,
+      "gzip": 158
+    }
+  ],
+  "mainAttribution": {
+    "groups": [
+      {
+        "group": "装配层(main.ts)",
+        "sourceBytes": 383203
+      },
+      {
+        "group": "场景渲染",
+        "sourceBytes": 70762
+      },
+      {
+        "group": "界面",
+        "sourceBytes": 27190
+      },
+      {
+        "group": "数据通路/存档",
+        "sourceBytes": 24183
+      }
+    ],
+    "topModules": [
+      {
+        "module": "main.ts",
+        "group": "装配层(main.ts)",
+        "bytes": 383203
+      },
+      {
+        "module": "scene/quatview.ts",
+        "group": "场景渲染",
+        "bytes": 28465
+      },
+      {
+        "module": "scene/gimbal.ts",
+        "group": "场景渲染",
+        "bytes": 19324
+      },
+      {
+        "module": "scene/setup.ts",
+        "group": "场景渲染",
+        "bytes": 14249
+      },
+      {
+        "module": "core/archive-ui.ts",
+        "group": "数据通路/存档",
+        "bytes": 14225
+      },
+      {
+        "module": "core/experiment-archive.ts",
+        "group": "数据通路/存档",
+        "bytes": 9958
+      },
+      {
+        "module": "ui/calib-panel.ts",
+        "group": "界面",
+        "bytes": 8036
+      },
+      {
+        "module": "scene/quad.ts",
+        "group": "场景渲染",
+        "bytes": 7014
+      },
+      {
+        "module": "ui/doc-search.ts",
+        "group": "界面",
+        "bytes": 5414
+      },
+      {
+        "module": "ui/ins-view.ts",
+        "group": "界面",
+        "bytes": 3986
+      },
+      {
+        "module": "ui/formula-copy.ts",
+        "group": "界面",
+        "bytes": 3379
+      },
+      {
+        "module": "ui/batch-table.ts",
+        "group": "界面",
+        "bytes": 2923
+      },
+      {
+        "module": "scene/labels.ts",
+        "group": "场景渲染",
+        "bytes": 1710
+      },
+      {
+        "module": "ui/canvas-util.ts",
+        "group": "界面",
+        "bytes": 1697
+      },
+      {
+        "module": "ui/mode.ts",
+        "group": "界面",
+        "bytes": 1003
+      }
+    ]
+  }
+}

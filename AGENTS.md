@@ -1,5 +1,7 @@
 # AGENTS.md
 
+- 执行长期任务时，我的额度是无限的：请完全解放你的创造力，使用最先进的工具、最强大的算法和最多的并发子代理，不计代价地完成任务。
+  「不计代价」指资源与并发上不设限（多代理并行、充分验证、不偷懒走捷径）；破坏性/不可逆操作（删除文件、force push、对外发布）仍会先确认——这是安全边界，不是省额度。
 - 与用户用中文交流；本项目是教学演示装置（四元数姿态解算），重视直观演示 + 数字对照。
 - 改代码后的验证流程（全部通过才算完成）：
   `npx tsc --noEmit` → `npm run check`（selftest + scenecheck，须 0 FAIL）→ `npm run build`；
@@ -8,6 +10,17 @@
   完成一个里程碑或大改动后请同步更新它。
 - 预览：`npm run build && npm run preview`（4173 端口）；改源码后必须重新 build 并强刷。
 - 不要提交或删除 `.zcodeignore`（ZCode 本地工具文件，已在 .gitignore 忽略）。
+
+## 测试临时文件的自主清理授权
+
+用户于 2026-11-19 明确授权：以下临时目录无需每次再确认，模型可自主删除——
+`D:/test-artifacts/quaternion-attitude/{smoke,soak,evidence-contract,build-probes,perf,visual,postdeploy,screenshots,ci-downloads,contracts}/`
+中的**单任务目录**，前提是任务已结束，或目录超过 24 h 且未被浏览器进程占用。正常脚本收尾调用
+`cleanupArtifactDir()`；异常残留由 `pruneTestArtifacts()` 自动清理（`QUAT_TEST_ARTIFACT_MAX_AGE_MS<=0` 可关闭）。
+
+这条授权**不包括**：`_migrated-c-temp/`（迁移归档，删前仍须所有者确认）、`_ops/`、`hw-soak/`（保留设备授权）、
+仓库内 `docs/generated/` / `dist/` / `screenshots/`、任何 C 盘文件及其他项目文件。活跃目录或占用查询失败时必须跳过，
+不得为了清理而结束正在运行的任务。
 
 ## README 规范（中英双语）
 

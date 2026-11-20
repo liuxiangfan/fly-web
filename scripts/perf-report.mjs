@@ -11,20 +11,37 @@ import { fileURLToPath } from "node:url";
 import { performance as nodePerformance } from "node:perf_hooks";
 import { distHashOf, readProvenance } from "./build-provenance.mjs";
 import { sourceDigest, worktreeState } from "./source-digest.mjs";
+import { testArtifactTempDir, cleanupArtifactDir } from "./test-artifacts.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const arg = Object.fromEntries(process.argv.slice(2).map((a) => {
   const m = /^--([^=]+)(?:=(.*))?$/.exec(a);
   return m ? [m[1], m[2] ?? "true"] : [a, "true"];
 }));
-const url = String(arg.url ?? process.env.SMOKE_URL ?? "http://127.0.0.1:4173/");
+const url = String(arg.url ?? process.env.SMOKE_URL ?? "http://localhost:4173/");
 const outPath = resolve(root, String(arg.out ?? "docs/generated/perf-report.json"));
-const executablePath = [process.env.CHROME_PATH, process.env.EDGE_PATH,
+const CANDIDATES = [
+  process.env.CHROME_PATH, process.env.EDGE_PATH,
+  "C:/Program Files/Google/Chrome/Application/chrome.exe",
+  "C:/Program Files (x86)/Google/Chrome/Application/chrome.exe",
+  join(process.env.LOCALAPPDATA ?? "", "Google/Chrome/Application/chrome.exe"),
   "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
   "C:/Program Files/Microsoft/Edge/Application/msedge.exe",
-  "C:/Program Files/Google/Chrome/Application/chrome.exe",
-  "/usr/bin/google-chrome", "/usr/bin/chromium"].filter(Boolean).find((p) => existsSync(p));
-if (!executablePath) { console.error("[FAIL] 找不到 Chrome/Edge"); process.exit(2); }
+  "/usr/bin/google-chrome", "/usr/bin/chromium",
+].filter(Boolean).filter((p) => existsSync(p));
+if (CANDIDATES.length === 0) { console.error("[FAIL] 找不到 Chrome/Edge，可用 CHROME_PATH 指定"); process.exit(2); }
+/**
+ * 逐个尝试候选浏览器：某些 Windows 环境下 Edge 的 crashpad 启动即失败，
+ * 换 Chrome 即可；不能因为"第一个存在的可执行文件打不开"就让整次采集判失败。
+ */
+async function launchAny(options) {
+  let lastError = null;
+  for (const exe of CANDIDATES) {
+    try { return await puppeteer.launch({ ...options, executablePath: exe }); }
+    catch (error) { lastError = error; console.warn(`[warn] 浏览器候选启动失败：${exe}`); }
+  }
+  throw lastError ?? new Error("没有可用的浏览器候选");
+}
 const epochNow = () => nodePerformance.timeOrigin + nodePerformance.now();
 const summary = (samples) => {
   const sorted = [...samples].sort((a, b) => a - b);
@@ -34,7 +51,9 @@ const summary = (samples) => {
 const withinTarget = (n) => Number.isFinite(n) && n >= 0 && n <= 200;
 const diagnostics = { targetMs: 200, minimumSamples: 40, waitFailures: [], checks: [] };
 const startedAt = new Date().toISOString();
-const browser = await puppeteer.launch({ executablePath, headless: "new", protocolTimeout: 300000,
+const profileDir = testArtifactTempDir("perf", "perf-");
+process.on("exit", () => cleanupArtifactDir(profileDir));
+const browser = await launchAny({ headless: "new", protocolTimeout: 300000, userDataDir: profileDir,
   args: ["--no-sandbox", "--disable-dev-shm-usage", "--use-angle=swiftshader", "--enable-unsafe-swiftshader",
     "--disable-background-timer-throttling", "--disable-backgrounding-occluded-windows", "--disable-renderer-backgrounding"] });
 const browserVersion = await browser.version();

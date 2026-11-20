@@ -16,11 +16,8 @@ import { mulberry32 } from "./rng";
 import { SolveLoop } from "./solve-loop";
 import { DEG, qAngleBetween, qConj, qMul, qToEuler, type Quat, type V3 } from "./quat";
 import {
-  ComplementaryEstimator,
   KalmanEstimator,
-  MadgwickEstimator,
-  MahonyEstimator,
-  PureGyroEstimator,
+  createEstimators,
   type Estimator,
 } from "../estimators";
 import {
@@ -28,14 +25,14 @@ import {
   initialAttitudeOf,
   type ExperimentConfig,
   type EstimatorId,
-  type EstimatorTuning,
 } from "./experiment-config";
 
 import { TraceEvents } from "./trace-events";
-export const RUN_HZ = 500;
-export const RUN_H = 1 / RUN_HZ;
+import { applyTuning } from "./tuning";
+import { RUN_H, RUN_HZ, SERIES_CAP, STATS_CAP } from "./run-constants";
+export { RUN_H, RUN_HZ, SERIES_CAP, STATS_CAP };
+export { applyTuning };
 /** 详细运行（runExperimentDetailed）保留的误差序列上限：诊断用途，长跑同样封顶 */
-export const SERIES_CAP = 200_000;
 
 export interface EstimatorRunMetrics {
   id: EstimatorId;
@@ -217,45 +214,12 @@ export function so3ErrorSplit(relative: Quat, gravityWorld: V3 = [0, 0, 1]): { t
   return { tiltDeg: theta * Math.sqrt(perpSq) * DEG, yawDeg: theta * Math.abs(par) * DEG };
 }
 
-function makeEstimators(): Estimator[] {
-  return [
-    new PureGyroEstimator(),
-    new ComplementaryEstimator(),
-    new MahonyEstimator(),
-    new MadgwickEstimator(),
-    new KalmanEstimator(),
-  ];
-}
-
-/** 把配置写入估计器（与 main.ts 的控件监听器做同样的事） */
-export function applyTuning(e: Estimator, t: EstimatorTuning): void {
-  e.magEnabled = t.magEnabled;
-  e.setParams(t.params);
-  if (e.id === "comp" || e.id === "mahony" || e.id === "madg") {
-    const g = e as ComplementaryEstimator | MahonyEstimator | MadgwickEstimator;
-    g.accelGate = t.accelGate;
-    g.gateDeg = t.gateDeg;
-    g.gateMagPct = t.gateMagPct;
-    g.gateRecovery = t.gateRecovery;
-    g.rampEnabled = t.rampEnabled;
-  }
-  if (e.id === "mahony" || e.id === "madg") {
-    (e as MahonyEstimator | MadgwickEstimator).magMode = t.magMode;
-  }
-  if (e.id === "kalman") {
-    const k = e as KalmanEstimator;
-    if (t.kalmanGate) k.gateMode = t.kalmanGate;
-    if (t.kalmanChi2 !== undefined) k.gateChi2 = t.kalmanChi2;
-    if (t.kalmanResetCov !== undefined) k.resetCovOnInject = t.kalmanResetCov;
-  }
-}
-
 /** trace 与统计运行共享初始化/观测配置，减重且不改变调参、重置与校准次序。 */
 function prepareRun(configIn: ExperimentConfig) {
   const config = cloneExperimentConfig(configIn);
   const world = new World(scenarios[config.scenario] ?? scenarios.hover, config.seed);
   if (config.manualTargetDeg) world.setManualTarget(config.manualTargetDeg);
-  const ests = makeEstimators();
+  const ests = createEstimators();
   for (const e of ests) applyTuning(e, config.estimators[e.id as EstimatorId]);
   const q0 = initialAttitudeOf(config);
   for (const e of ests) e.reset(q0);
@@ -278,7 +242,6 @@ function prepareRun(configIn: ExperimentConfig) {
  * 超过之后改用定长蓄水池（reservoir，确定性抽样）近似分位数——**长时间运行内存不增长**。
  * 60 s @500 Hz 以内（教学与批量的实际用法）与旧实现**逐位一致**。
  */
-export const STATS_CAP = 60_000;
 /**
  * 分位数子集的**定长蓄水池**容量。
  *

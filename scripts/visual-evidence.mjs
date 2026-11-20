@@ -11,18 +11,34 @@
  * `docs/generated/visual-evidence.json`（随仓库走），PNG 仍然放本地目录但可被哈希定位。
  *
  * 前置：`npm run build && npm run preview`（默认 http://127.0.0.1:4173）
- * 用法：node scripts/visual-evidence.mjs [--out=screenshots/visual-<name>] [--url=...]
+ * 用法：node scripts/visual-evidence.mjs [--report=<尚不存在的新报告路径>] [--url=...]
+ * PNG 固定按 sourceDigest/buildId/captureId（UUID）分目录；同 digest 复采也绝不复用。
  */
 import puppeteer from "puppeteer-core";
-import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { sourceDigest, worktreeState } from "./source-digest.mjs";
-import { distHashOf, readProvenance } from "./build-provenance.mjs";
+import { readProvenance } from "./build-provenance.mjs";
 import { captureIdentity, captureDriftProblems, fetchServedProvenance, identityProblems } from "./served-build.mjs";
+import { testArtifactTempDir, cleanupArtifactDir } from "./test-artifacts.mjs";
 
+export function reserveVisualCapture(root, source, provenance, { captureId = randomUUID(), out, report } = {}) {
+  if (!/^[0-9a-f]{32}$/.test(source.digest) || !/^[0-9a-f]{12}-[0-9a-f]{16}$/.test(provenance?.buildId ?? "") || !/^[0-9a-f-]{36}$/.test(captureId)) {
+    throw new Error("视觉采集缺少合法 sourceDigest/buildId/captureId");
+  }
+  const outDir = resolve(root, `screenshots/visual-${source.digest}/${provenance.buildId}/${captureId}`);
+  const reportPath = resolve(root, report ?? `docs/generated/visual-evidence-${source.digest}-${provenance.buildId}-${captureId}.json`);
+  if (out && resolve(root, out) !== outDir) throw new Error(`--out 必须使用本次独立目录 ${outDir}`);
+  if (existsSync(outDir) || existsSync(reportPath)) throw new Error("采集目录/报告已存在，拒绝覆盖旧证据");
+  mkdirSync(dirname(outDir), { recursive: true });
+  mkdirSync(outDir); // 不用 recursive：同一次采集 id 重入必须失败。
+  return { captureId, outDir, reportPath };
+}
+
+async function main() {
 const args = Object.fromEntries(
   process.argv.slice(2).map((a) => {
     const m = /^--([^=]+)(?:=(.*))?$/.exec(a);
@@ -30,28 +46,45 @@ const args = Object.fromEntries(
   }),
 );
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const url = args.url ?? process.env.SHOT_URL ?? "http://127.0.0.1:4173/";
+const url = args.url ?? process.env.SHOT_URL ?? "http://localhost:4173/";
 const sha = (() => { try { return execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim(); } catch { return "unknown"; } })();
-const outDir = resolve(root, args.out ?? `screenshots/visual-${sha.slice(0, 7)}`);
-const reportPath = resolve(root, args.report ?? "docs/generated/visual-evidence.json");
-mkdirSync(outDir, { recursive: true });
+const source = sourceDigest(root);
+const identityBefore = captureIdentity(root);
+const localProvenance = readProvenance(join(root, "dist"));
+if (!localProvenance || localProvenance.sourceDigest !== source.digest || localProvenance.distHash !== identityBefore.distHash) {
+  throw new Error("源码/本地产物/溯源不一致，先冻结源码并 build 后再采集");
+}
+const { captureId, outDir, reportPath } = reserveVisualCapture(root, source, localProvenance, args);
 
 const CANDIDATES = [
   process.env.CHROME_PATH, process.env.EDGE_PATH,
+  "C:/Program Files/Google/Chrome/Application/chrome.exe",
+  "C:/Program Files (x86)/Google/Chrome/Application/chrome.exe",
+  join(process.env.LOCALAPPDATA ?? "", "Google/Chrome/Application/chrome.exe"),
   "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
   "C:/Program Files/Microsoft/Edge/Application/msedge.exe",
-  "C:/Program Files/Google/Chrome/Application/chrome.exe",
   "/usr/bin/google-chrome", "/usr/bin/chromium",
-].filter(Boolean);
-const executablePath = CANDIDATES.find((p) => existsSync(p));
-if (!executablePath) { console.error("[FAIL] 找不到 Chrome/Edge，可用 CHROME_PATH 指定"); process.exit(2); }
+].filter(Boolean).filter((p) => existsSync(p));
+if (CANDIDATES.length === 0) { console.error("[FAIL] 找不到 Chrome/Edge，可用 CHROME_PATH 指定"); process.exit(2); }
+/**
+ * 逐个尝试候选浏览器：某些 Windows 环境下 Edge 的 crashpad 启动即失败，
+ * 换 Chrome 即可；不能因为"第一个存在的可执行文件打不开"就让整次采集判失败。
+ */
+async function launchAny(options) {
+  let lastError = null;
+  for (const exe of CANDIDATES) {
+    try { return await puppeteer.launch({ ...options, executablePath: exe }); }
+    catch (error) { lastError = error; console.warn(`[warn] 浏览器候选启动失败：${exe}`); }
+  }
+  throw lastError ?? new Error("没有可用的浏览器候选");
+}
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const startedAt = new Date().toISOString();
-const browser = await puppeteer.launch({
-  executablePath, headless: "new", args: ["--no-sandbox", "--disable-dev-shm-usage", "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--hide-scrollbars",
-    "--disable-background-timer-throttling", "--disable-backgrounding-occluded-windows", "--disable-renderer-backgrounding"],
-});
+const profileDir = testArtifactTempDir("visual", "visual-");
+process.on("exit", () => cleanupArtifactDir(profileDir));
+const browser = await launchAny({ headless: "new", userDataDir: profileDir, args: ["--no-sandbox", "--disable-dev-shm-usage", "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--hide-scrollbars",
+  "--disable-background-timer-throttling", "--disable-backgrounding-occluded-windows", "--disable-renderer-backgrounding"] });
 const browserVersion = await browser.version();
 const page = await browser.newPage();
 const consoleErrors = [];
@@ -83,7 +116,7 @@ async function capture(name, { width, height, dpr = 1, print = false, before = n
   if (expectView && metrics.view !== expectView) throw new Error(`${name}: 期望视图 ${expectView}，实际 ${metrics.view}`);
   if (expectDoc && metrics.docPage !== expectDoc) throw new Error(`${name}: 期望文档页 ${expectDoc}，实际 ${metrics.docPage}`);
   shots.push({
-    name, file: file.slice(root.length + 1).split("\\").join("/"), note,
+    name, file: relative(root, file).split("\\").join("/"), note,
     viewport: { width, height, deviceScaleFactor: dpr, printMedia: print },
     bytes: buf.length, sha256: createHash("sha256").update(buf).digest("hex"),
     metrics,
@@ -100,8 +133,6 @@ const openDocs = (page) => `(async () => { document.getElementById("btn-docs").c
  * 开拍前先核对服务端自报的 buildId，拍完再重算源码与产物摘要：
  * 中途有人重建 dist 或改源码，这组截图就不能代表当前产物。
  */
-const identityBefore = captureIdentity(root);
-const localProvenance = readProvenance(join(root, "dist"));
 const servedProblems = [];
 {
   const served = await fetchServedProvenance(url);
@@ -129,9 +160,10 @@ await browser.close();
 const finishedAt = new Date().toISOString();
 const driftProblems = captureDriftProblems(root, identityBefore);
 if (driftProblems.length) console.warn(`[warn] 采集期间身份发生变化：${driftProblems.join("；")}`);
-const source = sourceDigest(root);
 const report = {
   schemaVersion: 1,
+  captureId,
+  localOnly: true,
   generatedAt: finishedAt,
   sourceCommit: sha,
   sourceDigest: source.digest,
@@ -139,7 +171,7 @@ const report = {
   worktree: worktreeState(root),
   // 与长稳/稳定性共用同一个产物摘要算法（SW-06：同一个字段名必须只有一个含义）
   buildId: localProvenance?.buildId ?? null,
-  distHash: distHashOf(join(root, "dist")),
+  distHash: identityBefore.distHash,
   url, browserVersion, startedAt, finishedAt,
   consoleErrors,
   servedProblems,
@@ -153,8 +185,14 @@ const report = {
     shots.every((s) => !(s.metrics.scrollW > s.metrics.innerW)),
   note: "PNG 落在被 gitignore 的 screenshots/ 目录（localOnly），本 JSON 随仓库版本化：视口、字节数、sha256 与源码摘要都可用于复核。",
 };
-writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
+mkdirSync(dirname(reportPath), { recursive: true });
+writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
 console.log(`\n[${report.pass ? "PASS" : "FAIL"}] 视觉证据 ${shots.length} 张（控制台错误 ${consoleErrors.length}）`);
 console.log(`  源码摘要 ${source.digest}（工作树 ${report.worktree}）、commit ${sha.slice(0, 12)}、浏览器 ${browserVersion}`);
 console.log(`  报告（随仓库）：${reportPath.slice(root.length + 1)}；PNG：${outDir.slice(root.length + 1)}/`);
-process.exit(report.pass ? 0 : 1);
+process.exitCode = report.pass ? 0 : 1;
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  await main();
+}

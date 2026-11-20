@@ -9,6 +9,8 @@
  * 拆出来之后：纯函数由 `scripts/doc-search-contract.test.ts` 逐条钉住（含转义反例），
  * 装配层只负责事件与焦点。
  */
+import { escapeHtml } from "../core/html-escape";
+export { escapeHtml };
 
 export interface DocBlock {
   /** 所属文档页 id（data-doc-page） */
@@ -27,15 +29,6 @@ export interface DocHit {
   score: number;
 }
 
-/** HTML 转义：搜索框里的内容是**用户输入**，任何插进结果容器的字符串都必须先转义。 */
-export function escapeHtml(value: string): string {
-  return String(value)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
 
 /** 把一页切成「标题 + 正文」块：h1/h2/h3（带 id）起新块，section 递归进去。 */
 export function collectDocBlocks(page: HTMLElement, pageId: string, pageName: string, out: DocBlock[]): void {

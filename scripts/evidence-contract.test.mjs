@@ -5,25 +5,30 @@
  * 报告正文 FAIL／源码换了／平台换了／产物重建了／截图错了，而索引照样能声明 PASS。
  * 这里每条用例都对应一种"看起来像真证据"的构造，只有校验器真的拒它，结论才算有依据。
  */
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { testArtifactTempDir, cleanupArtifactDir, DEFAULT_TEST_ARTIFACT_ROOT, testArtifactRoot, pruneTestArtifacts } from './test-artifacts.mjs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sourceDigest } from './source-digest.mjs';
 import { distHashOf } from './build-provenance.mjs';
+import { reserveVisualCapture } from './visual-evidence.mjs';
 
 const CHECKER = join(dirname(fileURLToPath(import.meta.url)), 'evidencecheck.mjs');
 const BASELINE = 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678';
 
 const sha256of = (p) => createHash('sha256').update(readFileSync(p)).digest('hex');
+const sceneRoots = [];
+after(() => { for (const root of sceneRoots) cleanupArtifactDir(root); });
 
 /** 造一个临时现场：真 git 仓库 + 产品输入 + PROJECT-STATE + dist，好让校验器整条链路都能跑。 */
 function scene() {
-  const root = mkdtempSync(join(tmpdir(), 'evc-'));
+  const root = testArtifactTempDir("evidence-contract", "evc-");
+  sceneRoots.push(root);
   execFileSync('git', ['init', '-q'], { cwd: root });
   const write = (rel, content) => {
     const p = join(root, rel);
@@ -223,11 +228,11 @@ test('视觉证据：像素哈希错、current 缺图都必须拒；历史条目
   const png = s.write('screenshots/x/desktop.png', 'not-a-real-png-but-fixed-bytes\n');
   const shots = [{ name: 'desktop', file: png.rel, note: '桌面', viewport: { width: 1440, height: 900 }, sha256: png.sha256, bytes: 31 }];
   const good = s.write('docs/generated/visual-x.json', { pass: true, sourceCommit: BASELINE, sourceDigest: s.digest, distHash: s.distHash, buildId: s.buildId, browserVersion: 'Edg/1.0.0.0', shots, consoleErrors: [] });
-  s.commit([entry(s, 'visual-screenshot', good)]);
+  s.commit([entry(s, 'visual-screenshot', good, { localOnly: true })]);
   assert.equal(s.run().code, 0, s.run().out);
 
   const wrong = s.write('docs/generated/visual-x.json', { pass: true, sourceCommit: BASELINE, sourceDigest: s.digest, distHash: s.distHash, buildId: s.buildId, browserVersion: 'Edg/1.0.0.0', shots: [{ ...shots[0], sha256: '0'.repeat(64) }], consoleErrors: [] });
-  s.commit([entry(s, 'visual-screenshot', wrong)]);
+  s.commit([entry(s, 'visual-screenshot', wrong, { localOnly: true })]);
   const bad = s.run();
   assert.equal(bad.code, 1, bad.out);
   assert.ok(keyLine(bad.out, '像素哈希与报告不符'), bad.out);
@@ -244,7 +249,7 @@ test('视觉证据：像素哈希错、current 缺图都必须拒；历史条目
   assert.equal(gone.code, 1, gone.out);
   assert.ok(keyLine(gone.out, '不存在'), gone.out);
 
-  s.commit([entry(s, 'visual-screenshot', absent, { current: false })]);
+  s.commit([entry(s, 'visual-screenshot', absent, { current: false, localOnly: true })]);
   const historical = s.run();
   assert.equal(historical.code, 0, historical.out);
   assert.ok(keyLine(historical.out, '[note]'), historical.out);
@@ -309,4 +314,290 @@ test('默认模式与严格模式证明范围不同：默认只核索引与正�
   assert.equal(loose.code, 0, '默认模式不管"是不是当前源码"，只管索引与正文自洽');
   assert.ok(!loose.out.includes('--require-source'), loose.out);
   assert.equal(s.run('--require-source').code, 1, '严格模式才要求绑定当前源码');
+});
+
+test('教学 v2 登记：旧假换源不许 current；真实三阶段通过，active/sourceKind/runId/idx/数量失配均拒', () => {
+  const s = scene();
+  const phases = {
+    imported: 'ok: 10 frames', error: null,
+    before: { active: false, sourceKind: 'simulation', runId: 1, idx: 0, reviewActive: false },
+    during: { active: true, sourceKind: 'replay', runId: 2, idx: 1, reviewActive: false },
+    after: { active: false, sourceKind: 'simulation', runId: 3, idx: 0, reviewActive: false },
+  };
+  const base = soakReport(s, { withBatch: false, withTeaching: true, loadSchema: 'teaching-load/v2',
+    sourceTransitions: [phases], samples: [{ at: 0 }, { at: 600000 }] });
+  base.verdict = { ...base.verdict, teachingOk: true, clockAdvanced: true, stopQuiesced: true, sourceSwitches: 1, actionErrors: 0 };
+  const file = s.write('docs/generated/teaching.json', base);
+  const e = entry(s, 'software-soak-teaching', file);
+  s.commit([e]);
+  assert.equal(s.run().code, 0, s.run().out);
+  const registrar = join(dirname(CHECKER), 'register-local-evidence.mjs');
+  const register = () => {
+    try { execFileSync(process.execPath, [registrar, `--root=${s.root}`, `--soak-teaching=${file.rel}`], { stdio: 'pipe' }); return 0; }
+    catch (err) { return err.status; }
+  };
+  assert.equal(register(), 0, '合格 v2 可登记');
+  const candidates = [
+    { ...base, loadSchema: undefined, sourceTransitions: undefined, verdict: { ...base.verdict, sourceSwitches: 11 } },
+    ...[['active', false], ['sourceKind', 'simulation'], ['runId', 1], ['idx', 0]].map(([field, value]) => ({ ...base, sourceTransitions: [{ ...phases, during: { ...phases.during, [field]: value } }] })),
+    { ...base, verdict: { ...base.verdict, sourceSwitches: 11 } },
+    { ...base, verdict: { ...base.verdict, actionErrors: 1 } },
+    { ...base, samples: [{ at: 0 }, { at: 1000 }] },
+  ];
+  for (const raw of candidates) {
+    const bad = s.write(file.rel, raw);
+    s.commit([{ ...e, sha256: bad.sha256 }]);
+    assert.equal(s.run().code, 1, JSON.stringify(raw.sourceTransitions));
+    assert.equal(register(), 1, '量具不合格必须拒绝登记 current');
+  }
+});
+
+function visualReport(s, shots, over = {}) {
+  return { pass: true, sourceCommit: BASELINE, sourceDigest: s.digest, distHash: s.distHash, buildId: s.buildId,
+    browserVersion: 'Edg/1.0.0.0', startedAt: '2026-01-01T00:00:00.000Z', finishedAt: '2026-01-01T00:01:00.000Z',
+    shots, consoleErrors: [], ...over };
+}
+
+test('本地视觉 current：clone 无图仅核声明；本机有图严格核，localOnly false 与 hash mismatch 都拒', () => {
+  const s = scene();
+  const png = s.write('screenshots/local/desktop.png', 'fixed-pixels\n');
+  const shots = [{ name: 'desktop', file: png.rel, viewport: { width: 1440, height: 900 }, sha256: png.sha256 }];
+  const f = s.write('docs/generated/visual-local.json', visualReport(s, shots));
+  const e = entry(s, 'visual-screenshot', f, { localOnly: true });
+  s.provenance();
+  s.commit([e]);
+  assert.equal(s.run('--require-source', '--require-build').code, 0);
+  s.commit([{ ...e, localOnly: false }]);
+  assert.match(s.run().out, /本机有图不等于 clone/);
+  s.commit([e]);
+  rmSync(png.file); // 只删本测试夹具，模拟干净 clone 的 gitignored PNG。
+  const clone = s.run('--require-source', '--require-build');
+  assert.equal(clone.code, 0, clone.out);
+  assert.match(clone.out, /仅核了条目与哈希声明/);
+  s.write(png.rel, 'tampered-pixels\n');
+  const mismatch = s.run();
+  assert.equal(mismatch.code, 1, mismatch.out);
+  assert.match(mismatch.out, /像素哈希与报告不符/);
+  s.commit([entry(s, 'visual-screenshot', png, { localOnly: true })]);
+  assert.equal(s.run().code, 1, 'current 不能改指 PNG 而跳过报告正文');
+});
+
+test('视觉登记：自动 localOnly、同 digest 新采集保留旧条目/报告；复用路径或坏像素拒绝', () => {
+  const s = scene();
+  s.commit([]);
+  const registrar = join(dirname(CHECKER), 'register-local-evidence.mjs');
+  const register = (rel) => {
+    try { return { code: 0, out: execFileSync(process.execPath, [registrar, `--root=${s.root}`, `--visual=${rel}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }) }; }
+    catch (err) { return { code: err.status, out: `${err.stdout}${err.stderr}` }; }
+  };
+  const a = s.write('screenshots/a/x.png', 'a');
+  const shots = [{ name: 'x', file: a.rel, viewport: { width: 320, height: 568 }, sha256: a.sha256 }];
+  const first = s.write('docs/generated/visual-a.json', visualReport(s, shots));
+  assert.equal(register(first.rel).code, 0);
+  const manifest = () => JSON.parse(readFileSync(join(s.root, 'docs/generated/evidence-manifest.json'), 'utf8'));
+  const old = manifest().entries[0];
+  assert.equal(old.localOnly, true);
+  const second = s.write('docs/generated/visual-b.json', visualReport(s, shots, { startedAt: '2026-01-02T00:00:00.000Z', finishedAt: '2026-01-02T00:01:00.000Z' }));
+  assert.equal(register(second.rel).code, 0);
+  const entries = manifest().entries;
+  assert.equal(entries.length, 2);
+  assert.notEqual(entries[0].id, entries[1].id);
+  assert.equal(entries[0].current, false);
+  assert.equal(entries[0].sha256, old.sha256);
+  assert.equal(entries[0].path, old.path);
+  assert.equal(sha256of(first.file), old.sha256);
+  assert.equal(register(first.rel).code, 0);
+  assert.equal(manifest().entries[0].current, false, '再次登记旧报告不得抹掉历史/重新升 current');
+  s.write(first.rel, visualReport(s, shots, { note: 'overwrite' }));
+  assert.equal(register(first.rel).code, 1, '同路径新报告不能覆盖旧条目');
+  const before = readFileSync(join(s.root, 'docs/generated/evidence-manifest.json'), 'utf8');
+  s.write(a.rel, 'wrong');
+  assert.equal(register(second.rel).code, 1, '本机像素 mismatch 必须拒绝登记');
+  assert.equal(readFileSync(join(s.root, 'docs/generated/evidence-manifest.json'), 'utf8'), before);
+});
+
+test('视觉采集预留：sourceDigest/buildId/唯一 id 分目录，同 digest 重采不可覆盖旧 PNG/报告', () => {
+  const s = scene();
+  const source = { digest: s.digest };
+  const provenance = { buildId: s.buildId };
+  const aId = '00000000-0000-4000-8000-000000000001';
+  const bId = '00000000-0000-4000-8000-000000000002';
+  const a = reserveVisualCapture(s.root, source, provenance, { captureId: aId });
+  const png = s.write(join(relative(s.root, a.outDir), 'x.png'), 'original');
+  s.write(relative(s.root, a.reportPath), '{}');
+  const b = reserveVisualCapture(s.root, source, provenance, { captureId: bId });
+  assert.notEqual(a.outDir, b.outDir);
+  assert.ok(a.outDir.includes(s.digest) && a.outDir.includes(s.buildId) && a.outDir.includes(aId));
+  assert.throws(() => reserveVisualCapture(s.root, source, provenance, { captureId: aId }), /拒绝覆盖/);
+  assert.throws(() => reserveVisualCapture(s.root, source, provenance, { captureId: bId, report: a.reportPath }), /拒绝覆盖/);
+  assert.equal(readFileSync(png.file, 'utf8'), 'original');
+});
+
+test('历史像素覆盖：同路径、报告 hash、覆盖者、时间逐跳核验；布尔或错误关联不能放过 mismatch', () => {
+  const s = scene();
+  const png = s.write('screenshots/old/x.png', 'old');
+  const shots = [{ name: 'x', file: png.rel, viewport: { width: 320, height: 568 }, sha256: png.sha256 }];
+  const old = s.write('docs/generated/visual-old.json', visualReport(s, shots));
+  const replacement = s.write(png.rel, 'new');
+  const next = s.write('docs/generated/visual-next.json', visualReport(s, [{ ...shots[0], sha256: replacement.sha256 }], { startedAt: '2026-01-02T00:00:00.000Z', finishedAt: '2026-01-02T00:01:00.000Z' }));
+  const a = entry(s, 'visual-screenshot', old, { id: 'old', current: false, localOnly: true, pixelsOverwritten: true, pixelsOverwrittenBy: 'next', pixelsOverwrittenAt: '2026-01-02' });
+  const b = entry(s, 'visual-screenshot', next, { id: 'next', localOnly: true });
+  s.commit([a, b]);
+  assert.equal(s.run().code, 0, s.run().out);
+  for (const patch of [{ pixelsOverwrittenBy: 'old' }, { pixelsOverwrittenAt: '2026-01-03' }, { sha256: '0'.repeat(64) }, { current: true }]) {
+    s.commit([{ ...a, ...patch }, b]);
+    assert.equal(s.run().code, 1, JSON.stringify(patch));
+  }
+  s.commit([a, { ...b, sha256: '0'.repeat(64) }]);
+  assert.equal(s.run().code, 1, '覆盖者 hash mismatch 不许放过');
+  const unrelated = s.write('docs/generated/unrelated.json', visualReport(s, [{ ...shots[0], file: 'screenshots/other/x.png' }], { startedAt: '2026-01-02T00:00:00.000Z', finishedAt: '2026-01-02T00:01:00.000Z' }));
+  s.commit([a, entry(s, 'visual-screenshot', unrelated, { id: 'next', localOnly: true })]);
+  assert.equal(s.run().code, 1, '覆盖者必须覆盖同一原路径');
+  s.commit([a, b]);
+  s.write(png.rel, 'unexplained');
+  assert.equal(s.run().code, 1, '实际像素必须匹配覆盖者，不许任意篡改');
+  const latestPixels = s.write(png.rel, 'latest');
+  const latest = s.write('docs/generated/visual-latest.json', visualReport(s, [{ ...shots[0], sha256: latestPixels.sha256 }], { startedAt: '2026-01-03T00:00:00.000Z', finishedAt: '2026-01-03T00:01:00.000Z' }));
+  const c = entry(s, 'visual-screenshot', latest, { id: 'latest', localOnly: true });
+  const chain = [a, { ...b, current: false, pixelsOverwritten: true, pixelsOverwrittenBy: 'latest', pixelsOverwrittenAt: '2026-01-03' }, c];
+  s.commit(chain);
+  assert.equal(s.run().code, 0, '多轮覆盖须逐跳核验，不能丢掉中间历史');
+  rmSync(png.file);
+  assert.equal(s.run().code, 0, 'clone 无图仍能核验完整原报告覆盖链');
+  s.commit([a, { ...chain[1], pixelsOverwrittenBy: 'old' }, c]);
+  assert.equal(s.run().code, 1, '覆盖链循环必须拒绝');
+});
+
+test('历史报告丢失：目录/空 sha/PASS 均拒；不可恢复仅 OBSERVED，保留原路径与旧 hash', () => {
+  const s = scene();
+  const png = s.write('screenshots/history/x.png', 'x');
+  const shots = [{ name: 'x', file: png.rel, viewport: { width: 320, height: 568 }, sha256: png.sha256 }];
+  const originalPath = 'docs/generated/visual-original.json';
+  const next = s.write('docs/generated/visual-next.json', visualReport(s, shots, { startedAt: '2026-01-02T00:00:00.000Z', finishedAt: '2026-01-02T00:01:00.000Z' }));
+  const b = entry(s, 'visual-screenshot', next, { id: 'next', localOnly: true, originalReportPath: originalPath });
+  const a = entry(s, 'visual-screenshot', { rel: originalPath, sha256: 'a'.repeat(64) }, { id: 'lost', current: false, localOnly: true });
+  s.commit([a, b]);
+  assert.equal(s.run().code, 1, '丢失 JSON 不能因 localOnly 历史 PASS');
+  s.commit([{ ...a, path: 'screenshots/history', sha256: '' }, b]);
+  const directory = s.run();
+  assert.equal(directory.code, 1, directory.out);
+  assert.match(directory.out, /空 sha|目录不能/);
+  const observed = { ...a, result: 'OBSERVED', provenanceComplete: false, reportUnavailable: true, recoveryStatus: 'unrecoverable', reportOverwrittenBy: 'next', reportOverwrittenAt: '2026-01-02', startedAt: null, finishedAt: null };
+  s.commit([observed, b]);
+  const ok = s.run();
+  assert.equal(ok.code, 0, ok.out);
+  assert.match(ok.out, /不可复核.*不能计作 PASS/);
+  for (const patch of [{ result: 'PASS' }, { current: true }, { path: 'screenshots/history' }, { sha256: '' }, { reportOverwrittenBy: 'nope' }, { reportOverwrittenAt: '2026-01-03' }]) {
+    s.commit([{ ...observed, ...patch }, b]);
+    assert.equal(s.run().code, 1, JSON.stringify(patch));
+  }
+  s.commit([{ ...observed, sha256: null }, b]);
+  assert.equal(s.run().code, 0, '原 hash 确实不可恢复时必须 null，不编新 hash');
+  const unknown = { ...observed, reportOverwrittenBy: null, reportOverwrittenAt: null };
+  s.commit([unknown, b]);
+  const unknownResult = s.run();
+  assert.equal(unknownResult.code, 0, unknownResult.out);
+  assert.match(unknownResult.out, /覆盖者与覆盖采集时间未知.*不构成 PASS/);
+  for (const patch of [{ current: true }, { result: 'PASS' }, { provenanceComplete: true }, { localOnly: false }, { sha256: '' }]) {
+    s.commit([{ ...unknown, ...patch }, b]);
+    assert.equal(s.run().code, 1, '未知关联豁免绝不适用于current/PASS/完整证据或空hash');
+  }
+  s.commit([{ ...unknown, sha256: null }, b]);
+  assert.equal(s.run().code, 0, '完整 hash/关联都丢失只能明确不可恢复观察');
+  s.write(originalPath, 'tampered existing report');
+  s.commit([unknown, b]);
+  assert.equal(s.run().code, 1, '未知关联不能绕过原路径现有文件 hash mismatch');
+  s.commit([observed, b]);
+  assert.equal(s.run().code, 1, '丢失标记不能绕过原路径上未知内容的 hash mismatch');
+  rmSync(join(s.root, originalPath));
+  s.commit([{ ...observed, recoveryStatus: undefined, startedAt: '2026-01-01T00:00:00.000Z', finishedAt: '2026-01-01T00:01:00.000Z' }, b]);
+  assert.equal(s.run().code, 0, '原时间/hash已知的丢失报告必须核时间与覆盖关联');
+  s.commit([{ ...observed, recoveryStatus: undefined, startedAt: '2026-01-03T00:00:00.000Z', finishedAt: '2026-01-03T00:01:00.000Z' }, b]);
+  assert.equal(s.run().code, 1, '覆盖者早于旧采集结束必须拒绝');
+});
+
+// ── 测试现场归属（不是产品行为）：默认 D 盘、独立目录、幂等清理 ──────────────────
+
+test('测试现场：默认根目录在 Windows 固定 D 盘，其他平台跟随系统临时目录', () => {
+  assert.equal(
+    DEFAULT_TEST_ARTIFACT_ROOT,
+    process.platform === 'win32' ? 'D:/test-artifacts/quaternion-attitude' : tmpdir(),
+  );
+});
+
+test('测试现场：环境变量覆盖根目录，并按 kind 分目录', () => {
+  const saved = process.env.QUAT_TEST_ARTIFACT_ROOT;
+  const base = testArtifactTempDir('contracts', 'root-');
+  try {
+    process.env.QUAT_TEST_ARTIFACT_ROOT = base;
+    const alpha = testArtifactRoot('alpha');
+    assert.equal(alpha, resolve(base, 'alpha'));
+    assert.ok(existsSync(alpha), '根目录必须真的建出来');
+    assert.equal(existsSync(join(base, 'beta')), false, '未请求的 kind 不应被创建');
+  } finally {
+    if (saved === undefined) delete process.env.QUAT_TEST_ARTIFACT_ROOT;
+    else process.env.QUAT_TEST_ARTIFACT_ROOT = saved;
+    cleanupArtifactDir(base);
+  }
+});
+
+test('测试现场：每次任务独立目录，清理只删自己', () => {
+  const a = testArtifactTempDir('contracts', 'task-');
+  const b = testArtifactTempDir('contracts', 'task-');
+  assert.notEqual(a, b, '两个并行任务不得共用同一 profile');
+  assert.ok(existsSync(a) && existsSync(b));
+  assert.equal(cleanupArtifactDir(a), true);
+  assert.equal(existsSync(a), false);
+  assert.ok(existsSync(b), '清理 a 不得波及 b');
+  assert.equal(cleanupArtifactDir(b), true);
+});
+
+test('测试现场：清理不存在的目录是幂等的', () => {
+  assert.equal(cleanupArtifactDir(join(testArtifactRoot('contracts'), 'does-not-exist')), true);
+});
+
+test('测试现场：自动清理只删过期临时目录，新目录与归档/报告/真机授权全部保留', () => {
+  const base = testArtifactTempDir('contracts', 'prune-root-');
+  const now = Date.now();
+  const make = (rel, old) => {
+    const dir = join(base, rel);
+    mkdirSync(dir, { recursive: true });
+    const sec = (now - (old ? 5000 : 0)) / 1000;
+    utimesSync(dir, sec, sec);
+    return dir;
+  };
+  try {
+    const old = make('smoke/old-task', true);
+    const recent = make('smoke/new-task', false);
+    const retained = [
+      make('_migrated-c-temp/smoke/old-task', true),
+      make('_ops/old-report', true),
+      make('hw-soak/hw-profile-serial', true),
+    ];
+    const result = pruneTestArtifacts({ root: base, maxAgeMs: 1000, now, isInUse: () => false });
+    assert.equal(existsSync(old), false, '过期临时目录必须删除');
+    assert.ok(existsSync(recent), '新目录不能误删');
+    for (const dir of retained) assert.ok(existsSync(dir), `保留目录不得自动删除：${dir}`);
+    assert.equal(result.skippedRetained.length, 3);
+  } finally {
+    cleanupArtifactDir(base);
+  }
+});
+
+test('测试现场：自动清理遇到活跃目录或占用查询失败都跳过，不杀进程', () => {
+  const base = testArtifactTempDir('contracts', 'prune-in-use-');
+  const old = join(base, 'soak', 'old-task');
+  mkdirSync(old, { recursive: true });
+  const past = (Date.now() - 5000) / 1000;
+  utimesSync(old, past, past);
+  try {
+    for (const isInUse of [() => true, () => { throw new Error('查询失败'); }]) {
+      const result = pruneTestArtifacts({ root: base, maxAgeMs: 1000, isInUse });
+      assert.ok(existsSync(old), '活跃/无法确认占用的目录必须保留');
+      assert.equal(result.skippedInUse.length, 1);
+      assert.equal(result.deleted.length, 0);
+    }
+  } finally {
+    cleanupArtifactDir(base);
+  }
 });

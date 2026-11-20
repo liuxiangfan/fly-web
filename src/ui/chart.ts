@@ -19,6 +19,11 @@ export class RollingChart {
   private dpr = Math.min(window.devicePixelRatio || 1, 2);
   /** 共享时间游标（秒）；null = 不画。由主程序在暂停/悬停时设置 */
   private cursorT: number | null = null;
+  /** 内容/范围/游标/颜色/尺寸变化才重绘；暂停且无交互时避免重复 Canvas 绘制。 */
+  private revision = 0;
+  private lastRenderedRevision = -1;
+  /** 确定性工作量计数：attempts = 调用 render 的次数；skips = 因无变化直接返回。 */
+  readonly stats = { attempts: 0, draws: 0, skips: 0 };
 
   constructor(
     private canvas: HTMLCanvasElement,
@@ -36,8 +41,8 @@ export class RollingChart {
   }
 
   /** 只读尺寸：长跑自检用（环形缓冲的 count 必须封顶在 cap，不能随时间增长） */
-  get size(): { count: number; cap: number } {
-    return { count: this.count, cap: this.cap };
+  get size(): { count: number; cap: number; attempts: number; draws: number; skips: number } {
+    return { count: this.count, cap: this.cap, ...this.stats };
   }
 
   /**
@@ -59,6 +64,7 @@ export class RollingChart {
 
   setVisible(mask: boolean[]): void {
     this.visible = mask;
+    this.revision++;
     this.render();
   }
 
@@ -67,6 +73,7 @@ export class RollingChart {
     colors.forEach((c, i) => {
       if (c && this.series[i]) this.series[i].color = c;
     });
+    this.revision++;
     this.render();
   }
 
@@ -74,12 +81,16 @@ export class RollingChart {
     this.count = 0;
     this.head = 0;
     this.cursorT = null;
+    this.revision++;
     this.render();
   }
 
   /** 设置共享时间游标（秒）；Charts 之间由主程序同步同一个 t */
   setCursor(t: number | null): void {
-    this.cursorT = t !== null && Number.isFinite(t) ? t : null;
+    const next = t !== null && Number.isFinite(t) ? t : null;
+    if (next === this.cursorT) return;
+    this.cursorT = next;
+    this.revision++;
     this.render();
   }
 
@@ -108,6 +119,7 @@ export class RollingChart {
   }
 
   push(t: number, values: number[]): void {
+    this.revision++;
     this.times[this.head] = t;
     for (let s = 0; s < this.series.length; s++) {
       this.vals[s * this.cap + this.head] = values[s] ?? NaN;
@@ -117,18 +129,34 @@ export class RollingChart {
   }
 
   private observeResize(): void {
+    let lastW = -1;
+    let lastH = -1;
     const sync = () => {
       const w = this.canvas.clientWidth;
       const h = this.canvas.clientHeight;
       if (w === 0 || h === 0) return;
-      this.canvas.width = Math.round(w * this.dpr);
-      this.canvas.height = Math.round(h * this.dpr);
+      const bw = Math.round(w * this.dpr);
+      const bh = Math.round(h * this.dpr);
+      // 重设 canvas.width/height 会清空位图；尺寸没变就不要重复清屏重绘。
+      if (bw === lastW && bh === lastH) return;
+      lastW = bw;
+      lastH = bh;
+      this.canvas.width = bw;
+      this.canvas.height = bh;
+      this.revision++;
       this.render();
     };
     new ResizeObserver(sync).observe(this.canvas);
   }
 
   render(): void {
+    this.stats.attempts++;
+    if (this.revision === this.lastRenderedRevision) {
+      this.stats.skips++;
+      return;
+    }
+    this.lastRenderedRevision = this.revision;
+    this.stats.draws++;
     const { ctx } = this;
     const w = this.canvas.clientWidth;
     const h = this.canvas.clientHeight;

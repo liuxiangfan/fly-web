@@ -1,0 +1,275 @@
+/**
+ * F-02 首批 5 道学习活动的纯数据真源。
+ *
+ * 为什么单独成模块：
+ * - 运行时 `learning-panel.ts` **不** import 本模块，而是 fetch `public/data/activities.json`，
+ *   这样题目文本不会重复打进 JS chunk；
+ * - 生成器 `scripts/emit-catalog.ts`、契约测试与 Node 侧工具从这里读取唯一真源；
+ * - 类型与纯判断（judge/compare/label/parse）仍留在 `learning-activities.ts`。
+ *
+ * 修改本文件后必须运行 `npm run catalog` 重新生成 `public/data/activities.json`。
+ */
+import type { LearningActivity } from "./learning-activities";
+
+/**
+ * 首批 5 道题全部来自 index.html「实验与练习」的 12 道练习。
+ * 每题只讲一个因果链，且证据指向现有实验 / 现有指标。
+ */
+export const LEARNING_ACTIVITIES: readonly LearningActivity[] = [
+  // 合理预测区间约 15–25°（2°/s × 10 s = 20°）；预测前不向用户展示该区间。
+  {
+    id: "drift-linear-10s",
+    version: 1,
+    title: "零偏在 10 秒内漂多少",
+    prompt: "陀螺零偏 2°/s、纯陀螺积分、初始姿态无偏差。10 s 时姿态误差最可能落在哪个范围？",
+    conditionsText:
+      "实验「零偏漂移」：零偏 2°/s，初始姿态水平，陀螺噪声、加计线加速度、振动归零，算法选纯积分；" +
+      "读取 10 s 时刻的误差，不要拿 30 s 全程峰值代替。",
+    answerKind: "range",
+    evidence: {
+      kind: "live",
+      experimentId: "drift",
+      estimatorId: "pure",
+      metric: "max",
+    },
+    // 题面条件（2°/s、10 s、噪声归零、初始水平）只由本 patch 决定，不由实验库默认值或现场滑块决定。
+    evidencePatch: {
+      durationSec: 10,
+      scenario: "hover",
+      initialAttitude: { kind: "level" },
+      imu: {
+        gyroBiasDps: 2,
+        gyroNoiseDps: 0,
+        linAccel: 0,
+        vibration: 0,
+      },
+      estimators: { pure: { enabled: true } },
+    },
+    expectedRange: { min: 15, max: 25, unit: "°" },
+    explanation:
+      "恒定零偏 b 积分一次，姿态误差近似 b·t：2°/s × 10 s = 20°。" +
+      "曲线在 10 s 处应是直线上升后的约 20°；若跑满 30 s，峰值会到约 60°，窗口不同不能混用。",
+    doc: { page: "labs", anchor: "l-exercise" },
+    predictionHint: "先算 1 s 漂多少度，再乘时间；单位是 °/s × s = °。",
+  },
+  {
+    id: "accel-yaw-unobservable",
+    version: 1,
+    title: "加速度计能修哪个轴",
+    prompt: "只靠加速度计（没有磁力计或外部航向）时，下面哪些判断成立？",
+    conditionsText:
+      "三组固定证据：① 倾角 30° 初始偏差 + Mahony 正常增益；② 同样的倾角偏差但 Kp=Ki=0（无修正负对照）；" +
+      "③ 纯偏航 30° + 关闭磁修正。比较 ①② 的倾角 RMSE 是否真的下降，以及 ③ 的偏航 RMSE 是否保留。",
+    answerKind: "multiple",
+    choices: [
+      { id: "tilt-fixable", text: "加速度计可以修正横滚/俯仰的倾角偏差" },
+      { id: "yaw-fixable", text: "加速度计可以单独修正纯偏航偏差" },
+      { id: "gravity-axis", text: "重力向量绕自身轴旋转时读数不变，所以重力不约束偏航" },
+      { id: "gain-fix", text: "只要提高加速度计权重或降低带宽，偏航就会收敛" },
+      {
+        id: "external-heading",
+        text: "没有磁力计或外部航向时，纯偏航初始偏差不会被观测修正，会保留（并可能继续漂）",
+      },
+    ],
+    correctChoiceIds: ["tilt-fixable", "gravity-axis", "external-heading"],
+    evidence: {
+      kind: "live",
+      experimentId: "align",
+      estimatorId: "mahony",
+      metric: "tiltRmse",
+      run: "A",
+    },
+    // A=倾角 30° 且正常修正；B=同倾角但 Kp=Ki=0（无修正负对照）；C=纯偏航 30°。
+    evidencePatch: {
+      durationSec: 10,
+      scenario: "hover",
+      magEnabled: false,
+      autoCoarseAlign: false,
+      initialAttitude: { kind: "fixed-axis", axis: [1, 0, 0], angleDeg: 30 },
+      estimators: { mahony: { enabled: true, magEnabled: false, accelGate: false, params: { kp: 1, ki: 0.05 } } },
+    },
+    evidenceRuns: [
+      {
+        id: "B",
+        patch: { estimators: { mahony: { params: { kp: 0, ki: 0 } } } },
+      },
+      {
+        id: "C",
+        patch: {
+          initialAttitude: { kind: "fixed-axis", axis: [0, 0, 1], angleDeg: 30 },
+          estimators: { mahony: { params: { kp: 1, ki: 0.05 } } },
+        },
+      },
+    ],
+    evidencePredicates: {
+      "tilt-fixable": {
+        kind: "metric-compare-runs",
+        estimator: "mahony",
+        metric: "tiltRmse",
+        op: "lt",
+        run: "A",
+        otherRun: "B",
+        minDelta: 20,
+      },
+      "yaw-fixable": { kind: "always-false" },
+      "gravity-axis": { kind: "always-true" },
+      "gain-fix": { kind: "always-false" },
+      "external-heading": {
+        kind: "metric-range",
+        estimator: "mahony",
+        metric: "yawRmse",
+        run: "C",
+        min: 10,
+      },
+    },
+    explanation:
+      "重力只告诉系统哪边是下：绕重力轴的旋转不改变加速度计读数，所以纯偏航误差不可由重力约束；" +
+      "横滚/俯仰偏差会改变重力在机体轴上的投影，因此可以被加计修正。证据里 30° 倾角在正常增益下收敛，" +
+      "把 Kp=Ki=0 后同样的偏差保持不变，说明下降来自观测修正而不是初始条件。" +
+      "调大加计权重只会让倾角更信观测，不会凭空产生偏航信息；要修偏航必须引入磁力计或外部航向。",
+    doc: { page: "labs", anchor: "l-exercise" },
+    predictionHint: "把「倾角可观测」和「偏航可观测」分开想。",
+  },
+  {
+    id: "mahony-ki-bias",
+    version: 1,
+    title: "Mahony 的 Ki 在记什么账",
+    prompt: "恒定陀螺零偏下，Mahony 的 Ki=0 与 Ki>0 在 20 s 窗口内的关键差别是什么？",
+    conditionsText:
+      "固定教学基线：零偏 2°/s、初始姿态水平、磁修正开启、噪声归零；只把 Mahony Ki 分别设为 0 与 0.05，" +
+      "比较 20 s 窗口的稳态 RMSE。玻璃盒里可看 Mahony 的积分修正量（∫e），那不是 ESKF 的零偏状态。",
+    answerKind: "single",
+    choices: [
+      {
+        id: "integral-removes-step",
+        text: "Ki=0 留下恒定稳态台阶；Ki=0.05 在 20 s 窗口内把稳态误差明显压低（本题实测降幅超过 1°）",
+      },
+      { id: "both-remove-step", text: "Ki=0 与 Ki>0 在本题 20 s 窗口内的稳态误差都会归零，只是 Ki>0 更快" },
+      { id: "larger-always-better", text: "无论观测、噪声和采样条件如何，Ki 都是越大越好，而且绝不会超调或振荡" },
+      { id: "startup-only", text: "Ki 只影响启动收敛速度，不影响恒定零偏下的窗口稳态误差" },
+    ],
+    correctChoiceIds: ["integral-removes-step"],
+    evidence: {
+      kind: "live",
+      experimentId: "drift",
+      estimatorId: "mahony",
+      metric: "steadyRmse",
+      run: "B",
+    },
+    // 两次运行：A=Ki0（基线），B=Ki0.05（只覆盖积分增益）；两侧磁修正都开启。
+    evidencePatch: {
+      durationSec: 20,
+      scenario: "hover",
+      magEnabled: true,
+      initialAttitude: { kind: "level" },
+      imu: { gyroBiasDps: 2 },
+      estimators: { mahony: { enabled: true, magEnabled: true, params: { ki: 0 } } },
+    },
+    evidenceRuns: [
+      {
+        id: "B",
+        patch: { estimators: { mahony: { params: { ki: 0.05 } } } },
+      },
+    ],
+    evidencePredicates: {
+      "integral-removes-step": {
+        kind: "metric-compare-runs",
+        estimator: "mahony",
+        metric: "steadyRmse",
+        op: "lt",
+        run: "B",
+        otherRun: "A",
+        minDelta: 0.5,
+      },
+      "both-remove-step": { kind: "always-false" },
+      "larger-always-better": { kind: "always-false" },
+      "startup-only": { kind: "always-false" },
+    },
+    explanation:
+      "本题只证明一件事：在固定磁修正开启、零噪声、零偏 2°/s 的 20 s 窗口内，" +
+      "Ki=0.05 的稳态 RMSE 明显低于 Ki=0（实测降幅超过 1°）。这是积分项在起作用，不是噪声或初态差异。" +
+      "这里看的是 Mahony 的积分修正量（∫e），不是 ESKF 的零偏状态。" +
+      "补跑同一条件的 Ki=0.5，窗口稳态 RMSE 反而更低；这不支持无条件的『越大越好』。" +
+      "理论补充：理想连续时间、恒定零偏、无噪声、观测可观测且持续有效、Kp/Ki>0、未触及积分限幅时，局部稳定邻域内积分反馈可渐近消除零偏误差；" +
+      "不可观测轴没有此保证。可观测单轴的局部线性化是 θ̈+Kp·c·θ̇+Ki·c·θ=0（观测权重 c>0）：" +
+      "固定 Kp 与 c 增大 Ki 会降低阻尼，足够大时出现欠阻尼超调；噪声、延迟与离散采样还会影响稳定裕量。" +
+      "所以普适的无超调/振荡保证为假；本题 20 s 未实测振荡，也不把渐近归零当作窗口内已归零。",
+    doc: { page: "labs", anchor: "l-exercise" },
+    predictionHint: "问自己：积分项累加的是哪一段时间里的误差？",
+  },
+  {
+    id: "gimbal-lock-two-controls",
+    version: 1,
+    title: "锁点上的两个滑块",
+    prompt: "俯仰精确停在 90° 时，只把横滚设为 +60°（偏航 0）与只把偏航设为 −60°（横滚 0），得到的姿态是什么关系？",
+    conditionsText:
+      "先把「万向节锁」视图的俯仰拖到 90°，其余角为 0，比较横滚 +60° 与偏航 −60°；" +
+      "再运行实验「万向节锁的算法后果」（噪声归零、磁修正关闭），" +
+      "看互补滤波的峰值误差与 Mahony/Madgwick 的对比。",
+    answerKind: "single",
+    choices: [
+      {
+        id: "same-pose",
+        text: "同一姿态：锁点上横滚与偏航退化为同一个自由度，加速度计读数也相同",
+      },
+      { id: "different-120", text: "两个不同姿态，相差 120°" },
+      { id: "different-same-accel", text: "两个不同姿态，但加速度计读数相同" },
+      { id: "undefined", text: "欧拉角在 90° 处未定义，无法比较" },
+    ],
+    correctChoiceIds: ["same-pose"],
+    evidence: {
+      kind: "live",
+      experimentId: "lockAlgo",
+      estimatorId: "comp",
+      metric: "max",
+    },
+    // 纯几何题：锁点上横滚与偏航是同一自由度，不需要 runner 数值复算。
+    evidencePredicates: {
+      "same-pose": { kind: "always-true" },
+      "different-120": { kind: "always-false" },
+      "different-same-accel": { kind: "always-false" },
+      "undefined": { kind: "always-false" },
+    },
+    explanation:
+      "俯仰 90° 时内外环轴重合，横滚与偏航绕同一根轴，两个滑块控制同一个自由度，所以得到同一姿态。" +
+      "此时重力沿机体 x 轴，加速度计读数与横滚无关：互补滤波拿不到有信息量的横滚观测，" +
+      "姿态会被一路拽偏；四元数算法在锁点上只是停止修正、靠陀螺继续走，因此误差远小于互补滤波。",
+    doc: { page: "labs", anchor: "l-exercise" },
+    predictionHint: "先判断两个滑块转的是不是同一根轴。",
+  },
+  // 合理预测区间约 4–8°（240°/s × 0.025 s = 6°）。
+  {
+    id: "sensor-delay-omega-tau",
+    version: 1,
+    title: "延迟等于多少度",
+    prompt: "群延迟 25 ms、机动峰值角速度约 240°/s 时，纯陀螺积分误差峰值最可能落在哪个范围？",
+    conditionsText:
+      "实验「传感器群延迟」：延迟 25 ms，剧烈机动，初始姿态水平，算法选纯积分，零偏与噪声归零；" +
+      "读取误差曲线的峰值。",
+    answerKind: "range",
+    evidence: {
+      kind: "live",
+      experimentId: "sensorDelay",
+      estimatorId: "pure",
+      metric: "max",
+    },
+    evidencePatch: {
+      durationSec: 5,
+      scenario: "violent",
+      initialAttitude: { kind: "level" },
+      imu: { sensorDelayMs: 25, gyroBiasDps: 0, gyroNoiseDps: 0 },
+      estimators: { pure: { enabled: true } },
+    },
+    expectedRange: { min: 4, max: 8, unit: "°" },
+    explanation:
+      "积分用的是过时 τ 的角速度，而真值已经转过 ω·τ：240°/s × 0.025 s = 6°。" +
+      "这是延迟最干净的一阶结论；控制回路里它对应的就是被吃掉的相位裕度。",
+    doc: { page: "labs", anchor: "l-exercise" },
+    predictionHint: "先统一单位：°/s × s = °。",
+  },
+];
+
+/** 按 id 查活动（未知 id 返回 undefined，便于 UI 安全处理）。 */
+export function findLearningActivity(id: string): LearningActivity | undefined {
+  return LEARNING_ACTIVITIES.find((activity) => activity.id === id);
+}

@@ -1,0 +1,185 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-11-17T08:24:42.003Z",
+  "sourceCommit": "7d5cf97fdddfb9f25d660d199075a3ec84006d30",
+  "sourceDigest": "c3885d0af8c701c189fac78e580be168",
+  "distHash": "ddaaaefb993691e8",
+  "buildId": "c3885d0af8c7-ddaaaefb993691e8",
+  "note": "体积归因用的是一次**带 sourcemap 的独立重建**（dist-size/），不修改 dist/；chunk 级 raw/gzip 与 dist/ 同源同配置。",
+  "chunks": [
+    {
+      "name": "three-BuqgYaqT.js",
+      "file": "three-BuqgYaqT.js",
+      "kind": "vendor-three",
+      "raw": 529462,
+      "gzip": 128107
+    },
+    {
+      "name": "index-CcyKewD3.js",
+      "file": "index-CcyKewD3.js",
+      "kind": "main",
+      "raw": 180992,
+      "gzip": 67637
+    },
+    {
+      "name": "worker-core-DgI2KyHA.js",
+      "file": "worker-core-DgI2KyHA.js",
+      "kind": "main",
+      "raw": 108124,
+      "gzip": 37806
+    },
+    {
+      "name": "comparison-ui-CSbuJgV4.js",
+      "file": "comparison-ui-CSbuJgV4.js",
+      "kind": "main",
+      "raw": 51616,
+      "gzip": 18588
+    },
+    {
+      "name": "teaching-ui-CPyvFhg7.js",
+      "file": "teaching-ui-CPyvFhg7.js",
+      "kind": "main",
+      "raw": 49989,
+      "gzip": 16864
+    },
+    {
+      "name": "diagnostics-ui-Bv8ZS2ei.js",
+      "file": "diagnostics-ui-Bv8ZS2ei.js",
+      "kind": "main",
+      "raw": 48814,
+      "gzip": 16671
+    },
+    {
+      "name": "doc-demos-CEmQU2FO.js",
+      "file": "doc-demos-CEmQU2FO.js",
+      "kind": "lazy-doc-demos",
+      "raw": 18170,
+      "gzip": 7200
+    },
+    {
+      "name": "runner-DbSgkTir.js",
+      "file": "runner-DbSgkTir.js",
+      "kind": "shared-runner",
+      "raw": 10736,
+      "gzip": 4484
+    },
+    {
+      "name": "comparison.worker-CuUL7F1-.js",
+      "file": "comparison.worker-CuUL7F1-.js",
+      "kind": "worker-entry",
+      "raw": 2073,
+      "gzip": 1047
+    },
+    {
+      "name": "batch.worker-EkIaQQIg.js",
+      "file": "batch.worker-EkIaQQIg.js",
+      "kind": "worker-entry",
+      "raw": 1422,
+      "gzip": 727
+    },
+    {
+      "name": "app-shared-DXYVim0I.js",
+      "file": "app-shared-DXYVim0I.js",
+      "kind": "main",
+      "raw": 195,
+      "gzip": 154
+    }
+  ],
+  "mainAttribution": {
+    "groups": [
+      {
+        "group": "装配层(main.ts)",
+        "sourceBytes": 384589
+      },
+      {
+        "group": "场景渲染",
+        "sourceBytes": 70762
+      },
+      {
+        "group": "界面",
+        "sourceBytes": 27190
+      },
+      {
+        "group": "数据通路/存档",
+        "sourceBytes": 24183
+      }
+    ],
+    "topModules": [
+      {
+        "module": "main.ts",
+        "group": "装配层(main.ts)",
+        "bytes": 384589
+      },
+      {
+        "module": "scene/quatview.ts",
+        "group": "场景渲染",
+        "bytes": 28465
+      },
+      {
+        "module": "scene/gimbal.ts",
+        "group": "场景渲染",
+        "bytes": 19324
+      },
+      {
+        "module": "scene/setup.ts",
+        "group": "场景渲染",
+        "bytes": 14249
+      },
+      {
+        "module": "core/archive-ui.ts",
+        "group": "数据通路/存档",
+        "bytes": 14225
+      },
+      {
+        "module": "core/experiment-archive.ts",
+        "group": "数据通路/存档",
+        "bytes": 9958
+      },
+      {
+        "module": "ui/calib-panel.ts",
+        "group": "界面",
+        "bytes": 8036
+      },
+      {
+        "module": "scene/quad.ts",
+        "group": "场景渲染",
+        "bytes": 7014
+      },
+      {
+        "module": "ui/doc-search.ts",
+        "group": "界面",
+        "bytes": 5414
+      },
+      {
+        "module": "ui/ins-view.ts",
+        "group": "界面",
+        "bytes": 3986
+      },
+      {
+        "module": "ui/formula-copy.ts",
+        "group": "界面",
+        "bytes": 3379
+      },
+      {
+        "module": "ui/batch-table.ts",
+        "group": "界面",
+        "bytes": 2923
+      },
+      {
+        "module": "scene/labels.ts",
+        "group": "场景渲染",
+        "bytes": 1710
+      },
+      {
+        "module": "ui/canvas-util.ts",
+        "group": "界面",
+        "bytes": 1697
+      },
+      {
+        "module": "ui/mode.ts",
+        "group": "界面",
+        "bytes": 1003
+      }
+    ]
+  }
+}
