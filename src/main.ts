@@ -4965,6 +4965,18 @@ if (tocDisclosure) tocDisclosure.addEventListener("click", (e) => {
 });
 $("btn-docs").addEventListener("click", () => setDocsOpen(true));
 $("btn-docs-close").addEventListener("click", () => setDocsOpen(false));
+// 指针点击按钮后释放焦点：否则之后按空格会被浏览器原生"激活该按钮"吞掉——
+// 空格本应是全局暂停/继续，实际却重复点击了上次点过的 tab/按钮（如「俯仰」）；
+// 而且一旦按键，Chrome 会把该按钮升级成 :focus-visible，亮出焦点环。
+// 捕获阶段统一处理，按钮自己的 click 处理器不受影响；键盘激活
+// （Enter/Space，detail === 0）不移焦点，可访问性保持不变。
+document.addEventListener("click", (e) => {
+  if (e.detail <= 0) return;
+  const target = e.target;
+  if (!(target instanceof Element)) return;
+  const button = target.closest("button");
+  if (button instanceof HTMLElement) button.blur();
+}, true);
 window.addEventListener("keydown", (e) => {
   // Ctrl/⌘ + K：任何位置都能唤起文档搜索（文档层没开就顺便打开）
   if ((e.ctrlKey || e.metaKey) && (e.key === "k" || e.key === "K")) {

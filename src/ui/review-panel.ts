@@ -600,13 +600,6 @@ function makeButton(doc: Document, label: string, action: string): HTMLButtonEle
   button.type = "button";
   button.textContent = label;
   button.setAttribute("data-review-action", action);
-  // 鼠标点过的按钮会保留焦点，之后按空格将再次"激活"这个按钮（浏览器原生行为），
-  // 全局快捷键的空格就被吞掉——用户以为按的是暂停，实际在重复"上一帧/下一帧"。
-  // e.detail > 0 说明这次 click 来自指针；键盘激活（Enter/Space，detail === 0）
-  // 不移焦点，可访问性保持不变。
-  button.addEventListener("click", (e?: MouseEvent) => {
-    if ((e?.detail ?? 0) > 0) button.blur();
-  });
   return button;
 }
 

@@ -9,9 +9,9 @@
 ## 2026-11-20 · 悬停读数布局抖动、空格快捷键与样式收敛
 
 - **游标读数**：`#chart-cursor` 从 `display:none` 切换改为占位常驻（`visibility:hidden` + 一行 `min-height` + `nowrap/ellipsis`）。此前光标进入/离开曲线会让 body grid 增删一行，整个图表区反复上下跳；JS 与 `.hidden` 语义不变，冒烟断言无需改。实测 idle/hover/leave 三态 `#charts` 均为 y=480、h=357，读数行恒 31px。
-- **空格键**：鼠标点过「引导课程上一步/下一步」或回看面板步进按钮后，焦点留在按钮上，浏览器原生空格激活按钮，导致空格变成重复翻页而不是暂停。改为指针点击（`detail>0`）后 `blur()`；键盘激活（detail=0）保留焦点，可访问性不倒退。实测点下一步后 `activeElement=(none)`，空格暂停/继续且步骤号不变，Enter 仍可前进。
+- **空格键（两轮修复）**：第一轮只对引导课程上一步/下一步与回看步进按钮做 `blur()`，线上复测发现点过图表页签（如「俯仰」）后空格仍被原生激活吞掉，并触发 `:focus-visible` 焦点环。第二轮改为**全局捕获阶段规则**：指针点击（`detail>0`）命中任意 `<button>` 后统一 `blur()`，局部补丁撤回；键盘激活（detail=0）保留焦点。实测点「俯仰」后 `activeElement=BODY`、空格暂停/继续且 `aria-selected` 不变；点顶部「暂停」后空格恢复播放；Enter 仍可切 tab 且焦点保留。
 - **样式收敛**：删除 quat 视图/`.section-quat`/`#readout-overlay`/`.formula b` 重复规则；新增 `--bg-raised`、`--bg-chip`、`--danger-text`、`--doc-ctrl-bg/line` 并归并 `#eef2f8`、`#ffc9c4`、`#0b688a`、`#0a1120` 等字面量，零像素变化。
-- **验证**：`tsc` / `npm run check`（0 FAIL）/ `build` / `budget`（18/18，全部 JS 余 0.0 KB 贴线）通过；浏览器冒烟 app **108/108**、devices **21/21**，控制台零错误；截图存 `D:/test-artifacts/quaternion-attitude/smoke/designfix-verify/`。
+- **验证**：`tsc` / `npm run check`（0 FAIL）/ `build` / `budget` 通过（全部 JS 余 0.1 KB 贴线）；浏览器冒烟 app **108/108**、devices **21/21**，控制台零错误；截图与复测脚本存 `D:/test-artifacts/quaternion-attitude/smoke/designfix-verify/`。
 
 ## 2026-11-20 · 后续优化最终闭环：ed0f78fb 身份与全套本机证据
 

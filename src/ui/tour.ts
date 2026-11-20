@@ -191,17 +191,8 @@ export function mountTour(host: TourHost, steps: readonly TourStep[]): Tour {
     total: () => steps.length,
   };
 
-  // 指针点击后移除焦点：否则留在「上一步/下一步」上的焦点会抢走空格
-  // （浏览器原生：空格激活聚焦按钮），用户按空格想暂停却变成来回翻页。
-  // 键盘激活（detail === 0）不移焦点，可访问性不变。
-  nextBtn?.addEventListener("click", (e?: MouseEvent) => {
-    if ((e?.detail ?? 0) > 0) nextBtn.blur();
-    tour.next();
-  });
-  prevBtn?.addEventListener("click", (e?: MouseEvent) => {
-    if ((e?.detail ?? 0) > 0) prevBtn.blur();
-    tour.prev();
-  });
+  nextBtn?.addEventListener("click", () => tour.next());
+  prevBtn?.addEventListener("click", () => tour.prev());
   $t("tour-close")?.addEventListener("click", () => tour.exit());
   $t("tour-start")?.addEventListener("click", () => tour.start());
   docBtn?.addEventListener("click", () => {
