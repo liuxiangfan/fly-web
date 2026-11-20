@@ -11,6 +11,8 @@
   --bg-card: #0e1527;
   --bg-input: #131c33;
   --bg-hover: #1a2440;
+  --bg-raised: #0f1728;
+  --bg-chip: #0a1120;
 
   /* ---- 描边 ---- */
   --border: #1e2a47;
@@ -40,6 +42,7 @@
   --ok: #34d399;
   --warn: #fbbf24;
   --danger: #f85149;
+  --danger-text: #ffc9c4;
 
   /* ---- 圆角 ---- */
   --r-sm: 4px;
@@ -216,8 +219,8 @@ button:disabled { cursor: default; }
 .btn:disabled { opacity: 0.38; }
 
 .btn.primary {
-  background: #eef2f8;
-  border-color: #eef2f8;
+  background: var(--text);
+  border-color: var(--text);
   color: #0b1220;
   font-weight: 600;
 }
@@ -258,7 +261,7 @@ button:disabled { cursor: default; }
   gap: 6px;
 }
 .ov-chip {
-  background: #0a1120;
+  background: var(--bg-chip);
   border: 1px solid var(--border);
   border-radius: var(--r-md);
   padding: 5px 11px;
@@ -791,6 +794,21 @@ body:not([data-ab="on"]) #err-legend-b { display: none; }
 #charts[data-open-count="2"] .chart-block:not(.collapsed) canvas { height: 146px; }
 #charts[data-open-count="3"] .chart-block:not(.collapsed) canvas { height: 128px; }
 
+/* 游标读数常驻占位：光标离开时用 visibility 隐藏而非 display——
+   否则 body grid 少一行/多一行，整个图表区被反复顶上去（布局抖动）。
+   min-height 锁一行（空文本时只剩 padding 高，仍会跳）；nowrap + ellipsis
+   保证窄屏长读数截断而不是折成两行。JS 仍只切换 .hidden 类，冒烟断言不变。 */
+#chart-cursor {
+  min-height: calc(1.55 * 0.8571rem + 12px);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#chart-cursor.hidden {
+  display: block !important;
+  visibility: hidden;
+}
+
 /* ==========================================================================
    底栏
    ========================================================================== */
@@ -842,7 +860,7 @@ body:not([data-ab="on"]) #err-legend-b { display: none; }
   pointer-events: auto;
 }
 #view-seg-wrap .seg {
-  background: #0a1120;
+  background: var(--bg-chip);
 }
 
 /* ==========================================================================
@@ -881,10 +899,6 @@ body[data-telemetry="on"] #gravity-legend { display: flex; }
   border-left: 3px solid var(--accent);
   line-height: 1.5;
 }
-body[data-view="quat"] #quat-legend { display: flex; }
-body[data-view="quat"] #quat-legend-proj { display: none; }
-body[data-view="quat"][data-quat-mode="proj"] #quat-legend { display: none; }
-body[data-view="quat"][data-quat-mode="proj"] #quat-legend-proj { display: flex; }
 #quat-legend-proj {
   display: none;
   flex-direction: column;
@@ -941,7 +955,7 @@ body[data-view="attitude"] #mag-legend { display: block; }
 }
 #gimbal-status { line-height: 1.65; }
 #gimbal-status.warn {
-  color: #ffc9c4;
+  color: var(--danger-text);
   border-color: var(--danger);
   background: rgba(248, 81, 73, 0.18);
 }
@@ -983,7 +997,7 @@ body[data-view="attitude"] #mag-legend { display: block; }
   background: rgba(52, 211, 153, 0.13);
 }
 #gimbal-compare.warn {
-  color: #ffc9c4;
+  color: var(--danger-text);
   border-color: var(--danger);
   background: rgba(248, 81, 73, 0.18);
 }
@@ -1003,7 +1017,7 @@ body[data-telemetry="on"] .section-telemetry { display: block; }
   color: var(--text-dim);
 }
 .tel-status.warn {
-  color: #ffc9c4;
+  color: var(--danger-text);
   padding: 4px 8px;
   border: 1px solid var(--danger);
   border-radius: var(--r-sm);
@@ -1099,11 +1113,6 @@ body[data-view="quat"] .section-experiments,
 body[data-view="quat"] .section-magcal,
 body[data-view="quat"] .section-metrics { display: none; }
 
-body[data-view="quat"] .section-quat { display: block; }
-/* 四元数视图：保留左上覆盖层容器，但只显示四元数图例（其它读数 chips 与姿态视图无关） */
-body[data-view="quat"] #readout-overlay { display: flex; }
-body[data-view="quat"] #readout-overlay > .ov-chip:not(#quat-legend):not(#quat-legend-proj) { display: none; }
-
 /* ==========================================================================
    右侧面板：工具条 + 手风琴（信息密度分层）
    ========================================================================== */
@@ -1138,7 +1147,7 @@ body[data-view="quat"] #readout-overlay > .ov-chip:not(#quat-legend):not(#quat-l
   flex: none;
   border: 1px solid var(--border);
   border-radius: var(--r-md);
-  background: var(--bg-raised, #0f1728);
+  background: var(--bg-raised);
   padding: 7px 9px;
   font-size: 0.8214rem;
 }
@@ -1258,7 +1267,7 @@ body[data-view="quat"] #readout-overlay > .ov-chip:not(#quat-legend):not(#quat-l
   padding: 7px 10px;
   font-size: 0.8214rem;
   line-height: 1.65;
-  color: #ffc9c4;
+  color: var(--danger-text);
   border: 1px solid var(--danger);
   border-radius: var(--r-sm);
   background: rgba(248, 81, 73, 0.14);
@@ -1467,8 +1476,8 @@ body[data-imu-mode="real"] .section-experiments .hint::before {
   gap: 6px 26px;
   margin: 8px 0 2px;
   padding: 8px 10px;
-  background: #f4f7fb;
-  border: 1px solid #dbe3ee;
+  background: var(--doc-ctrl-bg);
+  border: 1px solid var(--doc-ctrl-line);
   border-radius: 6px;
 }
 /* 教材结论 → 运行按钮：数量多，必须换行 */
@@ -1489,13 +1498,13 @@ body[data-imu-mode="real"] .section-experiments .hint::before {
 }
 .dc-item input[type="range"] {
   width: 168px;
-  accent-color: #0b688a;
+  accent-color: var(--accent);
   cursor: pointer;
 }
 .dc-val {
   min-width: 92px;
   font-size: 0.8571rem;
-  color: #0b688a;
+  color: var(--accent);
   font-variant-numeric: tabular-nums;
 }
 /* 窄屏：文档演示的控制条改为上下排布，滑杆自适应宽度。
@@ -1640,8 +1649,8 @@ body[data-imu-mode="real"] .section-experiments .hint::before {
   font: inherit;
   font-size: 0.7857rem;
   color: #58667b;
-  background: #f4f7fb;
-  border: 1px solid #dbe3ee;
+  background: var(--doc-ctrl-bg);
+  border: 1px solid var(--doc-ctrl-line);
   border-radius: 4px;
   cursor: pointer;
   opacity: 0;
@@ -1649,7 +1658,7 @@ body[data-imu-mode="real"] .section-experiments .hint::before {
 }
 .formula:hover .formula-copy,
 .formula-copy:focus-visible { opacity: 1; }
-.formula-copy:hover { color: #0b688a; border-color: #0b688a; }
+.formula-copy:hover { color: var(--accent); border-color: var(--accent); }
 /* 触屏没有 hover：直接常显，否则手机上永远点不到 */
 @media (hover: none) { .formula-copy { opacity: 1; } }
 
@@ -1799,6 +1808,8 @@ body[data-imu-mode="real"] .section-experiments .hint::before {
   --on-accent: #ffffff;
   --shadow-card: 0 1px 2px rgba(15, 30, 60, 0.06), 0 1px 4px rgba(15, 30, 60, 0.05);
   --shadow-float: 0 6px 20px rgba(15, 30, 60, 0.12);
+  --doc-ctrl-bg: #f4f7fb;
+  --doc-ctrl-line: #dbe3ee;
 
   position: fixed;
   inset: 0;
@@ -2119,7 +2130,6 @@ body[data-imu-mode="real"] .section-experiments .hint::before {
   line-height: 1.9;
 }
 .fvars b { color: var(--text-dim); font-weight: 600; }
-.formula b { color: var(--accent); }
 
 /* ---- 图示与演示 ---- */
 .doc-fig {
@@ -2462,7 +2472,7 @@ body[data-imu-mode="real"] .section-experiments .hint::before {
   padding: 7px 9px;
   font-size: 0.7857rem;
   line-height: 1.6;
-  color: #ffc9c4;
+  color: var(--danger-text);
   background: rgba(248, 81, 73, 0.12);
   border: 1px solid var(--danger);
   border-radius: var(--r-sm);
