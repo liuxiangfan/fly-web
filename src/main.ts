@@ -5588,19 +5588,25 @@ if (import.meta.env.PROD && "serviceWorker" in navigator) {
     navigator.serviceWorker.register("/sw.js").then((registration) => {
       const banner = $<HTMLElement>("sw-banner");
       const button = $<HTMLButtonElement>("sw-update");
-      const showUpdate = (): void => {
-        if (navigator.serviceWorker.controller) banner.hidden = false;
+      // 横幅必须绑定 waiting worker 的真实存在：updatefound 在安装失败（→ redundant）时同样会触发，
+      // 那一刻把横幅挂上去就再也消不掉，点击也是空操作（2026-11-20 线上部署窗口实测踩中）。
+      const syncBanner = (): void => {
+        banner.hidden = !(registration.waiting && navigator.serviceWorker.controller);
       };
       button.addEventListener("click", () => {
-        if (!registration.waiting) return;
+        if (!registration.waiting) {
+          // 没有 waiting worker：静默无意义，主动重新检查一次更新（装成功横幅会再出现）。
+          void registration.update();
+          return;
+        }
         awaitUpdate = true;
         registration.waiting.postMessage("SKIP_WAITING");
       });
       registration.addEventListener("updatefound", () => {
-        showUpdate();
-        registration.installing?.addEventListener("statechange", showUpdate, { once: true });
+        registration.installing?.addEventListener("statechange", syncBanner);
+        syncBanner();
       });
-      showUpdate();
+      syncBanner();
       void navigator.serviceWorker.ready.then(preheat);
     }).catch(() => {
       /* SW 不可用不影响功能 */
