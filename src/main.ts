@@ -5591,20 +5591,20 @@ if (import.meta.env.PROD && "serviceWorker" in navigator) {
       // 横幅必须绑定 waiting worker 的真实存在：updatefound 在安装失败（→ redundant）时同样会触发，
       // 那一刻把横幅挂上去就再也消不掉，点击也是空操作（2026-11-20 线上部署窗口实测踩中）。
       const syncBanner = (): void => {
-        banner.hidden = !(registration.waiting && navigator.serviceWorker.controller);
+        banner.hidden = !registration.waiting || !navigator.serviceWorker.controller;
       };
       button.addEventListener("click", () => {
-        if (!registration.waiting) {
+        const w = registration.waiting;
+        if (w) {
+          awaitUpdate = true;
+          w.postMessage("SKIP_WAITING");
+        } else {
           // 没有 waiting worker：静默无意义，主动重新检查一次更新（装成功横幅会再出现）。
           void registration.update();
-          return;
         }
-        awaitUpdate = true;
-        registration.waiting.postMessage("SKIP_WAITING");
       });
       registration.addEventListener("updatefound", () => {
         registration.installing?.addEventListener("statechange", syncBanner);
-        syncBanner();
       });
       syncBanner();
       void navigator.serviceWorker.ready.then(preheat);

@@ -83,9 +83,10 @@ test("页面有 updatefound/controllerchange 接线与一次性 reload 守卫", 
 test("横幅严格绑定 waiting worker，点击发 SKIP_WAITING；无 waiting 时点击改为重新检查", () => {
   // 不变量：只有 registration.waiting 真实存在且有 controller 才显示横幅——
   // updatefound 在安装失败（→ redundant）时同样触发，旧写法会留下消不掉的僵尸横幅（2026-11-20 线上踩中）。
-  assert.match(swRegistration, /banner\.hidden = !\(registration\.waiting && navigator\.serviceWorker\.controller\)/);
-  assert.match(swRegistration, /registration\.waiting\.postMessage\("SKIP_WAITING"\)/);
-  assert.match(swRegistration, /if \(!registration\.waiting\)[\s\S]*registration\.update\(\)/);
+  assert.match(swRegistration, /banner\.hidden = !registration\.waiting \|\| !navigator\.serviceWorker\.controller/);
+  assert.match(swRegistration, /const w = registration\.waiting/);
+  assert.match(swRegistration, /w\.postMessage\("SKIP_WAITING"\)/);
+  assert.match(swRegistration, /\} else \{[\s\S]*void registration\.update\(\)/);
 });
 test("首次联网后在空闲时预热诊断与导出懒模块", () => {
   assert.match(swRegistration, /idlePrefetch[\s\S]*Promise\.allSettled\(\[/);
