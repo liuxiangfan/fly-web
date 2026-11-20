@@ -1150,15 +1150,26 @@ try {
   );
 
   // 界面文字档位：真实 select change → 根字号递增；课堂投影档在 320 px 下仍不得横向溢出。
+  // 慢机上 computed style 可能滞后一拍：每档先等到根字号**等于该档期望值**再读，等待不是放宽——
+  // 期望值 14/17/20 是硬判，等待超时即 FAIL。
+  const FONT_TIER_PX = { standard: 14, large: 17, xlarge: 20 };
+  const applyFontTierAndWait = async (tier) => {
+    await page.select("#font-tier", tier);
+    await page.waitForFunction(
+      (want) => parseFloat(getComputedStyle(document.documentElement).fontSize) === want,
+      { timeout: 15000 },
+      FONT_TIER_PX[tier],
+    );
+  };
   const fontTierSizes = [];
   for (const tier of ["standard", "large", "xlarge"]) {
-    await page.select("#font-tier", tier);
+    await applyFontTierAndWait(tier);
     fontTierSizes.push(await page.evaluate(() => parseFloat(getComputedStyle(document.documentElement).fontSize)));
   }
   await page.setViewport({ width: 320, height: 568, deviceScaleFactor: 1 });
   const narrowFontTiers = [];
   for (const tier of ["large", "xlarge"]) {
-    await page.select("#font-tier", tier);
+    await applyFontTierAndWait(tier);
     narrowFontTiers.push(await page.evaluate(() => ({
       tier: document.getElementById("font-tier").value,
       root: parseFloat(getComputedStyle(document.documentElement).fontSize),
@@ -1168,13 +1179,13 @@ try {
   }
   check(
     "界面文字档位：标准/大/特大根字号递增，320px 下大/特大无横向溢出",
-    fontTierSizes[0] < fontTierSizes[1] && fontTierSizes[1] < fontTierSizes[2] &&
+    fontTierSizes[0] === 14 && fontTierSizes[0] < fontTierSizes[1] && fontTierSizes[1] < fontTierSizes[2] &&
       narrowFontTiers.every((r) => r.root > fontTierSizes[0] && r.scrollW <= r.innerW),
     `根字号=${fontTierSizes.join("/")} px；窄屏=${narrowFontTiers.map((r) => `${r.tier}:${r.root}px,${r.scrollW}/${r.innerW}`).join("；")}`,
   );
 
   await page.setViewport(VIEWPORT);
-  await page.select("#font-tier", "xlarge");
+  await applyFontTierAndWait("xlarge");
   await page.reload({ waitUntil: "domcontentloaded", timeout: BOOT_MS });
   await page.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: BOOT_MS });
   const persistedFontTier = await page.evaluate(() => ({
@@ -1186,7 +1197,7 @@ try {
   check(
     "界面文字档位：刷新后保留特大档",
     persistedFontTier.selected === "xlarge" && persistedFontTier.dataFont === "xlarge" &&
-      persistedFontTier.root === fontTierSizes[2] && persistedFontTier.stored === "xlarge",
+      persistedFontTier.root === 20 && persistedFontTier.stored === "xlarge",
     JSON.stringify(persistedFontTier),
   );
 
@@ -1201,7 +1212,7 @@ try {
   check(
     "界面文字档位：非法 localStorage 值刷新后回退标准档",
     invalidFontTier.selected === "standard" && invalidFontTier.dataFont === "standard" &&
-      invalidFontTier.root === fontTierSizes[0],
+      invalidFontTier.root === 14,
     JSON.stringify(invalidFontTier),
   );
 
