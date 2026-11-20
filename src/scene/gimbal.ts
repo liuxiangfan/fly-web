@@ -87,7 +87,7 @@ const LABEL_COLOR = {
 const HUB_HEIGHT = 1.18;
 
 interface TintTarget {
-  mat: THREE.MeshStandardMaterial | THREE.MeshPhysicalMaterial;
+  mat: THREE.MeshStandardMaterial;
   base: THREE.Color;
   /** 死锁时的自发光强度基准 */
   baseEmissive: number;
@@ -113,15 +113,12 @@ export function buildGimbal(): GimbalRig {
 
   /** 环带：局部孔轴 +Z 的金属圈（带 + 两侧倒角亮边） */
   const makeBand = (radius: number, width: number, color: number): { obj: THREE.Group; mesh: THREE.Mesh; target: TintTarget } => {
-    const mat = new THREE.MeshPhysicalMaterial({
+    const mat = new THREE.MeshStandardMaterial({
       color,
       metalness: 0.45,
       roughness: 0.3,
-      clearcoat: 0.7,
-      clearcoatRoughness: 0.18,
       emissive: new THREE.Color(color).multiplyScalar(0.3),
     });
-    mat.envMapIntensity = 0.9;
     const holder = new THREE.Group();
     // 环带本体：圆柱侧壁（无顶盖），轴向沿 Z
     const bandGeom = new THREE.CylinderGeometry(radius, radius, width, 128, 1, true);

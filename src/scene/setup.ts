@@ -1,6 +1,5 @@
 import * as THREE from "three";
-import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
+import { OrbitControls } from "./orbit-controls";
 import { buildQuad, type QuadModel } from "./quad";
 import { buildGimbal, type GimbalRig } from "./gimbal";
 import { buildQuatView, type QuatViewRig } from "./quatview";
@@ -114,17 +113,9 @@ export function createScene(container: HTMLElement): SceneHandles {
   scene.background = new THREE.Color(0x030712);
   scene.fog = new THREE.FogExp2(0x030712, 0.032);
 
-  // 环境光照（IBL）：程序化房间环境 → PMREM。所有 MeshStandard/Physical 材质
-  // 自动获得反射与 ambient，金属件立刻有了「质感」——无需外部 HDR 文件。
-  // 无渲染器时跳过（PMREMGenerator 必须有 GL 上下文）；软件光栅化下 IBL 是纯像素成本，同样跳过
-  if (renderer && !lowEnd) {
-    const pmrem = new THREE.PMREMGenerator(renderer);
-    const envScene = new RoomEnvironment();
-    scene.environment = pmrem.fromScene(envScene, 0.04).texture;
-    scene.environmentIntensity = 0.35; // 深色舞台基调，反射作点缀而非主光
-    envScene.dispose();
-    pmrem.dispose();
-  }
+  // 统一使用下方的半球光与方向光，不创建 RoomEnvironment/PMREM。
+  // 房间 IBL 只提供金属反射点缀，却会把整个 PMREM 生成器及其渲染目标链打进产物；
+  // 教学所需的几何、姿态、材质和交互不依赖这层反射，移除后仍保留同样的 3D 演示。
 
   const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
   camera.position.set(1.9, 1.35, 2.4);
@@ -262,11 +253,6 @@ export function createScene(container: HTMLElement): SceneHandles {
 
   const controls = new OrbitControls(camera, canvasEl);
   controls.target.set(0, 0.9, 0);
-  controls.enableDamping = true;
-  controls.dampingFactor = 0.08;
-  controls.minDistance = 1.4;
-  controls.maxDistance = 10;
-  controls.maxPolarAngle = 1.65;
 
   // 基变换统一由 core/gimbal 提供，保证主视图与万向环演示严格同源
   const tmpOut = new THREE.Quaternion();

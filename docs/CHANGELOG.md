@@ -6,6 +6,196 @@
 >
 > 新增一轮里程碑时：在本文件顶部加一节（倒序），同步 PROJECT-STATE 的当前状态与验证入口。
 
+## 2026-11-20 · 后续优化最终闭环：ed0f78fb 身份与全套本机证据
+
+- 最终候选 `sourceDigest=ed0f78fb0e2f756be234f370b1954f11`、`buildId=ed0f78fb0e2f-fd379a47f3f6d9f4`、135 输入文件。tsc／完整 check／build 全绿；预算 19/19（产物总量余 0.0 KB、全部 JS gzip 余 0.1 KB，贴线不粉饰）。
+- 本机五轮 **129×5 全绿**（第三次尝试；第一次第 1 轮渲染进程被系统回收、第二次第 4 轮导航超时，均为环境类并如实保留记录）；三份 600 s 长稳全 PASS（教学水位 −0.984 MB、批量 +2.410 MB、重连 66/66 恢复 +8.348 MB）；性能 30.3 fps／输入 p95 5.910 ms／可交互 2424 ms；视觉 11 张逐图无异常、控制台 0；7 条新 current 通过 `evidence:verify` 三层绑定（索引 98 条、current 8 条）。
+- 第4点新增预测题按所有者要求未做；未提交、未推送、未部署。读屏范围外、硬件软件替身、GPU IBL 未实测边界不变；主包静态引用 teaching-ui 的边界已登记，留给后续结构专项。
+
+## 2026-11-20 · 后续优化阶段5：文字三档与离线/缓存更新韧性
+
+- **文字档位**：style.css 全部固定 px 字号迁移为 rem（14px 基准换算），`html[data-font]` 三档 14/17/20px；「显示与配色」分区新增三档下拉；`src/ui/preferences.ts` 提供白名单校验、localStorage 容错持久化（key `quat-demo:font-tier:v1`）、非法值回退标准档；偏好不入实验深链。Canvas 图表内 JS 绘制文字不随档位缩放，边界写入界面提示与 ACCESSIBILITY-ACCEPTANCE.md；不声称读屏验收。
+- **SW 更新协议**：移除 install 自动 skipWaiting，改为页面 `updatefound` 检测 + 持久横幅「发现新版本 · 重新加载以更新」，用户点击后才向 waiting worker 发 SKIP_WAITING，`controllerchange` 一次性 reload 闩锁防多标签重复刷新；CORE 预缓存失败不再吞错（核心未齐=安装失败）；旧缓存清理收窄到 `quat-demo-` 前缀；`build-provenance.json` 单独 network-first，杜绝旧缓存造成构建身份错配。
+- **离线预热零清单字节**：`serviceWorker.ready` 后空闲 `import()` 诊断与导出懒模块（不挂载不采样），首次联网访问后全部懒功能可离线使用；首次离线（从未访问）不承诺。懒加载失败 toast 补「若当前离线且该模块尚未缓存，请联网后重试」。
+- **预算抵消**：懒装配骨架/空闲预取/open 透传/状态芯片/重连收尾/校准面板公共前缀/fmtMeters 七组行为不变去重，抵消新增接线；19/19 预算通过且未抬上限（产物总量余 0.0 KB、全部 JS 余 0.1 KB，贴线已如实登记）。
+- **验证**：font-scale 契约 5/5、sw-resilience 契约 11/11；冒烟 **126→129**（app 108 + devices 21），两分片全绿。离线 reload 后真实生成报告/打开导出弹窗通过；更新用例用真实本地 HTTP 服务器换 `quat-demo-v5-next` 版 sw.js（Puppeteer route 截不到 SW 更新请求，未伪造），确认 waiting→用户确认→恰好一次 reload→新 SW 接管。postdeploy-smoke 新增 HTTP 溯源 buildId == 页面自报 buildId。截图：`visual/stage5-font/`（三档+320px）、`visual/stage5-sw/update-banner.png`，控制台零错误。
+
+
+
+## 2026-11-20 · 后续优化阶段3：可打印只读实验报告与 JSON 导入查看
+
+- 新格式 `quaternion-attitude-demo/experiment-report`（schema=1、restore="read-only"）：内嵌完整配置档案（过 `parseArchive`）、`events`（null=未开启采集，[]=已采集无事件，语义不混）、`comparison`（null=未创建对照；只读内嵌只做浅结构校验，不为查看器拖入整套对照校验器）、可空构建信息与固定中文口径说明。构造/校验拒绝非有限数值与循环引用，深拷贝防回写。
+- 面板（教学诊断分区新增「实验报告 / 导入报告」按钮）：生成 → 查看（构建、运行概况、五算法指标表、事件、对照、口径、完整档案 JSON）→ 导出 JSON / 打印；导入只读渲染同一视图，横幅明示「不应用配置、不改变当前运行」，deps 只有读取器，只读是结构性保证。打印走顶层 `#report-print-root` + `body[data-print="report"]`，与既有文档打印规则共存，afterprint 清理。
+- 结构减重与边界修复：CSV 导出弹窗抽为按需 `tools-ui` chunk（首次点击才下载，行为逐字不变）；`experiment-archive` 归入 app-shared，修复主包静态反向依赖 tools-ui/teaching-ui 的 chunk 边界问题；串口/BLE 重连话术与事件合并为 `scheduleTransportReconnect`（契约 7/7）；诊断按钮改表驱动。
+- 预算 18→19 项（新增 CSV 导出分类，零基线）；全部 JS 合计 gzip 实测新增约 2 KiB 后超有效线 2.0 KiB，所有者授权仅该项名义 **325→328 KiB**（有效 292.5→295.2），其余上限不动，归因写入 distbudget.mjs。
+- 新增契约 `experiment-report-contract` 9/9、`report-ui-contract` 9/9；冒烟 **121→123**（app 102 + devices 21），app 102/102 通过：生成→导出→只读导入往返→打印态→导入不改配置，非法 JSON 拒绝且保留原报告。面板与打印态截图存 `D:/test-artifacts/quaternion-attitude/visual/stage3-report/`，控制台零错误。最终身份与全套证据待阶段5后统一重采。
+
+## 2026-11-20 · 后续优化阶段2：误差尖峰→事件→历史帧→保守解释复盘导航
+
+- `seekEvidence(0)` 跳当前 runId 最大有限总误差帧，±1 取前后严格局部峰值（含全局最大点）；只选真实回看帧，无帧/NaN/Infinity/跨 runId 明确失败。`evidence()` 返回同帧 ±0.25 s 内同 runId 真实事件与提示，不推断故障根因。
+- 面板新增「最大误差 / 上一证据 / 下一证据 / 解读文档」与「证据事实 / 保守解释」区；补齐 `btn-diag-review/eskf/obs/events` 的真实主入口监听（此前 HTML 有按钮未接线）。
+- 冒烟 **120→121**（app 100 + devices 21），新用例走真实按钮：首帧 seq=30、下一证据=38、返回=30、同帧返回=true、事件窗口=true。复盘面板元素级截图存 `D:/test-artifacts/quaternion-attitude/visual/stage2-review/`，控制台零错误。
+
+
+
+## 2026-11-20 · 后续优化阶段1：主装配层与懒加载边界减重
+
+- 全部 JS gzip **296640→294905 B**，有效门槛 299520 B 不变，余量 **2880→4615 B**，超过 4 KiB；18 项分类预算全部通过。新候选 `sourceDigest=056916cd9100271bc844284b9b660e46`、`buildId=056916cd9100-2ad7628585092553`，10 个 JS、raw 983512 B。
+- 结构改动：轻量圆角几何、MeshPhysical→MeshStandard（去掉 clearcoat）、串口/BLE 重连编排去重、共享 errorText、四元数模式选择去重、runner/诊断动态入口具名化、文档演示与教学 UI 合并。未删除教学功能或测试、未抬预算。
+- 验证发现并修复真实回归：runner 与 DOM 演示合并时批量 Worker 误导入含 `document` 的 chunk，回退 main；立即将 runner 独立，DOM 演示与教学 UI 合并，最终批量 `mode=worker` 且 10 个种子完成。完整 120 项浏览器集合与完整 check 通过。
+- 阶段2～5继续按所有者顺序推进，新增预测题明确不做；未提交、未推送、未部署。
+
+## 2026-11-19 · 教学方案剩余项：F-05 事件闭环与 F-07 完整 P 矩阵
+
+- F-05：在传感器真实削顶分支新增可选 `gyroSaturated` 只读信号（不改变数值/随机流）；`EventRecorder` 增加饱和、重连、用户动作事件。串口/BLE 断流与重连 attempt/success/exhausted 来自真实状态机；参数改变、视图切换、实验装载进入同一时间轴。
+- F-07：`KalmanEstimator.diagFullP` 默认关闭；开启时在同一 `update()` 记录输入、预测、观测前后、最终共七处完整 6×6 P 独立副本，面板可展开；关闭时无 `pFull*` 字段且数值逐位一致。
+- 面板类别与标签同步扩为数据/参数/视图/装载；新增 `imu-saturation-contract` 3 项、`eskf-fullp-contract` 4 项；事件与遥测契约补正反例。
+- 冒烟清单 **117→120**（app 99 + devices 21）：app 真实触发饱和/参数/视图/装载，devices 假串口真实产生断流/重连/恢复；两分片新增用例首轮通过。README、应用内技术口径、PROJECT-STATE 数字同步。
+- 最终候选 `sourceDigest=b4894a076955df40cc3eea063d299f44`、`buildId=b4894a076955-a26ac90a3b9dce09`：120×5、三份 600 s、性能（31.1 fps／输入 p95 2.860 ms／取消 52.4 ms）、11 张逐图、尺寸与 strict 全部通过；7 条 current、93 条索引、125 输入文件。全部 JS gzip 296640 B、余 2880 B：预算通过，但 4 KiB 演进余量因新增功能回退，未删功能/抬线凑数。未提交、未推送、未部署。
+
+## 2026-11-19 · 第五次复核与真实结构减重：4 KiB 余量及本机证据闭环完成
+
+- 新增 [`TEACHING-REVIEW-FIFTH-2026-11-19.md`](TEACHING-REVIEW-FIFTH-2026-11-19.md)，保留 **84/100 暂定**基线，不因减重自动加分；第四次 `2d93cd3d…` 的五轮、三份 600 s、性能、视觉与 strict 证据保留为历史。
+- 全部 JS gzip **299442→295424 B**，有效上限 **299520 B** 不变，余量 **78→4096 B**，净省 **4018 B**。新候选 `sourceDigest=e90fe931c33d53fad2455d2650adcd92`、`buildId=e90fe931c33d-f56a3da77a48a479`，12 个 JS、raw 983509 B、尺寸采集无漂移。
+- 依赖与结构：移除 RoomEnvironment/PMREM 反射链（保留 3D 教学与灯光，但高质量 GPU 的 IBL 外观未实测）；以本地轻量轨道控制器替代完整 OrbitControls，保留旋转、平移、滚轮、捏合、阻尼、边界和 dispose；`createEstimators()` 统一主界面、A/B 与 runner 的五算法构造；`runner-ui.ts`、`learning-panel-ui.ts` 收窄动态入口，Worker 不反向引用 UI。
+- 新增 `orbit-controls-contract.test.ts` **6/6**，覆盖旋转半径、缩放上下限、平移、捏合、极角与解绑，并接入 `npm run contracts`。首次完整 check 因旧对照契约只接受直接 `core/runner` 失败；更新为接受 runner 或 runner-ui 后重跑 `tsc → check` 全部通过，仍禁止静态引入。
+- 直接动态 import 后挑选 runner 函数实测增加 138 B，已撤回；可观性入口裁剪无收益，不作为成果。新候选五轮 **117×5**、教学 600 s（119 样本／118 动作／9 真实换源）、批量 600 s（117 样本）、重连 600 s（122 样本／66/66 恢复）、性能、11 张实际逐图与 strict 全部通过；7 条新 current、125 输入文件，索引 86 条／current 8。专项停止，不再追求可选 8 KiB。未提交、未推送、未部署。
+
+## 2026-11-19 · 第四次教学复核整改：主要本机证据已完成
+
+- **冻结身份**：`sourceDigest=2d93cd3d5131d3eb6eeb9f594c4346c6`、`buildId=2d93cd3d5131-15c789e0829d1fe9`、`sourceFiles=121`；工作树未提交。本节记录已完成代码与当时证据边界，不重新评分、不改预算、不提交／推送／发布。
+- **真实换源量具**：`scripts/teaching-load.mjs` 调用生产 `replay.import()/stop()`，同时验证 `active false→true→false`、`simulation→replay→simulation`、回放 `idx>0`、`diagnostics.runId` 在导入与退出时推进，以及旧回看覆盖退出。`soak-teaching.mjs` 使用 `loadSchema: teaching-load/v2`，保存全部 `before/during/after`、错误与判定，不按动作名计数；导入／退出失败不计成功并阻止 PASS，解析器复核三阶段与汇总数量。
+- **取消与停载边界**：取消等待 pending 运行落定，记录 `settledMs` 和后续状态／jobId，检查旧 job 不回写。结束时退出回看、关 review／ESKF 采集并暂停生产解算，观察 2 s 静默；事件记录器没有独立停采开关，未测浏览器内部 Worker／timer／listener 数量，不能宣称全部资源已回收。
+- **旧证据保真**：旧假换源教学条目设 `current=false`、`measurementStatus=invalid-source-switch`，原报告及当时 PASS 保留，只用于容量／内存观测，不证明真实换源／跨 runId 隔离。视觉采集声明 `localOnly:true`，PNG／JSON 使用完整 digest、buildId、UUID 的独立路径并拒绝覆盖；本地 PNG 不等于干净 clone 可复核。丢失历史报告保留 `OBSERVED/unrecoverable`，未知覆盖者／覆盖时间成对 `null`，已知原 hash／前缀保留，不伪造完整 hash、时间或关联。
+- **Ki 命题**：固定 20 s、每组 n=10000，稳态 RMSE 为 Ki=0：`2.6304009092041056°`、Ki=0.05：`1.2794852075106424°`、Ki=0.5：`0.016280202313547803°`。承认 0.5 在本窗口更低；错误项改为“任何条件下越大越好且绝不超调／振荡”的普适保证，不再把成立的窗口比较判假；未实测大 Ki 振荡。
+- **Gate 同生产口径**：契约使用 `defaultExperimentConfig()` → gate 实验参数 → `buildComparisonPair()`，保留默认噪声、磁修正、启动 ramp 和五算法；20 s Mahony A/B RMSE=`15.243638770525585/12.52735392220622°`，Δ=`2.716284848319365°`，拒绝 `0/8272`，两侧峰值同为 `57.600488471779435°`、各 n=10000；只改窗口为 10 s 时 Δ=`0.6318548707614973°`。实验库／教材／claim／契约统一有限窗口结论，不宣称“贴地”或消除启动峰值。
+- **一轮 CSV 纯 core 拆分**：`src/core/csv-export.ts` 承担快照序列化，装配层保留 DOM／元数据／下载；逐字节格式、源／消费快照、四元数、列开关与回放语义由 schema **106 PASS / 0 FAIL** 守护。全部 JS gzip before **299474 B** → after **299442 B**，有效上限 **299520 B**，净省 **32 B**、余 **78 B**；恢复至少 **4 KiB（4096 B）余量**的目标未达，仍差 **4018 B**。已停止机械拆分，不抬线、不删功能；历史减重目标不改写为完成。
+- **验证与待采**：既有磁盘回执记录 `tsc → check（155 项基础检查＋全契约 0 FAIL）→ build → budget（18/18）` 通过。28 s v2 短测 PASS、2 次真实换源，身份为前一构建 `e37334ff8259ef8dd87b3f48c051588c`／`e37334ff8259-cb4f57353a05173b`，不贴本轮摘要、不替代 600 s。本次回填已核正式报告 `docs/generated/soak-teaching-600-2d93cd3d-fourth.json`：最终冻结构建教学 600 s **PASS**，117 样本、116 动作、9 次真实三阶段换源（during.idx=`[20,15,18,18,3,18,18,17,16]`，runId 2→3→4 至 18→19→20）、11 次取消落定且 300 ms 后同 job 未回写（settled 0.5–1.3 ms），控制台／动作错误 0；elapsed=600088 ms、maxGap=7056 ms、同 run 时钟推进约 355.694 s，reviewMax=750、eventMax=512、stopQuiesced=true；heapGrow≈2.472325 MB、peakGrowth≈26.810391 MB、trend≈3.445764 MB、tail PASS、未豁免。五轮 117 项稳定性、性能、11 张视觉采集、批量／reconnect 600 s 与 strict 新绑定随后全部通过，本机冻结候选证据闭环完成。详细状态与回执路径见四次复核第 9 节。
+
+- **视觉实际复核**：早期父代理和原生看图代理 Read 返回 `Media omitted`／`selected model does not support image input`，保留为过程记录。后续图像输入成功，已 Read 实际查看 11 张新截图：桌面、320/390/768、200% 缩放、三视图、文档及打印均未见意外重叠、横向溢出或空白画布，控制台 0。这是模型视觉检查，不扩大所有者逐图确认或读屏通过，未向外部视觉服务发送截图。
+- **最终重采编排**：串行 runner 已安排；首次 `_ops/` 辅助 runner 仅发生 Windows ESM `d:` 导入路径错误，已改 `pathToFileURL`，未改产品源码，不计产品失败或测试通过。教学 600 s、五轮 117 项、性能与截图随后通过，批量／重连与 strict 仍在收尾。
+
+## 2026-11-19 · 文档整合：删除冗余质量快照与临时治理方案
+
+- 删除 `QUALITY-STATUS.md`、`QUALITY-SOFTWARE-ONLY.md`、`CLEANUP-AND-REVIEW-2026-11-18.md`。
+- 删除依据：三者分别只是 2026-11-03／11-05 的旧质量快照和已被四次复核修正的临时治理方案；结论、日期、修正关系已整合进 `QUALITY-AUDIT-HISTORY.md`，正式报告与原始证据未删除。
+- `QUALITY-AUDIT-HISTORY.md` 增补 95/93/87 分的历史定位与 Git 原文入口；README、PROJECT-STATE、验证与实施方案的链接同步更新。
+- 教学二次/三次/四次复核、教学规格、FIX 计划、C/D 决策、性能与可访问性记录继续保留；它们承担不同的规格、决策或反例职责。
+
+## 2026-11-19 · 测试现场统一迁入 D 盘
+
+- 新增 `scripts/test-artifacts.mjs`：默认根 `D:/test-artifacts/quaternion-attitude`，按 kind 分目录；每任务 `mkdtemp` 独立 profile；`cleanupArtifactDir` 尽力清理（Windows 占用只告警）。不修改全局 `TEMP`，不回退 C 盘。
+- 接线：`browser-smoke`（含失败候选清理）、`soak`、`soak-teaching`、`evidence-contract`、`size-report`（带 sourcemap 的重建改到临时目录，退出即删）、`register-ci-run`（下载产物退出即删）、`perf-report`、`visual-evidence`、`perf-probe`、`postdeploy-smoke`、`shot`；`hw-soak` 的 profile 为保留原生设备授权而保留，但迁到 D 盘。
+- 冒烟生命周期：主动重建浏览器（10 标签页）时同时删除**旧 profile**（实测一次重建留 24 MB）；失败候选 profile 在候选尝试结束后延迟补删；候选顺序改为 Chrome 优先（本机 Edge 启动失败会 relaunch 重建 profile）。修复后 app 97/97 + devices 20/20，D 盘 `smoke/` 为空且无残留进程。
+- 反例：`evidence-contract.test.mjs` 新增 4 项（默认根、环境变量覆盖、任务独立、幂等清理）。`size-report` 重跑后 D 临时目录为空，报告与证据索引重新登记，严格 `evidence:verify` 通过。
+- 旧残留迁移与删除：从 C 盘迁出 755 个 smoke/evidence-contract 目录与 11 个 Puppeteer 默认 profile；24 个 smoke profile 与 2 个 Puppeteer 默认 profile 仍被旧浏览器进程占用，已跳过。`_migrated-c-temp/` 约 19.3 GiB 可再生测试现场经所有者授权后已删除，D 盘可用空间由 61 GB 增至 81 GB；`_ops/` 保留少量迁移/盘点报告。
+- 自动清理：`pruneTestArtifacts()` 默认清除白名单 kind 下超过 24 h 且未被占用的单任务目录；新目录、活跃/查询失败目录、`_migrated-c-temp/`、`_ops/`、`hw-soak/` 均保留。新增 2 项反例，测试现场契约共 6 项；根目录 `AGENTS.md` 明确模型对这些临时目录的自主删除授权与保留边界。
+- 边界：浏览器安装、npm/Node 全局缓存与其他工具私有临时目录不归本项目控制；全局 `TEMP` 未改。
+
+## 2026-11-17 · TEACHING-FIX：FIX-01～FIX-13 完成
+
+- 按 [`TEACHING-FIX-PLAN.md`](TEACHING-FIX-PLAN.md) 执行，未触碰 FIX-14～17（人工决策项），未改任何既有预算上限/数值门槛。
+- 教学正确性：五道预测题改为题面条件 patch + 实测证据判定（选项题不再只看自报文本）；证据运行贯穿 `shouldCancel`；ESKF 重置雅可比改为 `I − ½[δθ̂]×` 并用反例锁定；固定增益/奇异更新区分 `applied / accepted-not-applied / rejected / invalid / disabled / unrecorded / not-applicable` 与原因码；回看帧保留观测状态；事件时间轴记录五算法独立边沿；对照报告 stale 随现场配置版本传播；对照表补 SO(3) 倾角/偏航、接受率与覆盖说明。
+- 教材闭环：`learning-claims` 注册表 + `claim-links` 渲染动作；预测 claim 载入活动、对照 claim 固定基线并选变量；任务条显示「返回教材」，恢复页/锚点/滚动/触发焦点；学习结果区可导出 JSON（活动 id/version、预测、证据、判定、反思）。任务条监听改到冒泡阶段，重置标记只活到本次派发微任务，程序化装载合并为一条反馈。
+- 浏览器：新增对照完整路径（完成→改参数 stale→重跑→导出→应用 B）、学习完整路径（预测→证据→verdict→反思→导出）、回看完整路径（进入→帧含观测状态→上/下一帧→返回实时）、claim 往返四条用例；清单 111→115（app 91→95）。
+- FIX-13 根因：首步并非单纯冷加载，而是 `data-imu-mode` 从未在首屏写入，测试等 8 s 后标题已出现却仍卡在 `imuMode === "sim"`。生产启动时显式写初始模式；冒烟首步/重开首步 8 s、其余 3 s 有界等待。完整集合 115/115。
+- 体积（全部为构建/分组优化，未抬既有门槛）：诊断 UI 独立按需 chunk（新增 64 KiB 预算行，实测 47.6 KiB），对照台/预测学习再拆两个按需 chunk；四个目录 JSON 改紧凑序列化（约 −5.8 KB 总产物）；构建期压缩 `public/sw.js`（约 −0.8 KB gzip）；HTML 构建压缩补可选标签/冗余属性清理。
+- 模块契约：learning-activity 17、learning-panel 17、comparison-report 18、comparison-ui 16、review-buffer 17、review-eskf-ui 21、telemetry-diagnostics 14、estimator-diagnostics 33、catalog 27 全绿；`npm run check` 通过。
+- 最终源码 `f82d5ede…`（119 个输入文件）重采：5×115 浏览器全绿；批量 600 s（116 样本、水位 1.1 MB／峰值 24.4 MB／趋势 11.3 MB）与重连 600 s（66/66 恢复、水位 5.4 MB／峰值 25.5 MB／趋势 16.7 MB）均 PASS；视觉 11 张控制台 0 错误；性能 55.6 fps、输入 p95 1.3 ms、timer p95 15.6 ms；严格 `evidence:verify` 绑定 build `f82d5ede2e01-49c661cb…` 通过。
+
+## 2026-11-18 · 三次复核 TR-01～TR-06 整改
+
+- **量具先修（TR-06）**：`size-report.mjs` 改为从 `dist/` 根目录扫描全部 JS（含 `sw.js`），分类与 `distbudget.mjs` 同口径，chunk 数字取自 `dist/` 而非带 sourcemap 的 `dist-size/`，并输出 `totals.gzipSum`；新增两项预算契约锁住「同口径 + 全目录 + 总和可对账」。
+- **真实缺陷修复**：换源（sim → replay → sim）时 `state.source` 可能指向已被重建掉的算法，`selectedQ()` / `sourceLabel()` / `sourceColor()` / 闭环反馈对 `ests.find(...)` 直接取属性会抛 `TypeError` 并**打断仿真步**。新增 `sourceEstimator()` 统一回退，换源循环控制台零错误。
+- **TR-01**：Ki 题正确项/错误项与解释全部限定在 20 s 窗口，长期归零与大 Ki 振荡显式标为「理论补充、本题未实测」；新增契约禁止再写「台阶最终归零」。
+- **TR-02**：门控 claim 增加 `expectation`（20 s 窗口、Mahony、RMSE、最小改善 2°、拒绝下限 100），claim 通过 `setWindow()` 让两侧同窗口；浏览器用例真实跑完 A/B 并核对改善与拒绝事件（实测 15.24° → 12.53°，B 侧拒绝 8272）。教材「曲线贴地」与实测不符，改为「20 s 内约 15.2°→12.5°，短窗口看不出差别」，并加契约把教材数字钉在 runner 实测上。
+- **TR-03**：新增历史 Inspector 深层用例：两帧内部量不同、回上一帧一致、缺快照明确提示、退出回看后实时快照恢复且时间不等于历史。
+- **TR-05**：教学负载加入周期性换源与停采静默判据（停采 2 s 内回看/事件不得新增）；证据解析器同步要求 `stopQuiesced` 与 `sourceSwitches`。
+- **减重（未抬门槛）**：comparison-ui 并入教学按需 chunk、观察状态标签与算法名表去重、`observationEvidenceText` 共享、claim 数据移入 HTML 属性、教材文案压缩。
+- 最终源码 `027b2d0c…` 重采：5×117 全绿；批量 600 s（115 样本、峰值 26.7 MB）、重连 600 s（66/66 恢复、峰值 26.5 MB）、教学 600 s（236 次动作含 11 次换源、回看 643 帧、事件 512 封顶、停采静默）均 PASS；视觉 11 张零错误；严格 `evidence:verify` 绑定 8 条 current 证据通过。
+- **未达标**：JS 余量仅 46 B，远低于工单要求的 2–4 KiB。已尝试合并三个 lazy chunk（省 681 B 但会使教学行超限）、多轮去重与文案压缩；进一步只能改 `main.ts` 结构或删教学语义，前者超出最小修复范围、后者在禁止清单内。按 P4 停止并报告，未抬线。
+
+## 2026-11-17 · 教学二次复核 TQ-01～TQ-09 整改
+
+- **TQ-01 固定条件隔离**：新增 `teachingBaseConfig()`（固定种子/水平初态/全 IMU 归零/校准清空/估计器默认关闭），学习面板不再读取现场 `currentConfig()`；漂移/延迟/Ki 题不再被现场随机初态、随机游走、带宽等污染。
+- **TQ-02 倾角证据**：偏航题改为 A=倾角 30° 正常修正、B=同倾角 Kp=Ki=0、C=纯偏航 30°；判据用 A/B 的 tiltRmse Δ≥20°，C 的 yawRmse≥10°；Kp=Ki=0 负例不能通过。
+- **TQ-03 Ki 条件**：固定磁修正开启、零噪声、20 s 窗口；判据 B<A−0.5°，磁关微小下降（Δ≈0.04°）不能通过；说明区分 Mahony ∫e 与 ESKF 零偏，只承诺窗口内下降。
+- **TQ-04 claim 基线**：claim 增加 `baselineExperimentId`；方向门控 claim 先装载 `gate` 实验（linAccel=4、violent），再关 A 侧门控、冻结并选 `accel-gate`；浏览器断言实验注释与 linAccel。
+- **TQ-05 历史同源**：回看帧驱动观测面板与 ESKF Inspector（时间/遥测/真值/快照同帧）；历史缺快照明确缺失、不回退实时；实时快照绑定采集时刻；回看锁定后鼠标离开不清游标，曲线/键盘选择交给回看控制器。
+- **TQ-06 证据绑定**：attempt 绑定有序 `evidencePlan`（全部 runId+digest）与各侧 `runResults`；错侧摘要、缺各侧结果拒绝；学习记录导出包含计划与结果。
+- **TQ-07 教学长稳**：新增 `scripts/soak-teaching.mjs --teaching --seconds=600`，持续驱动回看/事件/ESKF/学习/对照；证据类型 `software-soak-teaching`；600 s 实测 237 次动作、回看 677 帧、事件 512 封顶、堆峰值增量 31.0 MB、零动作失败。
+- **TQ-08 证据治理**：旧 CI/部署条目降为历史 scope；视觉截图按 sourceDigest 命名；历史像素覆盖记录 `pixelsOverwrittenBy` 并校验引用；当前视觉条目按本地截图事实标 `localOnly`。
+- **TQ-09 体积**：未抬门槛。claim 数据移到 HTML data 属性、教材文案去重、doc-demos 并入 comparison chunk、字符串压缩；18 项预算通过：allJS 292.5/292.5 KiB（余 0.0）、教学 114.6/129.6、总量 2028.1/2029.5（余 1.4）。余量已归零，后续功能必须先做等量减重。
+- 最终源码 `8ec6c458…`（119 个输入文件）重采：5×115 全绿；批量 600 s（116 样本、水位 1.7 MB／峰值 27.3 MB／趋势 5.4 MB）、重连 600 s（66/66 恢复、水位 4.0 MB／峰值 27.5 MB／趋势 17.0 MB）、教学 600 s（237 次动作、回看峰值 750 帧、事件 512 封顶、峰值 37.5 MB）均 PASS；视觉 11 张控制台 0 错误；性能 52.7 fps、输入 p95 4.7 ms、timer 12.4 ms；严格 `evidence:verify` 绑定 build `8ec6c4584dbd-b1dd9ecc…` 的 7 条 current 证据通过。
+- 验证：tsc、contracts、check、build、budget、115/115 浏览器通过。
+
+## 2026-11-17 · 人工项决策与 FIX-17 整改
+
+- 项目所有者明确：**不需要读屏功能**，FIX-14 标记为范围外；**人工视觉确认功能正常、无问题**，FIX-15 以所有者确认作为本阶段视觉验收。
+- FIX-17 复核五题（正确/错误预测、种子扫描、初始姿态扫描）后发现并修复：
+  - 漂移题未钉初始姿态，现场随机初始偏差会把峰值从 19.83° 拉到 41–47°，正确区间 15–25° 会被判错；固定 `initialAttitude: level`。
+  - 偏航不可观题用随机初始姿态，60 个种子里 18 个 yaw RMSE < 10°，正确选项会被判错；改为固定纯偏航 30°（yaw 31.92° / tilt 0.99°）。
+  - 延迟题未钉初始姿态，随机偏差会把峰值从 6.02° 拉到 34–37°；固定 `initialAttitude: level`。
+  - Ki 题解释补“20 s 窗口内只从 2.67° 降到 1.50°，完全归零更慢”，避免把渐近结论说成已归零。
+  - 锁点题题面明确“横滚 +60°（偏航 0）与偏航 −60°（横滚 0）”，消除歧义。
+- 五题正确预测全 `consistent`、典型错误预测全 `inconsistent`、控制台零错误；偏航题 60/60 种子稳定，三道数值题不再受现场初始姿态影响。
+- 最终源码 `b3e5ec06…`（119 个输入文件）重采：5×115 全绿；批量 600 s（117 样本、水位 12.0 MB／峰值 22.6 MB／趋势 11.6 MB）与重连 600 s（66/66 恢复、水位 4.1 MB／峰值 26.9 MB／趋势 13.6 MB）均 PASS；视觉 11 张控制台 0 错误；性能 53.5 fps、输入 p95 6.1 ms、timer 14.5 ms；严格 `evidence:verify` 绑定 build `b3e5ec06dc8c-ac150cb9…` 通过。
+
+## 2026-11-17 · 教学小项：双任务模型统一、回看游标、claim 扩容
+
+- **双任务模型统一**：`task-context.ts` 的偏离判定抽成 `deviatingIds()`，生产 `task-strip.ts` 直接调用；`TaskKind` 与 `TaskDescriptor` 改为复用 `task-context` 的类型，新增 `learning` 任务类型。偏离策略不再有两份实现，task-context 也不再是只在测试里出现的死代码。
+- **回看游标同步**：`ReviewPanelDeps` 新增 `setCursor`，进入回看/上一帧/下一帧把三张曲线与 IMU 的共享游标定位到帧时间，退出回看清空；3D 与面板文本之外现在也覆盖曲线。契约测试新增「进入/上一帧/下一帧/退出」游标序列断言。
+- **claim 扩容**：注册表从 3 条扩到 13 条，新增 10 条 `run-experiment` 覆盖实验索引里的主要结论（振动、磁干扰、Q/R、万向节锁、锁点算法后果、Slerp vs 欧拉、4D 双重覆盖、群延迟、量程饱和、解算频率）；`claim-links` 新增实验装载动作，浏览器 claim 往返用例同时验证预测/实验/对照三条动作。
+- 体积：为容纳任务模型共享代码，课程 chunk 并入教学按需 chunk（课程仍空闲预取，减少一份 gzip 字典）；claim 错误提示去重。18 项预算仍全过，allJS gzip 292.4 KiB（有效 292.5）。
+- 验证：`tsc`、`check`、`build`、`budget`（18/18）通过；浏览器完整集合 **115/115**。
+- 最终源码 `c3885d0a…`（119 个输入文件）重采：5×115 全绿；批量 600 s（117 样本、水位 4.8 MB／峰值 25.5 MB／趋势 9.3 MB）与重连 600 s（66/66 恢复、水位 4.5 MB／峰值 25.1 MB／趋势 16.8 MB）均 PASS；视觉 11 张控制台 0 错误；性能 51.3 fps、输入 p95 3.8 ms、timer 15.6 ms；严格 `evidence:verify` 绑定 build `c3885d0af8c7-ddaaaefb…` 通过。
+- 归档说明：上一轮 `f82d5ede` 的截图目录按 commit 命名，被同一 commit 的新一轮采集覆盖；报告 JSON 保留，索引以 `pixelsOverwritten` 标记像素哈希不可复核，当前证据仍逐像素校验。
+
+## 2026-11-16 · WP-03 A：消除确定重复渲染与 DOM 写
+
+- 按 [`WINDOWS-PERFORMANCE-OPTIMIZATION-PLAN.md`](WINDOWS-PERFORMANCE-OPTIMIZATION-PLAN.md) §6 A 执行：canvas 位图尺寸未变不重设、RollingChart revision 脏绘制、INS 关闭占位缓存、telemetry detail／评测表内容去重、非万向节视图不刷新万向节 DOM；新增确定性 `uiWork` 计数出口。
+- 对照：暂停 5 s 时两条展开曲线各 46 次 render 调用 → 46 次跳过、0 次实际绘制；评测表 10 次刷新 → 0 次写 DOM；恢复播放后曲线恢复实际绘制、评测表按需写入。
+- 最终源码 `e28609cc…` 重采 5×111、两份 600 s 长稳、视觉 11 张、性能与严格证据；全部通过。
+
+## 2026-11-16 · C/D 接线 P2：一次性有归因调线并接线完成
+
+- 项目所有者选择 P2；按 [`CD-WIRING-DECISION-PLAN.md`](CD-WIRING-DECISION-PLAN.md) §4 执行。
+- 三项上限同一提交内一起调整，其余门槛不动：
+  - 全部 JS gzip：300 → **325 KiB**（有效 292.5；实测 285.7，余 6.8）
+  - 教学交互 chunk raw：128 → **144 KiB**（有效 129.6；实测 123.9，余 5.7）
+  - 产物总量 raw：2200 → **2255 KiB**（有效 2029.5；实测 2023.3，余 6.2）
+- 冻结基线同步改为新起点（total 2020 / allJsGzip 285 / 教学 chunk 124 KiB）；注释写明增量来自 C/D 四块、只覆盖本次功能、后续新功能不得沿用；SW-09 的 244.8 KiB 目标保留为未达成历史记录。
+- C/D 已正式接线：`src/ui/telemetry-diagnostics.ts` 在打开「玻璃盒」分区时按需创建可观性、事件时间轴、历史回看、ESKF 单步四个面板；回看记录与 ESKF 采集各有显式开关；回看只覆盖 3D 展示四元数，不写回估计器/世界/统计。
+- 接线同时保留 P1 发现的正确性修复：`worker-core` 共享纯数值内核（comparison Worker 不再引用教学 UI）、懒加载 chunk 不进首屏 preload、共享转义模块。
+- 验证：tsc / check / build / budget（17/17）通过；浏览器完整集合 **111/111**（app 91 + devices 20），五轮 5×111 全绿；两份 600 s 长稳、视觉 11 张、性能与严格 `evidence:verify` 通过（源码 `16763af4…` / 构建 `16763af43b23-0291a27…`）。
+
+## 2026-11-16 · C/D 接线 P1：实测失败并撤回
+
+- 按 [`CD-WIRING-DECISION-PLAN.md`](CD-WIRING-DECISION-PLAN.md) 执行 P1（接线＋归因＋一轮减重，不动预算）。
+- 实测：全部 JS gzip 269.3 → 285.3 →（一轮减重后）285.1 KiB（有效门槛 270）；总产物 1970.2 → 2019.8 → 2020.4 KiB（有效门槛 1980）；教学按需 chunk 112.5 → 159.2 → 123.8 KiB（有效门槛 115.2）；主包 87.3→88.5→102.0 KiB gzip，仍在门槛内。
+- 归因与减重：抽出共享转义模块；发现并修复“教学 chunk 误拖 doc-search / experiment-config”与“comparison Worker 反向 import 教学 UI”；抽出 `worker-core` 共享纯数值内核；过滤懒加载 chunk 的 modulepreload；`preserveEntrySignatures:false` 实测无收益。
+- 结论：一轮减重后仍缺全部 JS 15.1 KiB、总产物 40.4 KiB、教学 chunk 8.6 KiB；缺口来自 C/D 净新增代码，继续减只能删功能/删测试/改门槛，按 §3.4 判定 P1 失败。
+- 接线代码已撤回，C/D 模块与契约保留为未接线资产；保留上述通用结构改进后，A/B 形态重新全绿（109 项浏览器集合）。等待在 P2（有归因调线）/ P3（缩减范围）/ P4（回退）中明确选择。
+
+## 2026-11-16 · 教学交互阶段 A/B：对照台与预测练习
+
+- 新分支 `feat/teaching-interaction-ab`。动机与完整规格见
+  [`TEACHING-INTERACTION-EXPANSION-PLAN.md`](TEACHING-INTERACTION-EXPANSION-PLAN.md)。
+- **单变量对照台**：冻结同一配置与 seed，A/B 两次独立完整运行，只改变声明变量；
+  Worker 优先、主线程异步降级，取消/旧 job/交换/应用 B 全部有隔离与契约。
+  首批变量：方向门控、磁修正、解算频率、传感器延迟、卡尔曼观测噪声。
+- **预测—验证式学习**：5 道题从 `public/data/activities.json` 按需加载；先锁定预测，
+  再用固定 5 s 的 runner 复算作证据；失败/取消不泄露解释，无样本不补 0。
+- **任务条与参数反馈**：装载实验/挑战显示固定条件、变量、观察与下一步；
+  实际 `resetSim()` 才显示“已重置”，程序化装载不制造用户修改提示。
+- **结构性减重（未抬原有上限）**：共享 Worker 入口 + 按需 runner，消除 Worker 重复打包；
+  实验/挑战/引导/活动数据外置 JSON；构建期 HTML 压缩；terser 模块级压缩；
+  按需教学 UI 合并；全部 JS gzip 从 268.2 KiB 降到 269.2 KiB 的同时新增了 A/B 功能
+  （相对旧版本净增 1.0 KiB，仍低于 270 KiB 有效门槛）。
+- **C/D 已完成纯逻辑与 UI 契约但未接线**：可观性、事件时间轴、历史回看、ESKF 单步解剖的
+  模块与测试已存在；接线实测需额外约 15.8 KiB JS gzip，超过当前预算，等待明确决策。
+- 本分支尚未重采长稳/视觉/性能/CI 证据；`PROJECT-STATE` 已把旧冻结证据标为旧源码，不混用。
+
 ## 2026-11-07 · CI 首轮双绿
 
 - 软件渲染下关闭 GPU watchdog（SwiftShader 慢会被 watchdog 当挂起杀掉），并让工作集探针记录趋势；提交 `b12b832` 的 `CI`（gate、app 87/87、devices 20/20）与 `Deploy`（verify、smoke-suite）**首轮全部通过**，未使用重跑。
@@ -58,7 +248,7 @@
 
 按 [`SOFTWARE-IMPROVEMENT-PLAN.md`](SOFTWARE-IMPROVEMENT-PLAN.md) 实施软件工单；范围只含软件、只针对 Windows 本机。
 每一项都以"复现的反例变成常驻测试"为完成标志，未完成的部分逐条写在
-[`PROJECT-STATE.md`](PROJECT-STATE.md) 与 [`QUALITY-SOFTWARE-ONLY.md`](QUALITY-SOFTWARE-ONLY.md) 里（重评 93/100）。
+[`PROJECT-STATE.md`](PROJECT-STATE.md) 与当时的软件质量评估里（重评 93/100，现见 [`QUALITY-AUDIT-HISTORY.md`](QUALITY-AUDIT-HISTORY.md)）。
 
 **正确性与异常安全（SW-01～SW-05）**
 
@@ -125,13 +315,13 @@
 
 - 新增 `SOFTWARE-IMPROVEMENT-PLAN.md`：把最新审计结论落成 SW-01～SW-12 工单，逐项记录现状／反例、修改文件与符号、实施步骤、永久测试、验收条件与交付模板。
 - 重写 `ROADMAP.md` 为软件执行索引，按正确性、异常安全、可信验收、性能与体验、职责拆分排序；所有未来工单仍为待实施。
-- 同步 `QUALITY-SOFTWARE-ONLY.md` 的86分复核结论和证明边界，撤回“只差一次CI即可满分”的旧判断；`PROJECT-STATE.md` 保留机器计数并更新入口。
+- 同步当时软件质量评估的 86 分复核结论和证明边界，撤回“只差一次CI即可满分”的旧判断；`PROJECT-STATE.md` 保留机器计数并更新入口。
 - 明确区分已有通过记录、内存／受控时序反例、待生产浏览器验证的边界；预算政策重设不算减重，超时不自动等于环境容量，截图采集成功不等于文字放大或读屏验收。
 - 本次不改产品代码、不提交或推送、不生成新的长稳／跨平台通过声明；下方旧轮次标题与结论仅保留作历史记录。
 
 ## 2026-11-03 · 纯软件满分轮（P0/P1/P2 全清）
 
-目标：在**不接外部硬件**的范围内把质量缺口清零。逐条对应 `QUALITY-SOFTWARE-ONLY.md` 的十项满分标准。
+目标：在**不接外部硬件**的范围内把质量缺口清零。逐条对应当前 `SOFTWARE-IMPROVEMENT-PLAN.md` 的软件验收标准。
 
 - **P0 档案导入成为严格零副作用事务**：新增纯模块 `src/core/archive-ui.ts`——把「写控件 → 事件处理器 →
   读回」整条流水线建模成**纯函数**，控件约束（min/max/step/选项）运行时从真实 DOM **只读**采集，
@@ -202,7 +392,7 @@
 
 ## 2026-11-03 · 质量文档与证据治理轮
 
-- 重新对 `master@830e4e3` 评分为 **86/100**；当前结论迁到 `QUALITY-STATUS.md`，开放项迁到 `ROADMAP.md`。
+- 重新对 `master@830e4e3` 评分为 **86/100**；当时结论写入 `QUALITY-STATUS.md`（现已整合进 `QUALITY-AUDIT-HISTORY.md`），开放项迁到 `ROADMAP.md`。
 - 9 份轮次复核、旧改进建议、旧路线图与满分任务书压缩为 `QUALITY-AUDIT-HISTORY.md`；原始全文保留在 Git 历史。
 - 新增 `VERIFICATION-EVIDENCE.md` 与 `generated/evidence-manifest.json`，区分 current/history、tracked/local、完整/不完整 provenance。
 - `PROJECT-STATE.md` 缩成真正的恢复锚点；中英文 README 与应用内技术口径同步当前 125/10/15/4、check 154、smoke 91、budget 14。

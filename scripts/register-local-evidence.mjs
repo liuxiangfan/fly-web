@@ -18,12 +18,12 @@
  * （也可以只给其中几项；未给的不会被改动。）
  */
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseEvidenceReport } from "./evidence-report.mjs";
 
-const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const scriptRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const arg = Object.fromEntries(
   process.argv.slice(2).map((a) => {
     const m = /^--([^=]+)(?:=(.*))?$/.exec(a);
@@ -35,11 +35,13 @@ const KIND_OF = {
   "soak-batch": { kind: "software-soak-batch", id: (d) => `soak-batch-600-${d}` },
   "soak-reconnect": { kind: "software-soak-reconnect", id: (d) => `soak-reconnect-600-${d}` },
   stability: { kind: "software-smoke-stability", id: (d) => `stability-local-windows-${d}` },
+  "soak-teaching": { kind: "software-soak-teaching", id: (d) => `soak-teaching-600-${d}` },
   visual: { kind: "visual-screenshot", id: (d) => `visual-current-${d}` },
   perf: { kind: "performance-report", id: () => "perf-current" },
   size: { kind: "size-report", id: () => "size-current" },
 };
 
+const root = arg.root ? resolve(arg.root) : scriptRoot; // 隔离契约现场，不改真索引。
 const manifestPath = join(root, "docs/generated/evidence-manifest.json");
 const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
 const sha256 = (p) => createHash("sha256").update(readFileSync(p)).digest("hex");
@@ -70,12 +72,30 @@ for (const [flag, spec] of Object.entries(KIND_OF)) {
   const r = parsed.report;
   const raw = JSON.parse(readFileSync(abs, "utf8"));
   const digest8 = String(r.sourceDigest ?? raw.sourceDigest ?? "").slice(0, 8);
-  const id = spec.id(digest8);
+  const reportSha = sha256(abs);
+  // 同 digest 复采也必须保留旧 id/报告身份；报告 hash 区分旧版无 captureId 的采集。
+  const id = spec.kind === "visual-screenshot" ? `${spec.id(digest8)}-${r.captureId ?? reportSha.slice(0, 16)}` : spec.id(digest8);
+  if (spec.kind === "visual-screenshot") {
+    const pixelProblems = (parsed.pixels ?? []).flatMap((shot) => {
+      const file = resolve(root, shot.file);
+      return !existsSync(file) || !statSync(file).isFile() ? [`截图不存在：${shot.file}`]
+        : sha256(file) !== shot.sha256 ? [`像素哈希与报告不符：${shot.file}`] : [];
+    });
+    if (pixelProblems.length) { refused.push(`${flag}: ${pixelProblems.join("；")}`); continue; }
+    const collision = manifest.entries.find((e) => e.kind === spec.kind && e.id !== id && resolve(root, e.path) === abs);
+    if (collision) { refused.push(`${flag}: 报告路径已属于 ${collision.id}，不得覆盖旧采集，请使用新报告路径`); continue; }
+  }
+  const previous = manifest.entries.find((e) => e.id === id);
+  if (spec.kind === "visual-screenshot" && previous && (previous.sha256 !== reportSha || previous.path !== rel)) {
+    refused.push(`${flag}: ${id} 的旧报告身份不可覆盖`);
+    continue;
+  }
+  if (spec.kind === "visual-screenshot" && previous) { added.push(`${id} 已登记（原条目与覆盖历史保持不变）`); continue; }
   const entry = {
     id,
     kind: spec.kind,
     path: rel,
-    sha256: sha256(abs),
+    sha256: reportSha,
     sourceCommit: r.sourceCommit,
     sourceDigest: r.sourceDigest,
     distHash: r.distHash,
@@ -84,7 +104,8 @@ for (const [flag, spec] of Object.entries(KIND_OF)) {
     runnerOs: r.runnerOs ?? `${process.platform} ${process.arch}`,
     result: r.pass === false ? "FAIL" : "PASS",
     provenanceComplete: true,
-    localOnly: false,
+    localOnly: spec.kind === "visual-screenshot",
+    ...(spec.kind === "visual-screenshot" ? { captureId: r.captureId, startedAt: r.startedAt, finishedAt: r.finishedAt } : {}),
     current: true,
     supersedes: [],
     runs: r.runs ?? null,

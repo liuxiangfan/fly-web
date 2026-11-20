@@ -1,0 +1,4388 @@
+{
+  "loadSchema": "teaching-load/v2",
+  "generatedAt": "2026-11-19T06:32:26.609Z",
+  "commit": "7d5cf97fdddfb9f25d660d199075a3ec84006d30",
+  "sourceDigest": "2d93cd3d5131d3eb6eeb9f594c4346c6",
+  "sourceFiles": 121,
+  "worktree": "dirty",
+  "buildId": "2d93cd3d5131-15c789e0829d1fe9",
+  "distHash": "15c789e0829d1fe9",
+  "browserVersion": "Chrome/158.0.8127.36",
+  "startedAt": "2026-11-19T06:22:17.977Z",
+  "finishedAt": "2026-11-19T06:32:27.545Z",
+  "url": "http://127.0.0.1:4173/",
+  "seconds": 600,
+  "intervalMs": 5000,
+  "withTeaching": true,
+  "heapLimitMb": 24,
+  "allowNoHeap": false,
+  "servedProblems": [],
+  "driftProblems": [],
+  "consoleErrors": [],
+  "profile": "D:\\test-artifacts\\quaternion-attitude\\soak\\teaching-7vqa91",
+  "samples": [
+    {
+      "at": 1795069343394,
+      "t": 0,
+      "runId": 2,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 11.43305778503418,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 0,
+      "reviewFrames": 0,
+      "reviewActive": false,
+      "activePanel": "eskf",
+      "learningStatus": null,
+      "comparison": null,
+      "batchRunning": false
+    },
+    {
+      "at": 1795069348551,
+      "t": 2.6799999999999264,
+      "runId": 2,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 14.335822105407715,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 54,
+      "reviewFrames": 67,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "answering",
+      "comparison": {
+        "state": "empty",
+        "kind": null,
+        "jobId": 0,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069353690,
+      "t": 7.087999999999441,
+      "runId": 2,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 15.375228881835938,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 376,
+      "reviewFrames": 171,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "answering",
+      "comparison": {
+        "state": "empty",
+        "kind": null,
+        "jobId": 0,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069358733,
+      "t": 11.062000000000364,
+      "runId": 2,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 18.734432220458984,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 512,
+      "reviewFrames": 270,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "answering",
+      "comparison": {
+        "state": "empty",
+        "kind": null,
+        "jobId": 0,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069363844,
+      "t": 14.70200000000158,
+      "runId": 2,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 17.1712646484375,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 512,
+      "reviewFrames": 361,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "answering",
+      "comparison": {
+        "state": "empty",
+        "kind": null,
+        "jobId": 0,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069368914,
+      "t": 17.98800000000091,
+      "runId": 2,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 18.34019947052002,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 512,
+      "reviewFrames": 441,
+      "reviewActive": false,
+      "activePanel": "eskf",
+      "learningStatus": "answering",
+      "comparison": {
+        "state": "empty",
+        "kind": null,
+        "jobId": 0,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069373949,
+      "t": 21.01799999999923,
+      "runId": 2,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 19.173707008361816,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 512,
+      "reviewFrames": 513,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "answering",
+      "comparison": {
+        "state": "empty",
+        "kind": null,
+        "jobId": 0,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069379038,
+      "t": 23.917999999997622,
+      "runId": 2,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 13.952675819396973,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 512,
+      "reviewFrames": 582,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "answering",
+      "comparison": {
+        "state": "empty",
+        "kind": null,
+        "jobId": 0,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069384174,
+      "t": 26.817999999996015,
+      "runId": 2,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 14.258042335510254,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 512,
+      "reviewFrames": 651,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "answering",
+      "comparison": {
+        "state": "empty",
+        "kind": null,
+        "jobId": 0,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069389267,
+      "t": 29.56999999999449,
+      "runId": 2,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 25.957250595092773,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 512,
+      "reviewFrames": 716,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "answering",
+      "comparison": {
+        "state": "empty",
+        "kind": null,
+        "jobId": 0,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069394756,
+      "t": 32.32399999999354,
+      "runId": 2,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 18.18622875213623,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 512,
+      "reviewFrames": 750,
+      "reviewActive": false,
+      "activePanel": "eskf",
+      "learningStatus": "answering",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 1,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069399778,
+      "t": 34.92399999999672,
+      "runId": 2,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 22.394518852233887,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 512,
+      "reviewFrames": 750,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "answering",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 1,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069405355,
+      "t": 0,
+      "runId": 4,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 16.915111541748047,
+      "reviewCapture": false,
+      "eskfEnabled": false,
+      "eventCount": 0,
+      "reviewFrames": 0,
+      "reviewActive": false,
+      "activePanel": null,
+      "learningStatus": "answering",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 1,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069410399,
+      "t": 4.613999999999714,
+      "runId": 4,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 15.453195571899414,
+      "reviewCapture": true,
+      "eskfEnabled": false,
+      "eventCount": 178,
+      "reviewFrames": 0,
+      "reviewActive": false,
+      "activePanel": null,
+      "learningStatus": "answering",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 1,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069415416,
+      "t": 8.855999999999627,
+      "runId": 4,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 12.333776473999023,
+      "reviewCapture": true,
+      "eskfEnabled": false,
+      "eventCount": 491,
+      "reviewFrames": 103,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "answering",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 1,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069420432,
+      "t": 12.544000000000858,
+      "runId": 4,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 19.247377395629883,
+      "reviewCapture": true,
+      "eskfEnabled": false,
+      "eventCount": 512,
+      "reviewFrames": 195,
+      "reviewActive": false,
+      "activePanel": null,
+      "learningStatus": "answering",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 1,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069425476,
+      "t": 15.90000000000198,
+      "runId": 4,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 22.94853973388672,
+      "reviewCapture": true,
+      "eskfEnabled": false,
+      "eventCount": 512,
+      "reviewFrames": 279,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "answering",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 1,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069430530,
+      "t": 19.06800000000031,
+      "runId": 4,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 23.815988540649414,
+      "reviewCapture": true,
+      "eskfEnabled": false,
+      "eventCount": 512,
+      "reviewFrames": 354,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "answering",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 1,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069435557,
+      "t": 22.13599999999861,
+      "runId": 4,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 14.009710311889648,
+      "reviewCapture": true,
+      "eskfEnabled": false,
+      "eventCount": 512,
+      "reviewFrames": 427,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "answering",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 1,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069440683,
+      "t": 25.05799999999699,
+      "runId": 4,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 25.77680206298828,
+      "reviewCapture": true,
+      "eskfEnabled": false,
+      "eventCount": 512,
+      "reviewFrames": 497,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "answering",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 1,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069447101,
+      "t": 28.463999999995103,
+      "runId": 4,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 36.94998645782471,
+      "reviewCapture": true,
+      "eskfEnabled": false,
+      "eventCount": 512,
+      "reviewFrames": 578,
+      "reviewActive": false,
+      "activePanel": null,
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 2,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069452131,
+      "t": 31.19399999999359,
+      "runId": 4,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 36.97969913482666,
+      "reviewCapture": true,
+      "eskfEnabled": false,
+      "eventCount": 512,
+      "reviewFrames": 643,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 2,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069457164,
+      "t": 33.727999999995255,
+      "runId": 4,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 31.953478813171387,
+      "reviewCapture": true,
+      "eskfEnabled": false,
+      "eventCount": 512,
+      "reviewFrames": 705,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 2,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069462216,
+      "t": 36.24999999999834,
+      "runId": 4,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 26.097817420959473,
+      "reviewCapture": true,
+      "eskfEnabled": false,
+      "eventCount": 512,
+      "reviewFrames": 750,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 2,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069467667,
+      "t": 0.032000000000000015,
+      "runId": 6,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 21.867289543151855,
+      "reviewCapture": false,
+      "eskfEnabled": true,
+      "eventCount": 0,
+      "reviewFrames": 0,
+      "reviewActive": false,
+      "activePanel": "eskf",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 2,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069472680,
+      "t": 4.6539999999997095,
+      "runId": 6,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 22.614609718322754,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 178,
+      "reviewFrames": 0,
+      "reviewActive": false,
+      "activePanel": "eskf",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 2,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069477892,
+      "t": 8.919999999999648,
+      "runId": 6,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 38.37446689605713,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 496,
+      "reviewFrames": 103,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 2,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069482934,
+      "t": 12.716000000000916,
+      "runId": 6,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 26.548867225646973,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 512,
+      "reviewFrames": 198,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 2,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069488041,
+      "t": 16.246000000001874,
+      "runId": 6,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 27.36366081237793,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 512,
+      "reviewFrames": 286,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 2,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069493110,
+      "t": 19.420000000000115,
+      "runId": 6,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 30.805779457092285,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 512,
+      "reviewFrames": 362,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 2,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069498758,
+      "t": 22.67999999999831,
+      "runId": 6,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 25.651394844055176,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 512,
+      "reviewFrames": 439,
+      "reviewActive": false,
+      "activePanel": "eskf",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 3,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069503799,
+      "t": 25.68799999999664,
+      "runId": 6,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 20.261293411254883,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 512,
+      "reviewFrames": 511,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 3,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069508849,
+      "t": 28.385999999995146,
+      "runId": 6,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 40.30449962615967,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 512,
+      "reviewFrames": 575,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 3,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069514022,
+      "t": 31.15999999999361,
+      "runId": 6,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 37.1621789932251,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 512,
+      "reviewFrames": 641,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 3,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069519109,
+      "t": 33.79799999999534,
+      "runId": 6,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 25.868638038635254,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 512,
+      "reviewFrames": 706,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 3,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069524134,
+      "t": 36.41599999999854,
+      "runId": 6,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 27.085267066955566,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 512,
+      "reviewFrames": 750,
+      "reviewActive": false,
+      "activePanel": "eskf",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 3,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069529658,
+      "t": 0.04800000000000003,
+      "runId": 8,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 37.520304679870605,
+      "reviewCapture": false,
+      "eskfEnabled": false,
+      "eventCount": 0,
+      "reviewFrames": 0,
+      "reviewActive": false,
+      "activePanel": null,
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 3,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069534678,
+      "t": 4.55799999999972,
+      "runId": 8,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 31.015812873840332,
+      "reviewCapture": true,
+      "eskfEnabled": false,
+      "eventCount": 178,
+      "reviewFrames": 0,
+      "reviewActive": false,
+      "activePanel": null,
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 3,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069539698,
+      "t": 8.769999999999598,
+      "runId": 8,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 15.402769088745117,
+      "reviewCapture": true,
+      "eskfEnabled": false,
+      "eventCount": 486,
+      "reviewFrames": 102,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 3,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069544727,
+      "t": 12.510000000000847,
+      "runId": 8,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 24.30923366546631,
+      "reviewCapture": true,
+      "eskfEnabled": false,
+      "eventCount": 512,
+      "reviewFrames": 195,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 3,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069550973,
+      "t": 16.59400000000168,
+      "runId": 8,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 33.09075927734375,
+      "reviewCapture": true,
+      "eskfEnabled": false,
+      "eventCount": 512,
+      "reviewFrames": 297,
+      "reviewActive": false,
+      "activePanel": null,
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 4,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069556037,
+      "t": 19.903999999999847,
+      "runId": 8,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 34.548282623291016,
+      "reviewCapture": true,
+      "eskfEnabled": false,
+      "eventCount": 512,
+      "reviewFrames": 375,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 4,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069561068,
+      "t": 22.861999999998208,
+      "runId": 8,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 34.38476371765137,
+      "reviewCapture": true,
+      "eskfEnabled": false,
+      "eventCount": 512,
+      "reviewFrames": 446,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 4,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069566118,
+      "t": 25.749999999996607,
+      "runId": 8,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 31.799219131469727,
+      "reviewCapture": true,
+      "eskfEnabled": false,
+      "eventCount": 512,
+      "reviewFrames": 515,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 4,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069571153,
+      "t": 28.547999999995056,
+      "runId": 8,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 28.078012466430664,
+      "reviewCapture": true,
+      "eskfEnabled": false,
+      "eventCount": 512,
+      "reviewFrames": 581,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 4,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069576185,
+      "t": 31.197999999993588,
+      "runId": 8,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 18.9013729095459,
+      "reviewCapture": true,
+      "eskfEnabled": false,
+      "eventCount": 512,
+      "reviewFrames": 644,
+      "reviewActive": false,
+      "activePanel": null,
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 4,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069581208,
+      "t": 33.759999999995294,
+      "runId": 8,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 32.5732364654541,
+      "reviewCapture": true,
+      "eskfEnabled": false,
+      "eventCount": 512,
+      "reviewFrames": 707,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 4,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069586227,
+      "t": 36.27799999999837,
+      "runId": 8,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 23.075002670288086,
+      "reviewCapture": true,
+      "eskfEnabled": false,
+      "eventCount": 512,
+      "reviewFrames": 750,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 4,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069591734,
+      "t": 0,
+      "runId": 10,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 39.315574645996094,
+      "reviewCapture": false,
+      "eskfEnabled": true,
+      "eventCount": 0,
+      "reviewFrames": 0,
+      "reviewActive": false,
+      "activePanel": "eskf",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 4,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069596770,
+      "t": 4.4899999999997275,
+      "runId": 10,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 18.08141803741455,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 178,
+      "reviewFrames": 0,
+      "reviewActive": false,
+      "activePanel": "eskf",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 4,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069603826,
+      "t": 9.691999999999906,
+      "runId": 10,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 15.870938301086426,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 512,
+      "reviewFrames": 126,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 5,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069609009,
+      "t": 13.584000000001206,
+      "runId": 10,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 13.628933906555176,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 512,
+      "reviewFrames": 224,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 5,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069614116,
+      "t": 17.216000000001337,
+      "runId": 10,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 27.024800300598145,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 512,
+      "reviewFrames": 313,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 5,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069619168,
+      "t": 20.375999999999586,
+      "runId": 10,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 30.584481239318848,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 512,
+      "reviewFrames": 388,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 5,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069624234,
+      "t": 23.387999999997916,
+      "runId": 10,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 26.184720993041992,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 512,
+      "reviewFrames": 460,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 5,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069629246,
+      "t": 26.223999999996344,
+      "runId": 10,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 36.55764579772949,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 512,
+      "reviewFrames": 527,
+      "reviewActive": false,
+      "activePanel": "eskf",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 5,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069634262,
+      "t": 28.98999999999481,
+      "runId": 10,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 38.13598346710205,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 512,
+      "reviewFrames": 593,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 5,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069639359,
+      "t": 31.657999999993333,
+      "runId": 10,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 34.29891300201416,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 512,
+      "reviewFrames": 657,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 5,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069644444,
+      "t": 34.22399999999586,
+      "runId": 10,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 23.25111484527588,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 512,
+      "reviewFrames": 721,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 5,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069649529,
+      "t": 36.80799999999902,
+      "runId": 10,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 15.961209297180176,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 512,
+      "reviewFrames": 750,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 5,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069655887,
+      "t": 0.18800000000000014,
+      "runId": 12,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 23.665273666381836,
+      "reviewCapture": true,
+      "eskfEnabled": false,
+      "eventCount": 0,
+      "reviewFrames": 5,
+      "reviewActive": false,
+      "activePanel": null,
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 6,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069660910,
+      "t": 5.047999999999666,
+      "runId": 12,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 35.022457122802734,
+      "reviewCapture": true,
+      "eskfEnabled": false,
+      "eventCount": 190,
+      "reviewFrames": 123,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 6,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069665946,
+      "t": 9.207999999999744,
+      "runId": 12,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 25.027938842773438,
+      "reviewCapture": true,
+      "eskfEnabled": false,
+      "eventCount": 508,
+      "reviewFrames": 223,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 6,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069670977,
+      "t": 12.976000000001003,
+      "runId": 12,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 35.90902900695801,
+      "reviewCapture": true,
+      "eskfEnabled": false,
+      "eventCount": 512,
+      "reviewFrames": 318,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 6,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069675997,
+      "t": 16.54200000000171,
+      "runId": 12,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 18.23651123046875,
+      "reviewCapture": true,
+      "eskfEnabled": false,
+      "eventCount": 512,
+      "reviewFrames": 406,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 6,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069681036,
+      "t": 19.893999999999853,
+      "runId": 12,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 22.299457550048828,
+      "reviewCapture": true,
+      "eskfEnabled": false,
+      "eventCount": 512,
+      "reviewFrames": 486,
+      "reviewActive": false,
+      "activePanel": null,
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 6,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069686062,
+      "t": 22.92999999999817,
+      "runId": 12,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 22.224937438964844,
+      "reviewCapture": true,
+      "eskfEnabled": false,
+      "eventCount": 512,
+      "reviewFrames": 558,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 6,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069691097,
+      "t": 25.7619999999966,
+      "runId": 12,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 20.596826553344727,
+      "reviewCapture": true,
+      "eskfEnabled": false,
+      "eventCount": 512,
+      "reviewFrames": 626,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 6,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069696143,
+      "t": 28.41799999999513,
+      "runId": 12,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 19.196674346923828,
+      "reviewCapture": true,
+      "eskfEnabled": false,
+      "eventCount": 512,
+      "reviewFrames": 689,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 6,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069701176,
+      "t": 31.107999999993638,
+      "runId": 12,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 17.19517230987549,
+      "reviewCapture": true,
+      "eskfEnabled": false,
+      "eventCount": 512,
+      "reviewFrames": 750,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 6,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069706604,
+      "t": 33.78199999999532,
+      "runId": 12,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 39.081499099731445,
+      "reviewCapture": true,
+      "eskfEnabled": false,
+      "eventCount": 512,
+      "reviewFrames": 750,
+      "reviewActive": false,
+      "activePanel": null,
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 7,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069711625,
+      "t": 36.40799999999853,
+      "runId": 12,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 31.90365219116211,
+      "reviewCapture": true,
+      "eskfEnabled": false,
+      "eventCount": 512,
+      "reviewFrames": 750,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 7,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069717091,
+      "t": 0,
+      "runId": 14,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 26.54886245727539,
+      "reviewCapture": false,
+      "eskfEnabled": true,
+      "eventCount": 0,
+      "reviewFrames": 0,
+      "reviewActive": false,
+      "activePanel": "eskf",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 7,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069722103,
+      "t": 4.837999999999689,
+      "runId": 14,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 22.376373291015625,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 178,
+      "reviewFrames": 1,
+      "reviewActive": false,
+      "activePanel": "eskf",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 7,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069727129,
+      "t": 9.187999999999738,
+      "runId": 14,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 14.205284118652344,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 508,
+      "reviewFrames": 106,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 7,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069732145,
+      "t": 13.036000000001023,
+      "runId": 14,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 23.397445678710938,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 512,
+      "reviewFrames": 202,
+      "reviewActive": false,
+      "activePanel": "eskf",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 7,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069737166,
+      "t": 16.658000000001646,
+      "runId": 14,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 23.900760650634766,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 512,
+      "reviewFrames": 292,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 7,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069742219,
+      "t": 19.94999999999982,
+      "runId": 14,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 35.15994644165039,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 512,
+      "reviewFrames": 371,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 7,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069747281,
+      "t": 23.01999999999812,
+      "runId": 14,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 41.14621353149414,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 512,
+      "reviewFrames": 444,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 7,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069752330,
+      "t": 25.845999999996554,
+      "runId": 14,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 15.14453125,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 512,
+      "reviewFrames": 511,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 7,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069758488,
+      "t": 29.111999999994744,
+      "runId": 14,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 33.86598491668701,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 512,
+      "reviewFrames": 589,
+      "reviewActive": false,
+      "activePanel": "eskf",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 8,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069763531,
+      "t": 31.79199999999326,
+      "runId": 14,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 38.938544273376465,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 512,
+      "reviewFrames": 653,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 8,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069768627,
+      "t": 34.31399999999597,
+      "runId": 14,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 16.095316886901855,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 512,
+      "reviewFrames": 715,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 8,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069773724,
+      "t": 36.88999999999912,
+      "runId": 14,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 16.243346214294434,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 512,
+      "reviewFrames": 750,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 8,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069779252,
+      "t": 0,
+      "runId": 16,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 29.940926551818848,
+      "reviewCapture": false,
+      "eskfEnabled": false,
+      "eventCount": 0,
+      "reviewFrames": 0,
+      "reviewActive": false,
+      "activePanel": null,
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 8,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069784260,
+      "t": 4.745999999999699,
+      "runId": 16,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 12.51050090789795,
+      "reviewCapture": true,
+      "eskfEnabled": false,
+      "eventCount": 178,
+      "reviewFrames": 0,
+      "reviewActive": false,
+      "activePanel": null,
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 8,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069789293,
+      "t": 9.033999999999686,
+      "runId": 16,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 24.88004207611084,
+      "reviewCapture": true,
+      "eskfEnabled": false,
+      "eventCount": 496,
+      "reviewFrames": 104,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 8,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069794322,
+      "t": 12.830000000000954,
+      "runId": 16,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 36.63025760650635,
+      "reviewCapture": true,
+      "eskfEnabled": false,
+      "eventCount": 512,
+      "reviewFrames": 199,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 8,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069799344,
+      "t": 16.41400000000178,
+      "runId": 16,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 19.421198844909668,
+      "reviewCapture": true,
+      "eskfEnabled": false,
+      "eventCount": 512,
+      "reviewFrames": 288,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 8,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069804386,
+      "t": 19.77399999999992,
+      "runId": 16,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 24.33035182952881,
+      "reviewCapture": true,
+      "eskfEnabled": false,
+      "eventCount": 512,
+      "reviewFrames": 368,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 8,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069809971,
+      "t": 23.041999999998108,
+      "runId": 16,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 31.718558311462402,
+      "reviewCapture": true,
+      "eskfEnabled": false,
+      "eventCount": 512,
+      "reviewFrames": 446,
+      "reviewActive": false,
+      "activePanel": null,
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 9,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069814993,
+      "t": 25.953999999996494,
+      "runId": 16,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 21.434218406677246,
+      "reviewCapture": true,
+      "eskfEnabled": false,
+      "eventCount": 512,
+      "reviewFrames": 515,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 9,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069820035,
+      "t": 28.605999999995024,
+      "runId": 16,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 16.44796848297119,
+      "reviewCapture": true,
+      "eskfEnabled": false,
+      "eventCount": 512,
+      "reviewFrames": 578,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 9,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069825054,
+      "t": 31.241999999993563,
+      "runId": 16,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 37.422701835632324,
+      "reviewCapture": true,
+      "eskfEnabled": false,
+      "eventCount": 512,
+      "reviewFrames": 641,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 9,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069830084,
+      "t": 33.91399999999548,
+      "runId": 16,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 33.09019947052002,
+      "reviewCapture": true,
+      "eskfEnabled": false,
+      "eventCount": 512,
+      "reviewFrames": 707,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 9,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069835389,
+      "t": 36.44999999999858,
+      "runId": 16,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 25.72815990447998,
+      "reviewCapture": true,
+      "eskfEnabled": false,
+      "eventCount": 512,
+      "reviewFrames": 750,
+      "reviewActive": false,
+      "activePanel": null,
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 9,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069840820,
+      "t": 0,
+      "runId": 18,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 20.53488254547119,
+      "reviewCapture": false,
+      "eskfEnabled": true,
+      "eventCount": 0,
+      "reviewFrames": 0,
+      "reviewActive": false,
+      "activePanel": "eskf",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 9,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069845838,
+      "t": 4.8259999999996905,
+      "runId": 18,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 14.80610179901123,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 178,
+      "reviewFrames": 0,
+      "reviewActive": false,
+      "activePanel": "eskf",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 9,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069850861,
+      "t": 9.0759999999997,
+      "runId": 18,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 30.927268028259277,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 496,
+      "reviewFrames": 103,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 9,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069855899,
+      "t": 12.930000000000987,
+      "runId": 18,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 19.322264671325684,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 512,
+      "reviewFrames": 199,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 9,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069862110,
+      "t": 17.218000000001336,
+      "runId": 18,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 15.546359062194824,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 512,
+      "reviewFrames": 305,
+      "reviewActive": false,
+      "activePanel": "eskf",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 10,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069867125,
+      "t": 20.425999999999558,
+      "runId": 18,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 27.520668029785156,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 512,
+      "reviewFrames": 381,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 10,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069872174,
+      "t": 23.36599999999793,
+      "runId": 18,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 40.13742256164551,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 512,
+      "reviewFrames": 451,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 10,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069877248,
+      "t": 26.23399999999634,
+      "runId": 18,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 15.267313003540039,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 512,
+      "reviewFrames": 520,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 10,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069882320,
+      "t": 28.923999999994848,
+      "runId": 18,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 15.631105422973633,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 512,
+      "reviewFrames": 584,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 10,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069887338,
+      "t": 31.583999999993374,
+      "runId": 18,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 20.639680862426758,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 512,
+      "reviewFrames": 647,
+      "reviewActive": false,
+      "activePanel": "eskf",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 10,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069892357,
+      "t": 34.28799999999594,
+      "runId": 18,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 34.68932914733887,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 512,
+      "reviewFrames": 714,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 10,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069897436,
+      "t": 36.88199999999911,
+      "runId": 18,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 28.10434913635254,
+      "reviewCapture": true,
+      "eskfEnabled": true,
+      "eventCount": 512,
+      "reviewFrames": 750,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 10,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069902981,
+      "t": 0,
+      "runId": 20,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 18.247535705566406,
+      "reviewCapture": false,
+      "eskfEnabled": false,
+      "eventCount": 0,
+      "reviewFrames": 0,
+      "reviewActive": false,
+      "activePanel": null,
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 10,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069907999,
+      "t": 4.795999999999694,
+      "runId": 20,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 33.48024559020996,
+      "reviewCapture": true,
+      "eskfEnabled": false,
+      "eventCount": 178,
+      "reviewFrames": 0,
+      "reviewActive": false,
+      "activePanel": null,
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 10,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069913539,
+      "t": 9.3759999999998,
+      "runId": 20,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 18.37763786315918,
+      "reviewCapture": true,
+      "eskfEnabled": false,
+      "eventCount": 512,
+      "reviewFrames": 111,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 11,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069918561,
+      "t": 13.230000000001088,
+      "runId": 20,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 17.447011947631836,
+      "reviewCapture": true,
+      "eskfEnabled": false,
+      "eventCount": 512,
+      "reviewFrames": 208,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 11,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069923576,
+      "t": 16.808000000001563,
+      "runId": 20,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 25.627840042114258,
+      "reviewCapture": true,
+      "eskfEnabled": false,
+      "eventCount": 512,
+      "reviewFrames": 296,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 11,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069928600,
+      "t": 20.111999999999732,
+      "runId": 20,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 30.609567642211914,
+      "reviewCapture": true,
+      "eskfEnabled": false,
+      "eventCount": 512,
+      "reviewFrames": 375,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 11,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069933616,
+      "t": 23.149999999998048,
+      "runId": 20,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 33.202693939208984,
+      "reviewCapture": true,
+      "eskfEnabled": false,
+      "eventCount": 512,
+      "reviewFrames": 447,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 11,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069938668,
+      "t": 26.041999999996445,
+      "runId": 20,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 34.836381912231445,
+      "reviewCapture": true,
+      "eskfEnabled": false,
+      "eventCount": 512,
+      "reviewFrames": 516,
+      "reviewActive": false,
+      "activePanel": null,
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 11,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    },
+    {
+      "at": 1795069943482,
+      "t": 28.655999999994997,
+      "runId": 20,
+      "sourceKind": "simulation",
+      "replayActive": false,
+      "heapMb": 27.01341438293457,
+      "reviewCapture": true,
+      "eskfEnabled": false,
+      "eventCount": 512,
+      "reviewFrames": 578,
+      "reviewActive": true,
+      "activePanel": "review",
+      "learningStatus": "ready",
+      "comparison": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 11,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "batchRunning": false
+    }
+  ],
+  "actions": [
+    {
+      "phase": 1,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069348435
+    },
+    {
+      "phase": 2,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069353687
+    },
+    {
+      "phase": 3,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069358731
+    },
+    {
+      "phase": 4,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069363820
+    },
+    {
+      "phase": 5,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069368912
+    },
+    {
+      "phase": 6,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069373948
+    },
+    {
+      "phase": 7,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069379032
+    },
+    {
+      "phase": 8,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069384146
+    },
+    {
+      "phase": 9,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069389236
+    },
+    {
+      "phase": 10,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069394324
+    },
+    {
+      "phase": 11,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069399776
+    },
+    {
+      "phase": 12,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069404871
+    },
+    {
+      "phase": 13,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069410395
+    },
+    {
+      "phase": 14,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069415415
+    },
+    {
+      "phase": 15,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069420430
+    },
+    {
+      "phase": 16,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069425474
+    },
+    {
+      "phase": 17,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069430528
+    },
+    {
+      "phase": 18,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069435554
+    },
+    {
+      "phase": 19,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069440672
+    },
+    {
+      "phase": 20,
+      "ok": true,
+      "kind": "learning",
+      "at": 1795069446771
+    },
+    {
+      "phase": 21,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069452125
+    },
+    {
+      "phase": 22,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069457156
+    },
+    {
+      "phase": 23,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069462212
+    },
+    {
+      "phase": 24,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069467241
+    },
+    {
+      "phase": 25,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069472678
+    },
+    {
+      "phase": 26,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069477692
+    },
+    {
+      "phase": 27,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069482926
+    },
+    {
+      "phase": 28,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069488039
+    },
+    {
+      "phase": 29,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069493104
+    },
+    {
+      "phase": 30,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069498130
+    },
+    {
+      "phase": 31,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069503796
+    },
+    {
+      "phase": 32,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069508846
+    },
+    {
+      "phase": 33,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069513982
+    },
+    {
+      "phase": 34,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069519107
+    },
+    {
+      "phase": 35,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069524132
+    },
+    {
+      "phase": 36,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069529154
+    },
+    {
+      "phase": 37,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069534676
+    },
+    {
+      "phase": 38,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069539697
+    },
+    {
+      "phase": 39,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069544725
+    },
+    {
+      "phase": 40,
+      "ok": true,
+      "kind": "learning",
+      "at": 1795069550645
+    },
+    {
+      "phase": 41,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069556035
+    },
+    {
+      "phase": 42,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069561066
+    },
+    {
+      "phase": 43,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069566111
+    },
+    {
+      "phase": 44,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069571150
+    },
+    {
+      "phase": 45,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069576184
+    },
+    {
+      "phase": 46,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069581206
+    },
+    {
+      "phase": 47,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069586224
+    },
+    {
+      "phase": 48,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069591293
+    },
+    {
+      "phase": 49,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069596768
+    },
+    {
+      "phase": 50,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069601786
+    },
+    {
+      "phase": 51,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069608987
+    },
+    {
+      "phase": 52,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069614110
+    },
+    {
+      "phase": 53,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069619165
+    },
+    {
+      "phase": 54,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069624231
+    },
+    {
+      "phase": 55,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069629244
+    },
+    {
+      "phase": 56,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069634260
+    },
+    {
+      "phase": 57,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069639357
+    },
+    {
+      "phase": 58,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069644442
+    },
+    {
+      "phase": 59,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069649525
+    },
+    {
+      "phase": 60,
+      "ok": true,
+      "kind": "learning",
+      "at": 1795069655504
+    },
+    {
+      "phase": 61,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069660908
+    },
+    {
+      "phase": 62,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069665927
+    },
+    {
+      "phase": 63,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069670975
+    },
+    {
+      "phase": 64,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069675995
+    },
+    {
+      "phase": 65,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069681034
+    },
+    {
+      "phase": 66,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069686060
+    },
+    {
+      "phase": 67,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069691094
+    },
+    {
+      "phase": 68,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069696140
+    },
+    {
+      "phase": 69,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069701169
+    },
+    {
+      "phase": 70,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069706204
+    },
+    {
+      "phase": 71,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069711623
+    },
+    {
+      "phase": 72,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069716665
+    },
+    {
+      "phase": 73,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069722098
+    },
+    {
+      "phase": 74,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069727128
+    },
+    {
+      "phase": 75,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069732144
+    },
+    {
+      "phase": 76,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069737164
+    },
+    {
+      "phase": 77,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069742206
+    },
+    {
+      "phase": 78,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069747271
+    },
+    {
+      "phase": 79,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069752329
+    },
+    {
+      "phase": 80,
+      "ok": true,
+      "kind": "learning",
+      "at": 1795069758160
+    },
+    {
+      "phase": 81,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069763528
+    },
+    {
+      "phase": 82,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069768622
+    },
+    {
+      "phase": 83,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069773720
+    },
+    {
+      "phase": 84,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069778797
+    },
+    {
+      "phase": 85,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069784260
+    },
+    {
+      "phase": 86,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069789291
+    },
+    {
+      "phase": 87,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069794317
+    },
+    {
+      "phase": 88,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069799340
+    },
+    {
+      "phase": 89,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069804382
+    },
+    {
+      "phase": 90,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069809398
+    },
+    {
+      "phase": 91,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069814991
+    },
+    {
+      "phase": 92,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069820033
+    },
+    {
+      "phase": 93,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069825053
+    },
+    {
+      "phase": 94,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069830082
+    },
+    {
+      "phase": 95,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069835096
+    },
+    {
+      "phase": 96,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069840419
+    },
+    {
+      "phase": 97,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069845835
+    },
+    {
+      "phase": 98,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069850859
+    },
+    {
+      "phase": 99,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069855894
+    },
+    {
+      "phase": 100,
+      "ok": true,
+      "kind": "learning",
+      "at": 1795069861756
+    },
+    {
+      "phase": 101,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069867124
+    },
+    {
+      "phase": 102,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069872172
+    },
+    {
+      "phase": 103,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069877243
+    },
+    {
+      "phase": 104,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069882317
+    },
+    {
+      "phase": 105,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069887337
+    },
+    {
+      "phase": 106,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069892354
+    },
+    {
+      "phase": 107,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069897422
+    },
+    {
+      "phase": 108,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069902495
+    },
+    {
+      "phase": 109,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069907997
+    },
+    {
+      "phase": 110,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069913015
+    },
+    {
+      "phase": 111,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069918559
+    },
+    {
+      "phase": 112,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069923574
+    },
+    {
+      "phase": 113,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069928598
+    },
+    {
+      "phase": 114,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069933606
+    },
+    {
+      "phase": 115,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069938666
+    },
+    {
+      "phase": 116,
+      "ok": true,
+      "kind": "review",
+      "at": 1795069943451
+    }
+  ],
+  "sourceTransitions": [
+    {
+      "before": {
+        "at": 1795069404881,
+        "active": false,
+        "idx": 0,
+        "sourceKind": "simulation",
+        "runId": 2,
+        "reviewFrames": 750,
+        "eventCount": 512,
+        "reviewActive": true
+      },
+      "imported": "ok:151 帧 / 3.00 s",
+      "during": {
+        "at": 1795069405330,
+        "active": true,
+        "idx": 20,
+        "sourceKind": "replay",
+        "runId": 3,
+        "reviewFrames": 0,
+        "eventCount": 0,
+        "reviewActive": false
+      },
+      "after": {
+        "at": 1795069405343,
+        "active": false,
+        "idx": 0,
+        "sourceKind": "simulation",
+        "runId": 4,
+        "reviewFrames": 0,
+        "eventCount": 0,
+        "reviewActive": false
+      },
+      "error": null,
+      "problems": []
+    },
+    {
+      "before": {
+        "at": 1795069467250,
+        "active": false,
+        "idx": 0,
+        "sourceKind": "simulation",
+        "runId": 4,
+        "reviewFrames": 750,
+        "eventCount": 512,
+        "reviewActive": true
+      },
+      "imported": "ok:151 帧 / 3.00 s",
+      "during": {
+        "at": 1795069467633,
+        "active": true,
+        "idx": 15,
+        "sourceKind": "replay",
+        "runId": 5,
+        "reviewFrames": 0,
+        "eventCount": 0,
+        "reviewActive": false
+      },
+      "after": {
+        "at": 1795069467644,
+        "active": false,
+        "idx": 0,
+        "sourceKind": "simulation",
+        "runId": 6,
+        "reviewFrames": 0,
+        "eventCount": 0,
+        "reviewActive": false
+      },
+      "error": null,
+      "problems": []
+    },
+    {
+      "before": {
+        "at": 1795069529156,
+        "active": false,
+        "idx": 0,
+        "sourceKind": "simulation",
+        "runId": 6,
+        "reviewFrames": 750,
+        "eventCount": 512,
+        "reviewActive": true
+      },
+      "imported": "ok:151 帧 / 3.00 s",
+      "during": {
+        "at": 1795069529614,
+        "active": true,
+        "idx": 18,
+        "sourceKind": "replay",
+        "runId": 7,
+        "reviewFrames": 0,
+        "eventCount": 0,
+        "reviewActive": false
+      },
+      "after": {
+        "at": 1795069529630,
+        "active": false,
+        "idx": 0,
+        "sourceKind": "simulation",
+        "runId": 8,
+        "reviewFrames": 0,
+        "eventCount": 0,
+        "reviewActive": false
+      },
+      "error": null,
+      "problems": []
+    },
+    {
+      "before": {
+        "at": 1795069591295,
+        "active": false,
+        "idx": 0,
+        "sourceKind": "simulation",
+        "runId": 8,
+        "reviewFrames": 750,
+        "eventCount": 512,
+        "reviewActive": true
+      },
+      "imported": "ok:151 帧 / 3.00 s",
+      "during": {
+        "at": 1795069591719,
+        "active": true,
+        "idx": 18,
+        "sourceKind": "replay",
+        "runId": 9,
+        "reviewFrames": 0,
+        "eventCount": 0,
+        "reviewActive": false
+      },
+      "after": {
+        "at": 1795069591728,
+        "active": false,
+        "idx": 0,
+        "sourceKind": "simulation",
+        "runId": 10,
+        "reviewFrames": 0,
+        "eventCount": 0,
+        "reviewActive": false
+      },
+      "error": null,
+      "problems": []
+    },
+    {
+      "before": {
+        "at": 1795069655506,
+        "active": false,
+        "idx": 0,
+        "sourceKind": "simulation",
+        "runId": 10,
+        "reviewFrames": 750,
+        "eventCount": 512,
+        "reviewActive": false
+      },
+      "imported": "ok:151 帧 / 3.00 s",
+      "during": {
+        "at": 1795069655543,
+        "active": true,
+        "idx": 3,
+        "sourceKind": "replay",
+        "runId": 11,
+        "reviewFrames": 1,
+        "eventCount": 0,
+        "reviewActive": false
+      },
+      "after": {
+        "at": 1795069655551,
+        "active": false,
+        "idx": 0,
+        "sourceKind": "simulation",
+        "runId": 12,
+        "reviewFrames": 0,
+        "eventCount": 0,
+        "reviewActive": false
+      },
+      "error": null,
+      "problems": []
+    },
+    {
+      "before": {
+        "at": 1795069716667,
+        "active": false,
+        "idx": 0,
+        "sourceKind": "simulation",
+        "runId": 12,
+        "reviewFrames": 750,
+        "eventCount": 512,
+        "reviewActive": true
+      },
+      "imported": "ok:151 帧 / 3.00 s",
+      "during": {
+        "at": 1795069717084,
+        "active": true,
+        "idx": 18,
+        "sourceKind": "replay",
+        "runId": 13,
+        "reviewFrames": 0,
+        "eventCount": 0,
+        "reviewActive": false
+      },
+      "after": {
+        "at": 1795069717088,
+        "active": false,
+        "idx": 0,
+        "sourceKind": "simulation",
+        "runId": 14,
+        "reviewFrames": 0,
+        "eventCount": 0,
+        "reviewActive": false
+      },
+      "error": null,
+      "problems": []
+    },
+    {
+      "before": {
+        "at": 1795069778800,
+        "active": false,
+        "idx": 0,
+        "sourceKind": "simulation",
+        "runId": 14,
+        "reviewFrames": 750,
+        "eventCount": 512,
+        "reviewActive": true
+      },
+      "imported": "ok:151 帧 / 3.00 s",
+      "during": {
+        "at": 1795069779241,
+        "active": true,
+        "idx": 18,
+        "sourceKind": "replay",
+        "runId": 15,
+        "reviewFrames": 0,
+        "eventCount": 0,
+        "reviewActive": false
+      },
+      "after": {
+        "at": 1795069779249,
+        "active": false,
+        "idx": 0,
+        "sourceKind": "simulation",
+        "runId": 16,
+        "reviewFrames": 0,
+        "eventCount": 0,
+        "reviewActive": false
+      },
+      "error": null,
+      "problems": []
+    },
+    {
+      "before": {
+        "at": 1795069840428,
+        "active": false,
+        "idx": 0,
+        "sourceKind": "simulation",
+        "runId": 16,
+        "reviewFrames": 750,
+        "eventCount": 512,
+        "reviewActive": true
+      },
+      "imported": "ok:151 帧 / 3.00 s",
+      "during": {
+        "at": 1795069840811,
+        "active": true,
+        "idx": 17,
+        "sourceKind": "replay",
+        "runId": 17,
+        "reviewFrames": 0,
+        "eventCount": 0,
+        "reviewActive": false
+      },
+      "after": {
+        "at": 1795069840817,
+        "active": false,
+        "idx": 0,
+        "sourceKind": "simulation",
+        "runId": 18,
+        "reviewFrames": 0,
+        "eventCount": 0,
+        "reviewActive": false
+      },
+      "error": null,
+      "problems": []
+    },
+    {
+      "before": {
+        "at": 1795069902517,
+        "active": false,
+        "idx": 0,
+        "sourceKind": "simulation",
+        "runId": 18,
+        "reviewFrames": 750,
+        "eventCount": 512,
+        "reviewActive": true
+      },
+      "imported": "ok:151 帧 / 3.00 s",
+      "during": {
+        "at": 1795069902960,
+        "active": true,
+        "idx": 16,
+        "sourceKind": "replay",
+        "runId": 19,
+        "reviewFrames": 0,
+        "eventCount": 0,
+        "reviewActive": false
+      },
+      "after": {
+        "at": 1795069902965,
+        "active": false,
+        "idx": 0,
+        "sourceKind": "simulation",
+        "runId": 20,
+        "reviewFrames": 0,
+        "eventCount": 0,
+        "reviewActive": false
+      },
+      "error": null,
+      "problems": []
+    }
+  ],
+  "cancellations": [
+    {
+      "before": {
+        "state": "running-a",
+        "kind": "solve-rate",
+        "jobId": 1,
+        "completedSides": 0,
+        "executing": "worker",
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "after": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 1,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "settledMs": 0.5,
+      "later": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 1,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      }
+    },
+    {
+      "before": {
+        "state": "running-a",
+        "kind": "solve-rate",
+        "jobId": 2,
+        "completedSides": 0,
+        "executing": "worker",
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "after": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 2,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "settledMs": 1.3000000715255737,
+      "later": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 2,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      }
+    },
+    {
+      "before": {
+        "state": "running-a",
+        "kind": "solve-rate",
+        "jobId": 3,
+        "completedSides": 0,
+        "executing": "worker",
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "after": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 3,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "settledMs": 0.7000000476837158,
+      "later": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 3,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      }
+    },
+    {
+      "before": {
+        "state": "running-a",
+        "kind": "solve-rate",
+        "jobId": 4,
+        "completedSides": 0,
+        "executing": "worker",
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "after": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 4,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "settledMs": 0.9000000953674316,
+      "later": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 4,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      }
+    },
+    {
+      "before": {
+        "state": "running-a",
+        "kind": "solve-rate",
+        "jobId": 5,
+        "completedSides": 0,
+        "executing": "worker",
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "after": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 5,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "settledMs": 0.8999999761581421,
+      "later": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 5,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      }
+    },
+    {
+      "before": {
+        "state": "running-a",
+        "kind": "solve-rate",
+        "jobId": 6,
+        "completedSides": 0,
+        "executing": "worker",
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "after": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 6,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "settledMs": 0.6000000238418579,
+      "later": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 6,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      }
+    },
+    {
+      "before": {
+        "state": "running-a",
+        "kind": "solve-rate",
+        "jobId": 7,
+        "completedSides": 0,
+        "executing": "worker",
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "after": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 7,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "settledMs": 0.5,
+      "later": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 7,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      }
+    },
+    {
+      "before": {
+        "state": "running-a",
+        "kind": "solve-rate",
+        "jobId": 8,
+        "completedSides": 0,
+        "executing": "worker",
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "after": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 8,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "settledMs": 0.6999999284744263,
+      "later": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 8,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      }
+    },
+    {
+      "before": {
+        "state": "running-a",
+        "kind": "solve-rate",
+        "jobId": 9,
+        "completedSides": 0,
+        "executing": "worker",
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "after": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 9,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "settledMs": 0.8000000715255737,
+      "later": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 9,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      }
+    },
+    {
+      "before": {
+        "state": "running-a",
+        "kind": "solve-rate",
+        "jobId": 10,
+        "completedSides": 0,
+        "executing": "worker",
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "after": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 10,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "settledMs": 0.6000000238418579,
+      "later": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 10,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      }
+    },
+    {
+      "before": {
+        "state": "running-a",
+        "kind": "solve-rate",
+        "jobId": 11,
+        "completedSides": 0,
+        "executing": "worker",
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "after": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 11,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      },
+      "settledMs": 0.5,
+      "later": {
+        "state": "cancelled",
+        "kind": "solve-rate",
+        "jobId": 11,
+        "completedSides": 0,
+        "executing": null,
+        "reportReady": false,
+        "diffPaths": []
+      }
+    }
+  ],
+  "stoppedBefore": {
+    "at": 1795069943787,
+    "t": 28.655999999994997,
+    "runId": 20,
+    "sourceKind": "simulation",
+    "replayActive": false,
+    "heapMb": 27.123373985290527,
+    "reviewCapture": false,
+    "eskfEnabled": false,
+    "eventCount": 512,
+    "reviewFrames": 578,
+    "reviewActive": false,
+    "activePanel": null,
+    "learningStatus": "ready",
+    "comparison": {
+      "state": "cancelled",
+      "kind": "solve-rate",
+      "jobId": 11,
+      "completedSides": 0,
+      "executing": null,
+      "reportReady": false,
+      "diffPaths": []
+    },
+    "batchRunning": false
+  },
+  "stoppedAfter": {
+    "at": 1795069945825,
+    "t": 28.655999999994997,
+    "runId": 20,
+    "sourceKind": "simulation",
+    "replayActive": false,
+    "heapMb": 39.29786968231201,
+    "reviewCapture": false,
+    "eskfEnabled": false,
+    "eventCount": 512,
+    "reviewFrames": 578,
+    "reviewActive": false,
+    "activePanel": null,
+    "learningStatus": "ready",
+    "comparison": {
+      "state": "cancelled",
+      "kind": "solve-rate",
+      "jobId": 11,
+      "completedSides": 0,
+      "executing": null,
+      "reportReady": false,
+      "diffPaths": []
+    },
+    "batchRunning": false
+  },
+  "stopBoundary": "停止回看/ESKF采集并暂停生产解算；事件记录器没有独立停止开关",
+  "resourcesNotMeasured": [
+    "浏览器内部 Worker/timer/listener 数量"
+  ],
+  "verdict": {
+    "heapMeasured": true,
+    "heapOk": true,
+    "heapStatus": "PASS",
+    "heapWaived": false,
+    "heapGateOk": true,
+    "heapGrowMb": 2.472325325012207,
+    "heapEndpointMb": 12.677592277526855,
+    "heapPeakGrowthMb": 26.810391426086426,
+    "heapTrendMb": 3.445763618728946,
+    "heapPeakOk": true,
+    "heapTrendOk": true,
+    "heapPeakLimitMb": 48,
+    "tailStatus": "PASS",
+    "tailSuspect": false,
+    "tailResolved": false,
+    "tailRequired": false,
+    "tailMeasured": true,
+    "tailWindow": 6,
+    "tailFloorMb": 17.447011947631836,
+    "baseFloorMb": 12.333776473999023,
+    "tailFloorRiseMb": 5.1132354736328125,
+    "tailSustained": 0,
+    "tailAtFloor": 0.16666666666666666,
+    "tailMedianMb": 28.811491012573242,
+    "tailTrendMb": 11.150109154837473,
+    "tailEvidence": [],
+    "teachingOk": true,
+    "coverageOk": true,
+    "elapsedMs": 600088,
+    "maxGapMs": 7056,
+    "clockAdvanced": true,
+    "clockGrowthSec": 355.6939999999813,
+    "stopQuiesced": true,
+    "sourceSwitches": 9,
+    "sourceProblems": [],
+    "errorsOk": true,
+    "identityOk": true,
+    "actionCount": 116,
+    "actionErrors": 0,
+    "reviewMax": 750,
+    "eventMax": 512,
+    "problems": [],
+    "pass": true
+  }
+}

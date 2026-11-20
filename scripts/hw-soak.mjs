@@ -24,6 +24,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
+import { testArtifactRoot } from "./test-artifacts.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const arg = Object.fromEntries(
@@ -102,7 +103,8 @@ function setRadio(instanceId, enable) {
 }
 
 const url = `http://127.0.0.1:${port}/`;
-const profileDir = resolve(root, ".audit-current", `hw-profile-${kind}`);
+// 真机长稳的 profile 必须保留（原生设备选择器的授权记在这里），但仍放在 D 盘测试现场。
+const profileDir = join(testArtifactRoot("hw-soak"), `hw-profile-${kind}`);
 mkdirSync(profileDir, { recursive: true });
 mkdirSync(dirname(outPath), { recursive: true });
 

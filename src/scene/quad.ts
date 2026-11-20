@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
+import { roundedBox } from "./rounded-box";
 import { makeTextSprite } from "./labels";
 
 export interface QuadModel {
@@ -12,14 +12,6 @@ export interface QuadOptions {
   axes?: boolean;
 }
 
-function armDirs(): Array<[number, number]> {
-  return [
-    [1, 1],
-    [1, -1],
-    [-1, 1],
-    [-1, -1],
-  ];
-}
 
 /**
  * 程序化四轴模型（PBR 质感版）。显示坐标系：机头 +X，机体右 +Z，上 +Y。
@@ -32,9 +24,8 @@ export function buildQuad(ghost: boolean, opts: QuadOptions = {}): QuadModel {
   const props: THREE.Group[] = [];
 
   // ---- 材质库（实体）----
-  const bodyMat = new THREE.MeshPhysicalMaterial({
+  const bodyMat = new THREE.MeshStandardMaterial({
     color: 0x232b3a, metalness: 0.55, roughness: 0.32,
-    clearcoat: 0.7, clearcoatRoughness: 0.25, // 碳纤亮漆
   });
   const darkMat = new THREE.MeshStandardMaterial({ color: 0x141a26, metalness: 0.5, roughness: 0.4 });
   const accentMat = new THREE.MeshStandardMaterial({
@@ -42,7 +33,7 @@ export function buildQuad(ghost: boolean, opts: QuadOptions = {}): QuadModel {
   });
   const armMat = new THREE.MeshStandardMaterial({ color: 0x1c2330, metalness: 0.7, roughness: 0.38 });
   const motorMat = new THREE.MeshStandardMaterial({ color: 0xb9c2cf, metalness: 0.9, roughness: 0.25 });
-  const glassMat = new THREE.MeshPhysicalMaterial({
+  const glassMat = new THREE.MeshStandardMaterial({
     color: 0x0c1220, metalness: 0.1, roughness: 0.08,
     transparent: true, opacity: 0.85,
   });
@@ -75,7 +66,7 @@ export function buildQuad(ghost: boolean, opts: QuadOptions = {}): QuadModel {
   };
 
   // ---- 机身 ----
-  addPart(new RoundedBoxGeometry(0.46, 0.1, 0.3, 3, 0.035), bodyMat);
+  addPart(roundedBox(0.46, 0.1, 0.3, 0.035, 3), bodyMat);
   // 机头：橙色鼻锥（圆柱侧放，指向 +X）+ 前视相机云台
   const nose = addPart(new THREE.CylinderGeometry(0.052, 0.062, 0.1, 20), accentMat, [0.255, 0, 0]);
   nose.rotation.z = -Math.PI / 2;
@@ -83,10 +74,9 @@ export function buildQuad(ghost: boolean, opts: QuadOptions = {}): QuadModel {
   const lens = addPart(new THREE.CylinderGeometry(0.026, 0.03, 0.03, 16), glassMat, [0.205, -0.075, 0]);
   lens.rotation.z = -Math.PI / 2;
   // 顶部航电舱 + GPS「蘑菇头」
-  addPart(new RoundedBoxGeometry(0.2, 0.07, 0.16, 2, 0.025), darkMat, [0.02, 0.075, 0]);
+  addPart(roundedBox(0.2, 0.07, 0.16, 0.025, 2), darkMat, [0.02, 0.075, 0]);
   addPart(new THREE.CylinderGeometry(0.008, 0.01, 0.05, 10), motorMat, [-0.06, 0.13, 0]);
-  const gpsPuck = addPart(new THREE.SphereGeometry(0.022, 14, 10), darkMat, [-0.06, 0.155, 0]);
-  void gpsPuck;
+  addPart(new THREE.SphereGeometry(0.022, 14, 10), darkMat, [-0.06, 0.155, 0]);
 
   // ---- 机臂 / 电机 / 螺旋桨 ----
   // 前臂航行灯：白青；后臂：红（与真实无人机导航灯惯例一致）
@@ -97,7 +87,7 @@ export function buildQuad(ghost: boolean, opts: QuadOptions = {}): QuadModel {
     color: 0xffb3b0, emissive: 0xff4438, emissiveIntensity: 2.0,
   });
 
-  for (const [sx, sz] of armDirs()) {
+  for (const [sx, sz] of [[1, 1], [1, -1], [-1, 1], [-1, -1]] as Array<[number, number]>) {
     const dirX = sx / Math.SQRT2;
     const dirZ = sz / Math.SQRT2;
     const angle = -Math.atan2(dirZ, dirX);

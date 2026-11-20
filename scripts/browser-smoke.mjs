@@ -9,12 +9,12 @@
  */
 import puppeteer from "puppeteer-core";
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, rmSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { tmpdir } from "node:os";
 import { performance as nodePerformance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import { readProvenance } from "./build-provenance.mjs";
+import { testArtifactTempDir, cleanupArtifactDir } from "./test-artifacts.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -78,12 +78,14 @@ const traceContractSource = readFileSync(new URL("./trace-contract.mjs", import.
 const CANDIDATES = [
   process.env.CHROME_PATH,
   process.env.EDGE_PATH,
-  // Windows
-  "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
-  "C:/Program Files/Microsoft/Edge/Application/msedge.exe",
+  // Chrome 优先：本机 Edge 启动失败时会晚一步 relaunch 并重建 profile（清理后仍可能留下目录），
+  // Chrome 在本地与 GitHub Windows runner 都可用；Edge 仅作为回退。
   "C:/Program Files/Google/Chrome/Application/chrome.exe",
   "C:/Program Files (x86)/Google/Chrome/Application/chrome.exe",
   join(process.env.LOCALAPPDATA ?? "", "Google/Chrome/Application/chrome.exe"),
+  // Windows Edge（回退）
+  "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
+  "C:/Program Files/Microsoft/Edge/Application/msedge.exe",
   // Linux（Ubuntu CI：GitHub 的 runner 预装 google-chrome）
   "/usr/bin/google-chrome",
   "/usr/bin/google-chrome-stable",
@@ -182,10 +184,11 @@ const skip = (name, reason) => {
   failures++;
 };
 
-// 固定 user-data-dir：Windows 上 Puppeteer 的临时 profile 清理偶尔 EBUSY，
-// 会让「测试全部通过」的进程以异常退出码结束。这里自己管目录并在收尾时容错删除。
-// 目录名带 pid：上一次失败留下的 Edge/Chrome 进程会锁住同名 profile（crashpad
-// "Settings version is not 1"），换一个新目录即可让下一次冒烟继续跑；可用 SMOKE_PROFILE 覆盖。
+// 固定 user-data-dir（默认 D 盘测试现场，见 test-artifacts.mjs）：Windows 上 Puppeteer
+// 的临时 profile 清理偶尔 EBUSY，会让「测试全部通过」的进程以异常退出码结束。
+// 这里自己管目录并在收尾时容错删除。目录名带 pid：上一次失败留下的 Edge/Chrome
+// 进程会锁住同名 profile（crashpad "Settings version is not 1"），换一个新目录即可让
+// 下一次冒烟继续跑；可用 SMOKE_PROFILE 覆盖。
 // 逐个尝试候选浏览器：某些 Windows 环境下 Edge 的 crashpad 会启动失败，直接换 Chrome 即可，
 // 而不是让整条冒烟因为「第一个存在的可执行文件打不开」而红掉。
 let browser = null;
@@ -193,8 +196,17 @@ let browser = null;
 let shuttingDown = false;
 let profileDir = process.env.SMOKE_PROFILE ?? "";
 const launchBrowser = async () => {
+  const failedProfileDirs = [];
+  // 失败候选的 Edge 可能在异常之后才完成 relaunch 并重建 profile：立即清理会“删了又长回来”，
+  // 所以在候选尝试结束后再延迟补删一次。
+  const cleanupFailedProfiles = async () => {
+    for (const dir of failedProfileDirs.splice(0)) {
+      await new Promise((r) => setTimeout(r, 1200));
+      cleanupArtifactDir(dir);
+    }
+  };
   for (const [i, exe] of candidates.entries()) {
-    const dir = process.env.SMOKE_PROFILE ?? join(tmpdir(), `quat-demo-smoke-profile-${process.pid}-${i}-${Date.now()}`);
+    const dir = process.env.SMOKE_PROFILE ?? testArtifactTempDir("smoke", `quat-demo-smoke-profile-${process.pid}-${i}-${Date.now()}-`);
     try {
       browser = await puppeteer.launch({
         executablePath: exe,
@@ -236,13 +248,20 @@ const launchBrowser = async () => {
       // 版本要能被驱动脚本解析出来写进稳定性摘要（证据要能回答"用哪个浏览器跑的"）
       browserVersion = await browser.version();
       console.log(`[INFO] 浏览器版本：${browserVersion}`);
+      await cleanupFailedProfiles();
       return;
     } catch (err) {
+      // 失败候选的 profile 不留给下一次（显式 SMOKE_PROFILE 是调用方资产，不动）
+      if (!process.env.SMOKE_PROFILE) {
+        failedProfileDirs.push(dir);
+        try { cleanupArtifactDir(dir); } catch { /* 仍被占用则留待延迟补删 */ }
+      }
             // 候选浏览器启动慢/被占用时换下一个是可预期的回退，不该算「门禁 warning」
       // （验收里的「零 warning」指的是**浏览器被回收/重启**这类不稳定）。用 [info] 记录。
       console.log(`[info] 启动失败，尝试下一个候选：${exe} — ${err instanceof Error ? err.message.split(String.fromCharCode(10))[0] : String(err)}`);
     }
   }
+  await cleanupFailedProfiles();
   console.error("所有候选浏览器都无法启动；可用 CHROME_PATH 指定一个能跑 headless 的可执行文件");
   process.exit(2);
 };
@@ -315,8 +334,12 @@ const PLANNED_RECYCLE_TARGETS = 10;
  * 渲染进程回收换成一次**可控且记录在案**的重建（不计入 browserRestarts）。
  */
 const restartBrowser = async (planned) => {
+  const retiredProfile = profileDir;
   try { await browser.close(); } catch { /* 已经死了 */ }
   browser = null;
+  // 主动重建会换新 profile；旧目录必须在这里收掉，否则每次重建都在测试现场留一份
+  // （实测 devices 分片重建一次就留下 24 MB；显式 SMOKE_PROFILE 是调用方资产，不动）。
+  if (retiredProfile && !process.env.SMOKE_PROFILE) cleanupArtifactDir(retiredProfile);
   await launchBrowser();
   targetsSinceLaunch = 0;
   if (page) {
@@ -518,23 +541,592 @@ try {
   );
 
   // 实验库：应用零偏漂移（面板可能默认收起——先展开再点）
-  const exp = await page.evaluate(() => {
+  // 目录改为按需 chunk 后，按钮可能在首帧之后才挂载：等到真实按钮出现再点，
+  // 不用固定 sleep，也不用调试接口绕过界面。
+  await page.waitForFunction(() => document.querySelectorAll("#experiment-list button").length > 0, { timeout: STATE_MS });
+  const exp = await page.evaluate(async () => {
     const sec = document.getElementById("sec-experiments");
     if (sec?.classList.contains("collapsed")) sec.querySelector(".panel-toggle").click();
     [...document.querySelectorAll("#experiment-list button")].find((b) => b.textContent.includes("零偏漂移"))?.click();
+    await window.attitudeDemo.task.open();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const task = window.attitudeDemo.task.state();
     return {
       bias: document.getElementById("imu-gyro-bias").value,
       source: document.getElementById("source-select").value,
       note: document.getElementById("experiment-note").textContent,
+      taskTitle: task?.task?.title ?? "",
+      deviation: task?.task?.deviation ?? null,
     };
   });
   check(
-    "实验库应用参数",
-    exp.bias === "3" && exp.source === "pure" && exp.note.includes("零偏漂移"),
-    `bias=${exp.bias} source=${exp.source}`,
+    "实验库应用参数 + 当前任务条",
+    exp.bias === "3" && exp.source === "pure" && exp.note.includes("零偏漂移") &&
+      exp.taskTitle.includes("零偏漂移") && exp.deviation === false,
+    `bias=${exp.bias} source=${exp.source}；任务「${exp.taskTitle}」偏离=${exp.deviation}`,
   );
 
-  // 磁校准：设置硬铁后自动采集 + 拟合
+  // 单变量对照台：冻结当前配置、选唯一变量；运行完整 A/B 由 Worker 契约覆盖，
+  // 浏览器这里验证真实面板入口、差异检查与按钮状态。
+  const cmp = await page.evaluate(async () => {
+    await window.attitudeDemo.comparison.open();
+    await window.attitudeDemo.comparison.freeze();
+    await window.attitudeDemo.comparison.selectVariable("solve-rate");
+    return window.attitudeDemo.comparison.state();
+  });
+  check(
+    "单变量对照台：冻结基线并显示唯一变量差异",
+    cmp?.state === "configured" && cmp?.kind === "solve-rate" && cmp?.diffPaths?.length === 0,
+    `state=${cmp?.state} kind=${cmp?.kind} 额外差异=${cmp?.diffPaths?.join(",") || "无"}`,
+  );
+
+  // FIX-12：对照完整路径（真实 Worker 完成 → 改现场参数变 stale → 重跑 → 导出 → 应用 B）。
+  const cmpFull = await page.evaluate(async () => {
+    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    const api = window.attitudeDemo.comparison;
+    const waitDone = async () => {
+      const deadline = Date.now() + 45000;
+      let state = null;
+      while (Date.now() < deadline) {
+        state = api.state();
+        if (state && (state.state === "done" || state.state === "error" || state.state === "cancelled")) return state;
+        await sleep(100);
+      }
+      return state;
+    };
+    const originalBias = document.getElementById("imu-gyro-bias").value;
+    const originalSolveRate = document.getElementById("solve-rate").value;
+    await api.open();
+    await api.freeze();
+    await api.selectVariable("solve-rate");
+    await api.run();
+    const first = await waitDone();
+    if (first?.state !== "done") return { first, error: "首轮未完成" };
+    const bias = document.getElementById("imu-gyro-bias");
+    bias.value = String(Number(bias.value) + 0.5);
+    bias.dispatchEvent(new Event("input", { bubbles: true }));
+    await sleep(10);
+    const stale = api.state();
+    await api.freeze();
+    await api.selectVariable("solve-rate");
+    await api.run();
+    const second = await waitDone();
+    if (second?.state !== "done") return { first, stale, second, error: "重跑未完成" };
+    const exportButton = document.getElementById("btn-cmp-export");
+    exportButton.click();
+    await sleep(50);
+    const toast = [...document.querySelectorAll("#toast-layer .ov-chip")].map((n) => n.textContent || "").join("|");
+    const exportEnabled = !exportButton.disabled;
+    const applied = await api.applyB();
+    const afterApply = api.state();
+    // 本用例是后续逐帧 golden trace 的前置：把 B 写入的现场恢复为原值，避免污染全局配置。
+    for (const [id, value] of [["imu-gyro-bias", originalBias], ["solve-rate", originalSolveRate]]) {
+      const el = document.getElementById(id);
+      el.value = value;
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    document.getElementById("btn-cmp-reset")?.click();
+    await window.attitudeDemo.task.clear();
+    return { first, stale, second, applied, afterApply, toast, exportEnabled };
+  });
+  check(
+    "对照完整路径：完成→改参数变 stale→重跑→导出→应用 B",
+    cmpFull?.first?.state === "done" && cmpFull?.stale?.state === "stale" &&
+      cmpFull?.second?.state === "done" && cmpFull?.exportEnabled === true &&
+      /已导出对照报告/.test(cmpFull?.toast || "") && cmpFull?.applied?.ok === true &&
+      cmpFull?.afterApply?.state === "stale" && !cmpFull?.error,
+    `首轮=${cmpFull?.first?.state} stale=${cmpFull?.stale?.state} 重跑=${cmpFull?.second?.state} ` +
+      `导出=${/已导出对照报告/.test(cmpFull?.toast || "")} 应用B=${cmpFull?.applied?.ok} ` +
+      `应用后=${cmpFull?.afterApply?.state}${cmpFull?.error ? `；${cmpFull.error}` : ""}`,
+  );
+
+  // 预测—验证式学习：题目按需加载；未提交预测前不得显示解释。
+  const learn = await page.evaluate(async () => {
+    await window.attitudeDemo.learning.open();
+    const root = document.getElementById("learning-panel-host");
+    const first = [...root.querySelectorAll("button")].find((b) => /^1\./.test((b.textContent || "").trim()));
+    first?.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const state = window.attitudeDemo.learning.state();
+    const task = window.attitudeDemo.task.state();
+    window.attitudeDemo.task.clear();
+    return { ...state, taskKind: task?.task?.kind ?? null, taskTitle: task?.task?.title ?? "" };
+  });
+  check(
+    "预测练习：5 道题按需加载、预测前不泄露解释、进入统一任务上下文",
+    learn?.loaded === true && learn?.activityCount === 5 && learn?.canReveal === false && learn?.hasPrediction === false &&
+      learn?.taskKind === "learning" && learn?.taskTitle.includes("预测练习"),
+    `loaded=${learn?.loaded} activities=${learn?.activityCount} canReveal=${learn?.canReveal} task=${learn?.taskKind}`,
+  );
+
+  // FIX-12：学习完整路径（提交预测 → 运行证据 → verdict → 反思 → 导出 JSON）。
+  const learnFull = await page.evaluate(async () => {
+    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    const api = window.attitudeDemo.learning;
+    await api.open();
+    await api.setActivity("drift-linear-10s");
+    const submitted = await api.submitPrediction({ kind: "range", min: 15, max: 25, unit: "°" });
+    const started = await api.run();
+    const deadline = Date.now() + 30000;
+    let state = null;
+    while (Date.now() < deadline) {
+      state = api.state();
+      if (state && state.status !== "running" && state.status !== "predicted") break;
+      await sleep(100);
+    }
+    const host = document.getElementById("learning-panel-host");
+    const reflection = host?.querySelector("textarea");
+    if (reflection) reflection.value = "零偏积分近似线性，10 s 约 20°。";
+    const save = [...(host?.querySelectorAll("button") ?? [])].find((b) => ["保存", "保存反思"].includes((b.textContent || "").trim()));
+    save?.click();
+    await sleep(20);
+    let captured = null;
+    const realCreate = URL.createObjectURL.bind(URL);
+    URL.createObjectURL = (blob) => {
+      captured = blob;
+      return realCreate(blob);
+    };
+    const exportButton = [...(host?.querySelectorAll("button") ?? [])].find((b) => ["导出", "导出记录"].includes((b.textContent || "").trim()));
+    exportButton?.click();
+    await sleep(20);
+    let record = null;
+    if (captured) {
+      try { record = JSON.parse(await captured.text()); } catch { record = null; }
+    }
+    URL.createObjectURL = realCreate;
+    return {
+      submitted, started, state, record,
+      reflected: !!save, exported: !!exportButton,
+      toast: [...document.querySelectorAll("#toast-layer .ov-chip")].map((n) => n.textContent || "").join("|"),
+    };
+  });
+  check(
+    "学习完整路径：提交预测→运行证据→verdict→反思→导出 JSON",
+    learnFull?.submitted?.ok === true && learnFull?.started?.ok === true &&
+      learnFull?.state?.activityId === "drift-linear-10s" &&
+      learnFull?.state?.verdict && learnFull.state.verdict !== "undetermined" &&
+      learnFull?.state?.canReveal === true && learnFull?.reflected && learnFull?.exported &&
+      learnFull?.record?.activityId === "drift-linear-10s" &&
+      learnFull?.record?.attempts?.some((a) => a.prediction && a.prediction.kind === "range") &&
+      learnFull?.record?.attempts?.some((a) => a.evidence && Number.isFinite(a.evidence.numeric)) &&
+      learnFull?.record?.attempts?.some((a) =>
+        Array.isArray(a.evidencePlan) && a.evidencePlan.length >= 1 &&
+        Array.isArray(a.runResults) && a.runResults.length === a.evidencePlan.length) &&
+      /学习记录已导出/.test(learnFull?.toast || ""),
+    `提交=${learnFull?.submitted?.ok} 运行=${learnFull?.started?.ok} 状态=${learnFull?.state?.status} ` +
+      `verdict=${learnFull?.state?.verdict} 可揭示=${learnFull?.state?.canReveal} ` +
+      `记录=${learnFull?.record?.activityId}/${learnFull?.record?.attempts?.length ?? 0} 条，` +
+      `证据计划=${learnFull?.record?.attempts?.[0]?.evidencePlan?.length ?? 0} 侧`,
+  );
+
+  // FIX-06/FIX-12：教材 claim 往返（预测题载入 → 对照变量动作 → 返回教材并恢复焦点）。
+  const claimFull = await page.evaluate(async () => {
+    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    await window.attitudeDemo.learning.open();
+    document.getElementById("btn-docs")?.click();
+    await sleep(60);
+    const overlay = document.getElementById("docs-overlay");
+    const docsOpened = !!overlay && !overlay.hidden;
+    const predictionClaim = document.getElementById("claim-action-claim-drift-linear");
+    predictionClaim?.click();
+    await sleep(60);
+    const predictionActivity = window.attitudeDemo.learning.state()?.activityId;
+    const predictionTask = window.attitudeDemo.task.state()?.task?.kind;
+    // run-experiment：教材索引里的「万向节锁」应直接装载对应实验现场。
+    const experimentClaim = document.getElementById("claim-action-claim-gimbal-lock");
+    experimentClaim?.click();
+    const expDeadline = Date.now() + 8000;
+    let experimentTask = null;
+    let experimentNote = "";
+    while (Date.now() < expDeadline) {
+      const taskNow = window.attitudeDemo.task.state()?.task;
+      experimentNote = document.getElementById("experiment-note")?.textContent ?? "";
+      if (taskNow?.kind === "experiment" && taskNow.id === "gimbal") {
+        experimentTask = taskNow.id;
+        break;
+      }
+      await sleep(50);
+    }
+    const comparisonClaim = document.getElementById("claim-action-claim-gate-rescue");
+    comparisonClaim?.click();
+    const deadline = Date.now() + 10000;
+    let cmpState = null;
+    while (Date.now() < deadline) {
+      cmpState = window.attitudeDemo.comparison.state();
+      if (cmpState?.kind === "accel-gate") break;
+      await sleep(50);
+    }
+    // TR-02：claim 声称的因果必须由真实结果验收，而不是"按钮点成功"。
+    // 这里实际跑完 A/B（两侧同窗口），核对目标指标改善与门控拒绝事件。
+    await window.attitudeDemo.comparison.run();
+    const runDeadline = Date.now() + 90000;
+    let finalState = null;
+    while (Date.now() < runDeadline) {
+      finalState = window.attitudeDemo.comparison.state();
+      if (finalState?.state === "done" || finalState?.state === "error") break;
+      await sleep(100);
+    }
+    const gateReport = window.attitudeDemo.comparison.result();
+    const sideMetric = (side, metric) => {
+      const row = side?.metrics?.find((m) => m.id === "mahony");
+      const value = row?.[metric];
+      return typeof value === "number" && Number.isFinite(value) ? value : null;
+    };
+    const gateEffect = {
+      state: finalState?.state ?? null,
+      durationA: gateReport?.a?.config?.durationSec ?? null,
+      durationB: gateReport?.b?.config?.durationSec ?? null,
+      rmseA: sideMetric(gateReport?.a, "rmse"),
+      rmseB: sideMetric(gateReport?.b, "rmse"),
+      rejectsA: sideMetric(gateReport?.a, "gateRejects"),
+      rejectsB: sideMetric(gateReport?.b, "gateRejects"),
+      gateA: gateReport?.a?.config?.estimators?.mahony?.accelGate ?? null,
+      gateB: gateReport?.b?.config?.estimators?.mahony?.accelGate ?? null,
+    };
+    const task = window.attitudeDemo.task.state();
+    const returnButton = document.getElementById("task-strip-return");
+    returnButton?.click();
+    await sleep(200);
+    const focus = document.activeElement?.id ?? null;
+    const docsRestored = !!overlay && !overlay.hidden;
+    const gateNote = document.getElementById("experiment-note")?.textContent ?? "";
+    const gateLinAccel = document.getElementById("imu-lin-accel")?.value ?? "";
+    // 收尾：后面的独立用例假定文档层是关闭的，不能把本用例的打开状态留给它们。
+    document.getElementById("btn-docs-close")?.click();
+    await sleep(60);
+    return {
+      docsOpened,
+      predictionActivity,
+      predictionTask,
+      experimentTask,
+      experimentNote,
+      gateNote,
+      gateLinAccel,
+      cmpKind: cmpState?.kind ?? null,
+      cmpState: cmpState?.state ?? null,
+      taskKind: task?.task?.kind ?? null,
+      returnLabel: returnButton?.textContent ?? null,
+      docsRestored,
+      focus,
+      gateEffect,
+    };
+  });
+  check(
+    "教材 claim 往返：预测/实验/对照动作执行→任务条返回→页/焦点恢复",
+    claimFull?.docsOpened === true && claimFull?.predictionActivity === "drift-linear-10s" &&
+      claimFull?.predictionTask === "learning" && claimFull?.experimentTask === "gimbal" &&
+      /万向节锁/.test(claimFull?.experimentNote ?? "") &&
+      /方向门控/.test(claimFull?.gateNote ?? "") && claimFull?.gateLinAccel === "4" &&
+      claimFull?.cmpKind === "accel-gate" &&
+      claimFull?.taskKind === "comparison" && claimFull?.returnLabel === "返回教材" &&
+      claimFull?.docsRestored === true && claimFull?.focus === "claim-action-claim-gate-rescue",
+    `预测=${claimFull?.predictionActivity}/${claimFull?.predictionTask} ` +
+      `实验=${claimFull?.experimentTask}/${claimFull?.experimentNote?.slice(0, 10)} ` +
+      `门控基线=${claimFull?.gateNote?.slice(0, 8)}/lin=${claimFull?.gateLinAccel} ` +
+      `对照=${claimFull?.cmpKind}/${claimFull?.cmpState} ` +
+      `任务=${claimFull?.taskKind} 返回=${claimFull?.returnLabel} 文档=${claimFull?.docsRestored} 焦点=${claimFull?.focus}`,
+  );
+
+  check(
+    "教材门控 claim：实际跑完 A/B，目标指标改善且门控确有拒绝事件",
+    claimFull?.gateEffect?.state === "done" &&
+      claimFull?.gateEffect?.gateA === false && claimFull?.gateEffect?.gateB === true &&
+      claimFull?.gateEffect?.durationA === 20 && claimFull?.gateEffect?.durationB === 20 &&
+      typeof claimFull?.gateEffect?.rmseA === "number" && typeof claimFull?.gateEffect?.rmseB === "number" &&
+      claimFull.gateEffect.rmseA - claimFull.gateEffect.rmseB >= 2 &&
+      claimFull?.gateEffect?.rejectsB >= 100 && claimFull?.gateEffect?.rejectsA === 0,
+    `A/B 窗口=${claimFull?.gateEffect?.durationA}/${claimFull?.gateEffect?.durationB} s、门控=${claimFull?.gateEffect?.gateA}/${claimFull?.gateEffect?.gateB}；` +
+      `RMSE ${claimFull?.gateEffect?.rmseA?.toFixed?.(2)}° → ${claimFull?.gateEffect?.rmseB?.toFixed?.(2)}°（改善 ` +
+      `${(claimFull?.gateEffect?.rmseA ?? 0) - (claimFull?.gateEffect?.rmseB ?? 0)}°）；` +
+      `拒绝 ${claimFull?.gateEffect?.rejectsA}/${claimFull?.gateEffect?.rejectsB}；状态=${claimFull?.gateEffect?.state}`,
+  );
+
+  // C/D：四面板按需挂载；回看帧只在用户开启记录后写入，且容量有界。
+  const diag = await page.evaluate(async () => {
+    await window.attitudeDemo.diagnostics.open();
+    window.attitudeDemo.diagnostics.setReviewCapture(true);
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    const during = window.attitudeDemo.diagnostics.state();
+    window.attitudeDemo.diagnostics.setReviewCapture(false);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const after = window.attitudeDemo.diagnostics.state();
+    return {
+      panels: document.querySelectorAll(".obs-panel, .event-panel, .review-panel, .eskf-panel").length,
+      reviewFrames: during?.reviewFrames ?? null,
+      captureOn: during?.reviewCapture ?? null,
+      captureOff: after?.reviewCapture ?? null,
+      eventCount: during?.eventCount ?? null,
+      unnamed: [...document.querySelectorAll(".obs-panel button, .event-panel button, .review-panel button, .eskf-panel button")]
+        .filter((b) => !(b.textContent || "").trim() && !b.getAttribute("aria-label")).length,
+      positiveTabindex: [...document.querySelectorAll(".obs-panel [tabindex], .event-panel [tabindex], .review-panel [tabindex], .eskf-panel [tabindex]")]
+        .filter((el) => Number(el.getAttribute("tabindex")) > 0).length,
+    };
+  });
+  check(
+    "教学诊断：四面板按需挂载，回看记录有界",
+    diag.panels >= 4 && Number.isFinite(diag.reviewFrames) && diag.reviewFrames > 0 && diag.reviewFrames <= 750 &&
+      diag.captureOn === true && diag.captureOff === false && diag.unnamed === 0 && diag.positiveTabindex === 0,
+    `面板=${diag.panels} 回看帧=${diag.reviewFrames} 事件=${diag.eventCount} 无名字按钮=${diag.unnamed} 正tabindex=${diag.positiveTabindex}`,
+  );
+
+  // FIX-12：回看完整路径（记录帧 → 进入回看 → 观测状态/帧内容 → 上一帧/下一帧 → 返回实时）。
+  const reviewFull = await page.evaluate(async () => {
+    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    await window.attitudeDemo.diagnostics.open();
+    window.attitudeDemo.diagnostics.setReviewCapture(true);
+    await sleep(800);
+    const panel = document.querySelector(".review-panel");
+    const button = (action) => panel?.querySelector(`button[data-review-action="${action}"]`);
+    const toggle = button("toggle");
+    toggle?.click();
+    await sleep(40);
+    const active = toggle?.getAttribute("aria-pressed") === "true";
+    const first = panel?.textContent || "";
+    const cursorAfterEnter = document.getElementById("chart-cursor")?.textContent ?? "";
+    document.getElementById("att-canvas")?.dispatchEvent(new MouseEvent("mouseleave", { bubbles: true }));
+    await sleep(20);
+    const cursorAfterLeave = document.getElementById("chart-cursor")?.textContent ?? "";
+    const cursorVisibleAfterLeave = document.getElementById("chart-cursor")?.classList.contains("hidden") === false;
+    const nextEnabled = !button("next")?.disabled && !button("prev")?.disabled;
+    button("next")?.click();
+    await sleep(40);
+    const afterNext = panel?.textContent || "";
+    const cursorAfterNext = document.getElementById("chart-cursor")?.textContent ?? "";
+    button("prev")?.click();
+    await sleep(40);
+    const afterPrev = panel?.textContent || "";
+    const cursorAfterPrev = document.getElementById("chart-cursor")?.textContent ?? "";
+    button("exit")?.click();
+    await sleep(40);
+    const exited = toggle?.getAttribute("aria-pressed") !== "true";
+    const cursorAfterExit = document.getElementById("chart-cursor")?.textContent ?? "";
+    const cursorHiddenAfterExit = document.getElementById("chart-cursor")?.classList.contains("hidden") === true;
+    const override = window.attitudeDemo.diagnostics.reviewOverride();
+    window.attitudeDemo.diagnostics.setReviewCapture(false);
+    const live = window.attitudeDemo.ests.every((e) => Number.isFinite(e.q?.w) && Number.isFinite(e.q?.x));
+    return {
+      active, exited, override, live,
+      hasFrame: /运行 #\d+ · seq \d+ · t=/.test(first),
+      hasObservation: /加计观测状态/.test(first) && /磁观测状态/.test(first),
+      nextEnabled,
+      nextChanged: afterNext !== first,
+      prevChanged: afterPrev !== afterNext,
+      cursorAfterEnter,
+      cursorAfterLeave,
+      cursorVisibleAfterLeave,
+      cursorAfterNext,
+      cursorAfterPrev,
+      cursorAfterExit,
+      cursorHiddenAfterExit,
+    };
+  });
+  check(
+    "回看完整路径：进入→帧含观测状态→上一帧/下一帧→返回实时（含游标同步）",
+    reviewFull?.active === true && reviewFull?.hasFrame && reviewFull?.hasObservation &&
+      reviewFull?.nextEnabled && reviewFull?.nextChanged && reviewFull?.prevChanged &&
+      reviewFull?.exited === true && reviewFull?.override === null && reviewFull?.live === true &&
+      /^t = /.test(reviewFull?.cursorAfterEnter ?? "") &&
+      reviewFull?.cursorAfterLeave === reviewFull?.cursorAfterEnter &&
+      reviewFull?.cursorVisibleAfterLeave === true &&
+      reviewFull?.cursorAfterNext !== reviewFull?.cursorAfterEnter &&
+      reviewFull?.cursorAfterPrev !== reviewFull?.cursorAfterNext &&
+      reviewFull?.cursorHiddenAfterExit === true,
+    `进入=${reviewFull?.active} 帧=${reviewFull?.hasFrame} 观测状态=${reviewFull?.hasObservation} ` +
+      `游标进入=「${reviewFull?.cursorAfterEnter}」离开保持=${reviewFull?.cursorAfterLeave === reviewFull?.cursorAfterEnter} ` +
+      `下一帧=「${reviewFull?.cursorAfterNext}」` +
+      `上一帧=「${reviewFull?.cursorAfterPrev}」退出=「${reviewFull?.cursorAfterExit}」` +
+      `返回实时=${reviewFull?.exited} override=${reviewFull?.override}`,
+  );
+
+  // TR-03：历史 Inspector 深层验收——两帧内部量必须不同、缺快照不回退实时、退出后无泄漏。
+  const inspectorDeep = await page.evaluate(async () => {
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const api = window.attitudeDemo;
+    await api.diagnostics.open();
+    const panel = () => document.querySelector(".eskf-panel");
+    const text = () => panel()?.textContent ?? "";
+    const reviewBtn = (action) => document.querySelector(`.review-panel button[data-review-action="${action}"]`);
+
+    // 前序用例可能把仿真停在暂停态；没有解算步就不会产生新快照，先恢复播放。
+    const pauseBtn = document.getElementById("btn-pause");
+    if (pauseBtn?.textContent === "继续") pauseBtn.click();
+    await sleep(150);
+
+    // ① 开启 ESKF 采集 + 回看记录，攒够两帧。
+    api.diagnostics.setEskfEnabled(true);
+    api.diagnostics.setReviewCapture(true);
+    await sleep(900);
+    // Inspector 由宿主 ~10 Hz 驱动，切帧后必须等它真的重绘再读。
+    const D = String.fromCharCode(92) + "d";
+    const DOT = String.fromCharCode(92) + ".";
+    const waitText = async (predicate, timeout = 3000) => {
+      const start = Date.now();
+      let value = text();
+      while (Date.now() - start < timeout) {
+        if (predicate(value)) return value;
+        await sleep(50);
+        value = text();
+      }
+      return value;
+    };
+    reviewBtn("toggle")?.click();
+    const first = await waitText((v) => new RegExp("t = " + D + "+" + DOT + "+ s").test(v));
+    reviewBtn("next")?.click();
+    const second = await waitText((v) => new RegExp("t = " + D + "+" + DOT + "+ s").test(v) && v !== first);
+    reviewBtn("prev")?.click();
+    const back = await waitText((v) => v === first);
+    // 不用正则取时间：面板文本是 "t = 1.532 s"，直接按标记切片更稳。
+    const tOf = (t) => {
+      const at = t.indexOf("t = ");
+      if (at < 0) return null;
+      const rest = t.slice(at + 4);
+      const end = rest.indexOf(" s");
+      if (end < 0) return null;
+      const value = Number(rest.slice(0, end));
+      return Number.isFinite(value) ? value : null;
+    };
+    const changed = first !== second;
+
+    // ② 关闭采集并继续跑，再进回看：新帧没有 ESKF 快照，Inspector 必须明确缺失。
+    reviewBtn("exit")?.click();
+    api.diagnostics.setEskfEnabled(false);
+    api.diagnostics.setReviewCapture(false);
+    await sleep(500);
+    api.diagnostics.setReviewCapture(true);
+    await sleep(700);
+    reviewBtn("toggle")?.click();
+    const withoutSnapshot = await waitText((v) => /当前步未记录内部快照/.test(v) || new RegExp("t = " + D + "+" + DOT + "+ s").test(v));
+    const liveSnapshotTime = tOf(withoutSnapshot);
+    reviewBtn("exit")?.click();
+    await sleep(40);
+
+    // ③ 退出回看后实时 Inspector 不得停留在历史时刻。
+    // 实时快照由 sink 在下一解算步产生：重新开启后必须等"真的采到一帧"再断言，
+    // 否则会把「还没采到」误判成「不显示」。
+    if (api.diagnostics.state()?.reviewActive) {
+      reviewBtn("exit")?.click();
+      await sleep(80);
+    }
+    // 采集开关收敛到确定的关闭态，再重开（避免与 ② 的关闭时序叠加成"没有净变化"）。
+    api.diagnostics.setEskfEnabled(false);
+    await sleep(80);
+    api.diagnostics.setEskfEnabled(true);
+    const live = await waitText((v) => new RegExp("t = " + D + "+" + DOT + "+ s").test(v), 12000);
+    api.diagnostics.setEskfEnabled(false);
+    api.diagnostics.setReviewCapture(false);
+    const state = api.diagnostics.state();
+    return {
+      changed,
+      t1: tOf(first), t2: tOf(second), tBack: tOf(back),
+      backMatchesFirst: back === first,
+      missingExplicit: /当前步未记录内部快照/.test(withoutSnapshot),
+      liveSnapshotTime,
+      liveHasTime: tOf(live) !== null,
+      liveDiffersFromHistory: tOf(live) !== tOf(second),
+      reviewFrames: state?.reviewFrames ?? null,
+      eskfOff: state?.eskfEnabled === false,
+    };
+  });
+  check(
+    "历史 Inspector 深层：两帧内部量不同、缺快照不回退实时、退出无泄漏",
+    inspectorDeep?.changed === true &&
+      typeof inspectorDeep?.t1 === "number" && typeof inspectorDeep?.t2 === "number" &&
+      inspectorDeep.t1 !== inspectorDeep.t2 &&
+      inspectorDeep.backMatchesFirst === true &&
+      inspectorDeep.missingExplicit === true &&
+      inspectorDeep.liveHasTime === true &&
+      inspectorDeep.liveDiffersFromHistory === true &&
+      inspectorDeep.eskfOff === true,
+    `两帧 t=${inspectorDeep?.t1}/${inspectorDeep?.t2}（内容不同=${inspectorDeep?.changed}）、回上一帧一致=${inspectorDeep?.backMatchesFirst}；` +
+      `缺快照明确=${inspectorDeep?.missingExplicit}（历史时刻 ${inspectorDeep?.liveSnapshotTime}）；` +
+      `实时 t 存在=${inspectorDeep?.liveHasTime} 且不等于历史=${inspectorDeep?.liveDiffersFromHistory}；` +
+      `采集已关=${inspectorDeep?.eskfOff}`,
+  );
+
+  // C/D：ESKF 单步采集是显式开关，关闭后 sink 解除；实时估计器不被回看/诊断改写。
+  const eskf = await page.evaluate(async () => {
+    const before = window.attitudeDemo.ests.map((e) => ({ id: e.id, q: { ...e.q } }));
+    window.attitudeDemo.diagnostics.setEskfEnabled(true);
+    const on = window.attitudeDemo.diagnostics.state()?.eskfEnabled ?? null;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    window.attitudeDemo.diagnostics.setEskfEnabled(false);
+    const off = window.attitudeDemo.diagnostics.state()?.eskfEnabled ?? null;
+    const after = window.attitudeDemo.ests.map((e) => ({ id: e.id, q: { ...e.q } }));
+    const finite = after.every((e) => Number.isFinite(e.q.w) && Number.isFinite(e.q.x));
+    const idsSame = before.map((e) => e.id).join(",") === after.map((e) => e.id).join(",");
+    return { on, off, finite, idsSame, override: window.attitudeDemo.diagnostics.reviewOverride() };
+  });
+  check(
+    "教学诊断：ESKF 采集显式开关、关闭后解除且估计器身份不变",
+    eskf.on === true && eskf.off === false && eskf.finite && eskf.idsSame,
+    `开=${eskf.on} 关=${eskf.off} 四元数有限=${eskf.finite} 算法身份一致=${eskf.idsSame}`,
+  );
+
+  // F-07：完整 6×6 P 矩阵是显式记录开关，开启后面板给出可展开矩阵。
+  const fullP = await page.evaluate(async () => {
+    const api = window.attitudeDemo;
+    await api.diagnostics.open();
+    api.diagnostics.setEskfEnabled(true);
+    api.diagnostics.setEskfFullMatrix(true);
+    await new Promise((r) => setTimeout(r, 500));
+    const text = document.querySelector(".eskf-panel")?.textContent ?? "";
+    const full = window.attitudeDemo.diagnostics.state()?.eskfFullMatrix ?? null;
+    api.diagnostics.setEskfFullMatrix(false);
+    api.diagnostics.setEskfEnabled(false);
+    return { full, hasFullP: /完整 P/.test(text) && /6×6/.test(text), off: window.attitudeDemo.diagnostics.state()?.eskfFullMatrix ?? null };
+  });
+  check(
+    "ESKF 完整 P 矩阵：显式开关与 6×6 展开",
+    fullP.full === true && fullP.hasFullP && fullP.off === false,
+    `开=${fullP.full} 面板含完整P/6×6=${fullP.hasFullP} 关=${fullP.off}`,
+  );
+
+  // F-05：饱和/参数/视图/实验装载事件来自真实生产动作，不靠 UI 猜测。
+  const eventActions = await page.evaluate(async () => {
+    const api = window.attitudeDemo;
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const set = (id, v) => {
+      const el = document.getElementById(id);
+      el.value = String(v);
+      el.dispatchEvent(new Event(el.tagName === "SELECT" ? "change" : "input", { bubbles: true }));
+    };
+    await api.diagnostics.open();
+    await api.task.open();
+    // 先用真实实验建立饱和现场（实验装载自身记一条 experiment-load）。
+    [...document.querySelectorAll("#experiment-list button")].find((b) => b.textContent.includes("陀螺仪量程饱和"))?.click();
+    await sleep(100);
+    // 振动不触发仿真重置；本轮随后产生的 param/saturation/view 可以共同保留。
+    set("imu-vibration", 1);
+    const pause = document.getElementById("btn-pause");
+    if (pause.textContent === "继续") pause.click();
+    // 软件渲染下仿真时钟较慢，有界等待真实削顶边沿，不拿时间猜测。
+    const saturationDeadline = Date.now() + 10000;
+    while (Date.now() < saturationDeadline && !api.diagnostics.events().some((e) => e.kind === "gate-saturation")) {
+      await sleep(100);
+    }
+    const currentView = document.body.dataset.view;
+    const nextView = currentView === "gimbal" ? "quat" : "gimbal";
+    document.querySelector(`#view-seg [data-view="${nextView}"]`)?.click();
+    await sleep(50);
+    const events = api.diagnostics.events();
+    return {
+      saturation: events.find((e) => e.kind === "gate-saturation"),
+      param: events.find((e) => e.kind === "param-change"),
+      view: events.find((e) => e.kind === "view-change"),
+      load: events.find((e) => e.kind === "experiment-load"),
+    };
+  });
+  check(
+    "F-05 事件：饱和/参数/视图/实验装载来自真实生产动作",
+    eventActions.saturation?.source === "sensor" && eventActions.saturation.phase === "start" &&
+      eventActions.param?.source === "user-action" &&
+      eventActions.view?.source === "user-action" &&
+      eventActions.load?.source === "user-action",
+    `饱和=${eventActions.saturation?.phase ?? "无"}/${eventActions.saturation?.source ?? "无"}；` +
+      `参数=${eventActions.param?.summary ?? "无"}；视图=${eventActions.view?.summary ?? "无"}；装载=${eventActions.load?.summary ?? "无"}`,
+  );
+
   const mag = await page.evaluate(() => {
     const set = (id, v) => {
       const el = document.getElementById(id);
@@ -555,6 +1147,62 @@ try {
     "磁校准拟合并应用",
     mag.status.includes("已应用") && mag.result.includes("硬铁") && mag.checked,
     mag.status.trim(),
+  );
+
+  // 界面文字档位：真实 select change → 根字号递增；课堂投影档在 320 px 下仍不得横向溢出。
+  const fontTierSizes = [];
+  for (const tier of ["standard", "large", "xlarge"]) {
+    await page.select("#font-tier", tier);
+    fontTierSizes.push(await page.evaluate(() => parseFloat(getComputedStyle(document.documentElement).fontSize)));
+  }
+  await page.setViewport({ width: 320, height: 568, deviceScaleFactor: 1 });
+  const narrowFontTiers = [];
+  for (const tier of ["large", "xlarge"]) {
+    await page.select("#font-tier", tier);
+    narrowFontTiers.push(await page.evaluate(() => ({
+      tier: document.getElementById("font-tier").value,
+      root: parseFloat(getComputedStyle(document.documentElement).fontSize),
+      scrollW: document.documentElement.scrollWidth,
+      innerW: window.innerWidth,
+    })));
+  }
+  check(
+    "界面文字档位：标准/大/特大根字号递增，320px 下大/特大无横向溢出",
+    fontTierSizes[0] < fontTierSizes[1] && fontTierSizes[1] < fontTierSizes[2] &&
+      narrowFontTiers.every((r) => r.root > fontTierSizes[0] && r.scrollW <= r.innerW),
+    `根字号=${fontTierSizes.join("/")} px；窄屏=${narrowFontTiers.map((r) => `${r.tier}:${r.root}px,${r.scrollW}/${r.innerW}`).join("；")}`,
+  );
+
+  await page.setViewport(VIEWPORT);
+  await page.select("#font-tier", "xlarge");
+  await page.reload({ waitUntil: "domcontentloaded", timeout: BOOT_MS });
+  await page.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: BOOT_MS });
+  const persistedFontTier = await page.evaluate(() => ({
+    selected: document.getElementById("font-tier").value,
+    dataFont: document.documentElement.dataset.font,
+    root: parseFloat(getComputedStyle(document.documentElement).fontSize),
+    stored: localStorage.getItem("quat-demo:font-tier:v1"),
+  }));
+  check(
+    "界面文字档位：刷新后保留特大档",
+    persistedFontTier.selected === "xlarge" && persistedFontTier.dataFont === "xlarge" &&
+      persistedFontTier.root === fontTierSizes[2] && persistedFontTier.stored === "xlarge",
+    JSON.stringify(persistedFontTier),
+  );
+
+  await page.evaluate(() => localStorage.setItem("quat-demo:font-tier:v1", "not-a-tier"));
+  await page.reload({ waitUntil: "domcontentloaded", timeout: BOOT_MS });
+  await page.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: BOOT_MS });
+  const invalidFontTier = await page.evaluate(() => ({
+    selected: document.getElementById("font-tier").value,
+    dataFont: document.documentElement.dataset.font,
+    root: parseFloat(getComputedStyle(document.documentElement).fontSize),
+  }));
+  check(
+    "界面文字档位：非法 localStorage 值刷新后回退标准档",
+    invalidFontTier.selected === "standard" && invalidFontTier.dataFont === "standard" &&
+      invalidFontTier.root === fontTierSizes[0],
+    JSON.stringify(invalidFontTier),
   );
 
   // 四元数视图 + 读数
@@ -867,6 +1515,21 @@ try {
   const abFork = await page.evaluate(async () => {
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     if (document.getElementById("btn-pause").textContent === "继续") document.getElementById("btn-pause").click();
+    // 本用例要求同起点 q.w≈1；前序教学 claim 可能留下线加速度/振动污染，
+    // 这里只清掉这些现场扰动，不切换数据源（否则 A/B 克隆集合会变）。
+    const setRange = (id, v) => {
+      const el = document.getElementById(id);
+      el.value = String(v);
+      el.valueAsNumber = v;
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    };
+    setRange("imu-lin-accel", 0);
+    setRange("imu-vibration", 0);
+    const scenario = document.getElementById("scenario-select");
+    scenario.value = "hover";
+    scenario.dispatchEvent(new Event("change", { bubbles: true }));
+    await sleep(100);
     const mode = document.getElementById("ab-mode");
     mode.value = "online-fork";
     mode.dispatchEvent(new Event("change"));
@@ -969,6 +1632,137 @@ try {
       rawDataLines > 120,
     `记录 ${rawCase.before.rows}/${rawCase.before.cap} 帧；导出 ${rawDataLines} 数据行、含 gyro_x_dps/accel_z_ms2`,
   );
+
+  // 阶段2：最大误差点与前后证据点复用同一真实回看帧，事件窗口不得伪造。
+  const evidenceNav = await page.evaluate(async () => {
+    const api = window.attitudeDemo;
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    // 通过真实诊断按钮进入回看，验证 GUI 接线而不是只测 attitudeDemo API。
+    document.getElementById("btn-diag-review")?.click();
+    await sleep(2600);
+    const button = (action) => document.querySelector(`.review-panel button[data-review-action="${action}"]`);
+    button("evidence-max")?.click();
+    const first = api.diagnostics.evidence();
+    const firstSeq = first.frame?.seq ?? null;
+    const firstT = first.frame?.t ?? null;
+    button("evidence-next")?.click();
+    const next = api.diagnostics.evidence();
+    button("evidence-prev")?.click();
+    const back = api.diagnostics.evidence();
+    const body = document.querySelector(".review-panel")?.textContent ?? "";
+    button("exit")?.click();
+    api.diagnostics.setReviewCapture(false);
+    return {
+      firstSeq, firstT,
+      nextSeq: next.frame?.seq ?? null,
+      backSeq: back.frame?.seq ?? null,
+      backT: back.frame?.t ?? null,
+      moved: firstSeq !== null,
+      eventsOk: first.events.every((e) => Math.abs(e.t - firstT) <= 0.25 && e.runId === first.runId),
+      hasFacts: /证据事实|证据点|最大误差/.test(body),
+      hasExplanation: /保守解释|不推断|观测/.test(body),
+      note: first.note,
+      backSame: back.frame?.seq === firstSeq,
+    };
+  });
+  check(
+    "复盘导航：最大误差→前后证据点→同帧事件与保守解释",
+    evidenceNav.moved && evidenceNav.eventsOk && evidenceNav.hasFacts && evidenceNav.hasExplanation &&
+      (evidenceNav.nextSeq === null || evidenceNav.nextSeq !== evidenceNav.firstSeq || evidenceNav.backSame),
+    `首帧 seq=${evidenceNav.firstSeq} t=${evidenceNav.firstT}；下一证据=${evidenceNav.nextSeq}；返回=${evidenceNav.backSeq}；` +
+      `同帧返回=${evidenceNav.backSame}；事件窗口=${evidenceNav.eventsOk}；说明=${evidenceNav.note}`,
+  );
+
+  // 阶段3：只读实验报告——生成/导出/导入/打印全走真实按钮与文件输入，导入不得改配置。
+  const reportCase = await page.evaluate(async () => {
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const api = window.attitudeDemo;
+    const configBefore = JSON.stringify(api.experiment.config());
+    document.getElementById("btn-diag-report")?.click();
+    for (let i = 0; i < 100 && !document.querySelector(".report-view .report-banner"); i++) await sleep(100);
+    const banner = document.querySelector(".report-view .report-banner")?.textContent ?? "";
+    const metricsRows = document.querySelectorAll(".report-view tbody tr").length;
+    // 导出 JSON：截获 Blob 文本（与全帧导出用例同一手法）
+    let text = null;
+    const orig = URL.createObjectURL;
+    URL.createObjectURL = (b) => { b.text().then((t) => (text = t)); return "blob:report"; };
+    const origClick = HTMLAnchorElement.prototype.click;
+    HTMLAnchorElement.prototype.click = function () {};
+    document.querySelector('.report-panel button[data-report-action="export"]')?.click();
+    for (let i = 0; i < 80 && !text; i++) await sleep(50);
+    URL.createObjectURL = orig;
+    HTMLAnchorElement.prototype.click = origClick;
+    let parsed = null;
+    try { parsed = JSON.parse(text ?? ""); } catch { /* 留空，由下方断言判失败 */ }
+    // 真实文件输入：导出文本原样喂回（只读导入往返）
+    const input = document.getElementById("report-file");
+    const dt = new DataTransfer();
+    dt.items.add(new File([text ?? ""], "roundtrip.json", { type: "application/json" }));
+    input.files = dt.files;
+    input.dispatchEvent(new Event("change"));
+    for (let i = 0; i < 60 && !(document.querySelector(".report-view .report-banner")?.textContent ?? "").includes("roundtrip.json"); i++) await sleep(50);
+    const importBanner = document.querySelector(".report-view .report-banner")?.textContent ?? "";
+    const status = document.querySelector(".report-status")?.textContent ?? "";
+    // 打印：stub window.print 记录打印态，再手动 afterprint 验证清理（headless 不弹打印框）
+    let printSnap = null;
+    window.print = () => {
+      printSnap = {
+        dataPrint: document.body.getAttribute("data-print"),
+        rootText: (document.getElementById("report-print-root")?.textContent ?? "").length,
+      };
+    };
+    document.querySelector('.report-panel button[data-report-action="print"]')?.click();
+    window.dispatchEvent(new Event("afterprint"));
+    const cleaned = !document.body.hasAttribute("data-print") && (document.getElementById("report-print-root")?.textContent ?? "") === "";
+    const configAfter = JSON.stringify(api.experiment.config());
+    return {
+      generated: banner.includes("只读快照"),
+      metricsRows,
+      exportOk: parsed?.kind === "quaternion-attitude-demo/experiment-report" && parsed?.restore === "read-only",
+      eventsOk: parsed ? parsed.events === null || Array.isArray(parsed.events) : false,
+      importOk: importBanner.includes("只读查看导入文件：roundtrip.json") && importBanner.includes("不应用配置"),
+      statusOk: status.includes("未应用配置"),
+      printOk: printSnap?.dataPrint === "report" && printSnap.rootText > 500,
+      cleaned,
+      configStable: configBefore === configAfter,
+    };
+  });
+  check(
+    "实验报告：生成→导出JSON→只读导入往返→打印态→导入不改配置",
+    reportCase.generated && reportCase.metricsRows > 0 && reportCase.exportOk && reportCase.eventsOk &&
+      reportCase.importOk && reportCase.statusOk && reportCase.printOk && reportCase.cleaned && reportCase.configStable,
+    `指标行=${reportCase.metricsRows}；导出=${reportCase.exportOk}；导入=${reportCase.importOk}；` +
+      `打印=${reportCase.printOk}；打印清理=${reportCase.cleaned}；配置不变=${reportCase.configStable}`,
+  );
+
+  // 非法 JSON：必须拒绝、保留上一份报告、不改配置（不能清空成空白现场）。
+  const badReport = await page.evaluate(async () => {
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const configBefore = JSON.stringify(window.attitudeDemo.experiment.config());
+    const bannerBefore = document.querySelector(".report-view .report-banner")?.textContent ?? "";
+    const input = document.getElementById("report-file");
+    const dt = new DataTransfer();
+    dt.items.add(new File(['{"schema":2,"kind":"quaternion-attitude-demo/experiment-report"}'], "bad.json", { type: "application/json" }));
+    input.files = dt.files;
+    input.dispatchEvent(new Event("change"));
+    let toastText = "";
+    for (let i = 0; i < 60; i++) {
+      toastText = document.querySelector(".toast-layer")?.textContent ?? "";
+      if (toastText.includes("bad.json")) break;
+      await sleep(50);
+    }
+    return {
+      rejected: toastText.includes("导入失败（bad.json）"),
+      kept: (document.querySelector(".report-view .report-banner")?.textContent ?? "") === bannerBefore,
+      configStable: configBefore === JSON.stringify(window.attitudeDemo.experiment.config()),
+    };
+  });
+  check(
+    "实验报告：非法 JSON 被拒绝且保留当前报告与配置",
+    badReport.rejected && badReport.kept && badReport.configStable,
+    `拒绝提示=${badReport.rejected}；原报告保留=${badReport.kept}；配置不变=${badReport.configStable}`,
+  );
+
 
   // 完整 3×3 椭球校准：模型下拉可切换，合成数据自动采集后拟合成功且残差有读数
   const magFull = await page.evaluate(async () => {
@@ -1965,9 +2759,9 @@ try {
   );
 
   // 可复现实验：同配置同 seed 的 runner digest 必须逐位一致；实验档案结构完整
-  const det = await page.evaluate(() => {
-    const a = window.attitudeDemo.experiment.run(1);
-    const b = window.attitudeDemo.experiment.run(1);
+  const det = await page.evaluate(async () => {
+    const a = await window.attitudeDemo.experiment.run(1);
+    const b = await window.attitudeDemo.experiment.run(1);
     const archive = window.attitudeDemo.experiment.archive();
     return {
       same: a.digest === b.digest,
@@ -2485,8 +3279,8 @@ try {
   );
 
   // 主线程回退路径仍可用（同一口径的聚合入口），用于 Worker 不可用时的降级与自动化复算
-  const mainPath = await page.evaluate(() => {
-    const rows = window.attitudeDemo.experiment.batchOnMain(6, 2);
+  const mainPath = await page.evaluate(async () => {
+    const rows = await window.attitudeDemo.experiment.batchOnMain(6, 2);
     const mahony = rows.find((r) => r.id === "mahony");
     return { rows: rows.length, rmseP50: mahony?.rmseP50 ?? null, steady: mahony?.steadyRmseP95 ?? null };
   });
@@ -2525,8 +3319,8 @@ try {
     await sleep(150);
     const STEPS = 2000; // 4.0 s @500 Hz
     const END = STEPS * (1 / 500);
-    const uiFrames = window.attitudeDemo.experiment.traceFrames(STEPS);
-    const runner = window.attitudeDemo.experiment.traceFramesRunner(STEPS);
+    const uiFrames = await window.attitudeDemo.experiment.traceFrames(STEPS);
+    const runner = await window.attitudeDemo.experiment.traceFramesRunner(STEPS);
     const runnerFrames = runner.steps;
     const R2D = 180 / Math.PI;
     const { compareTrace } = (0, eval)(`(() => {${contractSource}; return { compareTrace };})()`);
@@ -3347,6 +4141,42 @@ try {
       `打开的端口=${readerOwnership.res.openPorts}、reader 数=${readerOwnership.res.readers}；` +
       `旧 reader 迟到一帧被接受=${readerOwnership.res.lateValueAccepted} 但随后新增帧=${readerOwnership.res.lateFramesGrow}（应为 0）、` +
       `close 失败=${readerOwnership.res.closeFailures}｜错误=${readerOwnership.errs.slice(0, 2).join(" / ") || "无"}`,
+  );
+
+  // F-05：串口断流与自动重连必须产生真实传输事件（data-gap / data-reconnect / data-recover）。
+  const transportEvents = await (async () => {
+    const { pg, errs, stop } = await makeFakeSerialPage();
+    const res = await pg.evaluate(async () => {
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      await window.attitudeDemo.diagnostics.open();
+      navigator.serial.__fireDisconnect();
+      const deadline = Date.now() + 8000;
+      let events = [];
+      while (Date.now() < deadline) {
+        events = window.attitudeDemo.diagnostics.events();
+        if (events.some((e) => e.kind === "data-recover") && events.some((e) => e.kind === "data-reconnect" && e.after?.status === "success")) break;
+        await sleep(200);
+      }
+      return {
+        kinds: [...new Set(events.map((e) => e.kind))],
+        gap: events.find((e) => e.kind === "data-gap"),
+        recover: events.find((e) => e.kind === "data-recover"),
+        reconnects: events.filter((e) => e.kind === "data-reconnect").map((e) => e.after?.status),
+        running: window.attitudeDemo.plumbing().serial,
+      };
+    });
+    await stop();
+    await pg.close();
+    return { res, errs };
+  })();
+  check(
+    "F-05 事件：串口断流与自动重连产生 data-gap/reconnect/recover",
+    transportEvents.res.kinds.includes("data-gap") && transportEvents.res.kinds.includes("data-recover") &&
+      transportEvents.res.reconnects.includes("attempt") && transportEvents.res.reconnects.includes("success") &&
+      transportEvents.res.gap?.source === "transport" && transportEvents.res.running === true &&
+      errsEmpty(transportEvents.errs),
+    `类型=${transportEvents.res.kinds.join("/")}；重连=${transportEvents.res.reconnects.join(",")}；` +
+      `断流源=${transportEvents.res.gap?.source}；恢复运行=${transportEvents.res.running}｜错误=${transportEvents.errs.slice(0, 2).join(" / ") || "无"}`,
   );
 
   // A-2b：严格锁语义——掉线收尾必须 cancel → 释放读锁 → close 才能成功重开
@@ -4351,8 +5181,9 @@ try {
       })]);
     } finally { clearTimeout(timer); }
   };
-  const waitTourState = async (phase, predicate) => {
-    const start = nodePerformance.now(), timeout = 3000;
+  // 第 1 步含冷加载 chunk + 13 步数据，3 s 在慢机上会误杀；其余步骤仍用 3 s。
+  const waitTourState = async (phase, predicate, timeout = 3000) => {
+    const start = nodePerformance.now();
     let state;
     try {
       while (nodePerformance.now() - start < timeout) {
@@ -4390,7 +5221,7 @@ try {
     await clickTour("tour-start");
     for (let k = 0; k < 13; k++) {
       // 只有精确第 k+1 步与该步目标现场同时成立才计入；不因超时补点或沿用旧快照。
-      tourCase.steps.push(await waitTourState(`第 ${k + 1}/13 步现场`, (s) => matchesTourStep(s, k)));
+      tourCase.steps.push(await waitTourState(`第 ${k + 1}/13 步现场`, (s) => matchesTourStep(s, k), k === 0 ? 8000 : 3000));
       if (k < 12) await clickTour("tour-next");
     }
     // 最后一次点的是「完成」：exit 不改 counter，不能再等 counter 变化。
@@ -4399,7 +5230,7 @@ try {
     tourCase.done = !tourCase.finished.cardVisible;
     tourCase.restored = !tourCase.finished.introHidden && !tourCase.finished.startRowHidden;
     await clickTour("tour-start");
-    tourCase.restartState = await waitTourState("重开精确第 1 步", (s) => matchesTourStep(s, 0));
+    tourCase.restartState = await waitTourState("重开精确第 1 步", (s) => matchesTourStep(s, 0), 8000);
     tourCase.restarted = tourCase.restartState.counter;
     await clickTour("tour-close");
     tourCase.closeState = await waitTourState("关闭后收起与入口恢复", tourExited);
@@ -4422,7 +5253,15 @@ try {
     `${walked.length} 步；标题去重 ${new Set(walked.map((s) => s.title)).size}；` +
       `第 2 步来源=${walked[1]?.source}（应 pure）；第 8/11 步视图=${walked[7]?.view}/${walked[10]?.view}（应 gimbal/quat）；` +
       `走完自动收起=${tourCase.done}、开始入口恢复=${tourCase.restored}；✕ 可退出=${tourCase.closed}；` +
-      `等待失败=${tourCase.waitFailures.length}${tourCase.error ? `；${tourCase.error}` : ""}`,
+      `等待失败=${tourCase.waitFailures.length}${tourCase.error ? `；${tourCase.error}` : ""}` +
+      (() => {
+        const fail = tourCase.waitFailures[0]?.state;
+        return fail ? `；失败现场 counter=${fail.counter} title=${fail.title} card=${fail.cardVisible} ` +
+          `introHidden=${fail.introHidden} startHidden=${fail.startRowHidden} info=${JSON.stringify(fail.controller)} ` +
+          `view=${fail.view}/${fail.activeView} source=${fail.source} scenario=${fail.scenario} imuMode=${fail.imuMode} ` +
+          `scenarioDisabled=${fail.scenarioDisabled} next=${fail.next} prevDisabled=${fail.prevDisabled} ` +
+          `panels=${JSON.stringify(fail.panels)}` : "";
+      })(),
   );
 
   // ⑥ 应用界面里的「见文档·…」链接（a[data-doc-open]）：从面板直接跳进文档对应页。
@@ -4920,6 +5759,7 @@ try {
     "ble-char": "BLE 通知特征：连接后才被发现，链接里带不了",
     "magcal-apply": "「应用校准」：标定数据不在链接里，单独带这个开关只会出现「已应用但无标定」",
     "accelcal-apply": "「应用六面校准」：六面样本与拟合结果不在链接里，开关依赖运行时状态",
+    "font-tier": "界面文字档位：本机显示偏好，不属于实验现场，刻意不随深链分享",
   };
 
   const deepCoverage = await page.evaluate((exemptIds) => {
@@ -4935,7 +5775,7 @@ try {
     return { missing, total: dl.keys.length + dl.checks.length + dl.sels.length };
   }, Object.keys(DEEP_EXEMPT));
   check(
-    "深链覆盖度：所有界面控件都在分享范围内（例外只有 6 个明确不分享的）",
+    "深链覆盖度：所有界面控件都在分享范围内（例外只有 7 个明确不分享的）",
     deepCoverage.missing.length === 0,
     deepCoverage.total + " 个键" + (deepCoverage.missing.length ? "；未覆盖：" + deepCoverage.missing.join("、") : "，界面控件全部覆盖"),
   );
@@ -5912,6 +6752,99 @@ try {
   );
   await page.evaluate(() => document.getElementById("panel-collapse-all").click());
 
+  // ---------- SW-12：首次联网预热后，报告与导出分片可离线使用 ----------
+  const swConsoleBaseline = errors.length;
+  await withIndependentPage(async (offlinePage) => {
+    attachSharedListeners(offlinePage);
+    await gotoSafe(offlinePage);
+    await offlinePage.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: BOOT_MS });
+    await offlinePage.waitForFunction(async () => {
+      const keys = [];
+      for (const name of await caches.keys()) {
+        keys.push(...(await (await caches.open(name)).keys()).map((r) => r.url));
+      }
+      return keys.some((u) => /diagnostics-ui-.*\.js$/.test(u)) && keys.some((u) => /tools-ui-.*\.js$/.test(u));
+    }, { timeout: STATE_MS });
+    await offlinePage.setOfflineMode(true);
+    try {
+      await offlinePage.reload({ waitUntil: "domcontentloaded", timeout: BOOT_MS });
+      await offlinePage.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: BOOT_MS });
+      await offlinePage.evaluate(() => {
+        const section = document.getElementById("sec-diagnostics");
+        if (section?.classList.contains("collapsed")) section.querySelector(".panel-toggle")?.click();
+      });
+      await offlinePage.waitForFunction(() => (document.getElementById("btn-diag-report")?.getBoundingClientRect().width ?? 0) > 0, { timeout: STATE_MS });
+      await offlinePage.click("#btn-diag-report");
+      await offlinePage.waitForFunction(() => /本机生成的只读快照/.test(document.getElementById("diag-report-host")?.textContent ?? ""), { timeout: STATE_MS });
+      await offlinePage.click("#btn-export");
+      await offlinePage.waitForFunction(() => document.getElementById("export-dialog")?.open === true, { timeout: STATE_MS });
+      const offline = await offlinePage.evaluate(() => ({
+        online: navigator.onLine,
+        report: /本机生成的只读快照/.test(document.getElementById("diag-report-host")?.textContent ?? ""),
+        exportOpen: document.getElementById("export-dialog")?.open === true,
+        cached: (performance.getEntriesByType("navigation").length > 0),
+      }));
+      check("离线预热：报告与导出懒模块可真实打开", !offline.online && offline.report && offline.exportOpen && offline.cached, JSON.stringify(offline));
+    } finally {
+      await offlinePage.setOfflineMode(false);
+    }
+  });
+
+  // ---------- SW-13：真实更新协议与构建身份（不伪造导航或 controller） ----------
+  const { createServer } = await import("node:http");
+  let serveNextSw = false;
+  const updateServer = createServer((req, res) => {
+    try {
+      const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+      const relative = pathname === "/" ? "index.html" : pathname.slice(1);
+      if (!relative || relative.includes("..")) { res.writeHead(400).end(); return; }
+      const body = pathname === "/sw.js" && serveNextSw
+        ? readFileSync(join(root, "public/sw.js"), "utf8").replace("quat-demo-v5", "quat-demo-v5-next")
+        : readFileSync(join(root, "dist", relative));
+      const type = relative.endsWith(".js") ? "application/javascript"
+        : relative.endsWith(".html") ? "text/html"
+          : relative.endsWith(".css") ? "text/css"
+            : relative.endsWith(".json") || relative.endsWith(".webmanifest") ? "application/json"
+              : relative.endsWith(".svg") ? "image/svg+xml" : "application/octet-stream";
+      res.writeHead(200, { "content-type": type, "cache-control": "no-store" }).end(body);
+    } catch { res.writeHead(404).end(); }
+  });
+  await new Promise((resolveListen) => updateServer.listen(0, "127.0.0.1", resolveListen));
+  const updateAddress = updateServer.address();
+  if (!updateAddress || typeof updateAddress === "string") throw new Error("SW 更新测试服务器未监听");
+  const updateUrl = `http://127.0.0.1:${updateAddress.port}/`;
+  try {
+    await withIndependentPage(async (updatePage) => {
+      attachSharedListeners(updatePage);
+      let documentResponses = 0;
+      updatePage.on("response", (response) => {
+        if (response.request().resourceType() === "document") documentResponses++;
+      });
+      await gotoSafe(updatePage, updateUrl);
+      await updatePage.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: BOOT_MS });
+      serveNextSw = true;
+      await updatePage.evaluate(async () => (await navigator.serviceWorker.getRegistration())?.update());
+      await updatePage.waitForFunction(() => !document.getElementById("sw-banner")?.hidden, { timeout: STATE_MS });
+      const visualDir = process.env.SW_VISUAL_DIR ?? (process.platform === "win32" ? "D:/test-artifacts/quaternion-attitude/visual/stage5-sw" : shots);
+      mkdirSync(visualDir, { recursive: true });
+      await updatePage.screenshot({ path: join(visualDir, "update-banner.png") });
+      const beforeClickDocuments = documentResponses;
+      const reload = updatePage.waitForNavigation({ waitUntil: "domcontentloaded", timeout: STATE_MS });
+      await updatePage.click("#sw-update");
+      await reload;
+      await updatePage.waitForFunction(() => Boolean(navigator.serviceWorker.controller), { timeout: STATE_MS });
+      const updated = await updatePage.evaluate(async () => ({
+        cache: (await caches.keys()).some((name) => name === "quat-demo-v5-next"),
+        buildId: window.attitudeDemo?.build?.()?.buildId ?? null,
+        servedBuildId: await fetch("build-provenance.json", { cache: "no-store" }).then((r) => r.json()).then((p) => p.buildId),
+      }));
+      check("SW 更新横幅：用户确认后仅刷新一次且新 worker 接管", documentResponses === beforeClickDocuments + 1 && updated.cache && errors.length === swConsoleBaseline, `文档请求 ${beforeClickDocuments}→${documentResponses}；next cache=${updated.cache}；新增控制台错误 ${errors.length - swConsoleBaseline}`);
+      check("SW 更新后 HTTP 溯源与页面自报 buildId 等于本地 dist", updated.buildId === identity.localBuildId && updated.servedBuildId === identity.localBuildId, `HTTP ${updated.servedBuildId} / 页面 ${updated.buildId} / 本地 ${identity.localBuildId}`);
+    });
+  } finally {
+    await new Promise((resolveClose) => updateServer.close(resolveClose));
+  }
+
   } // app 段结束
   if (runDevices) {
   // ---------- 真实串口模式：用假 Web Serial 端口端到端验证 ----------
@@ -6053,9 +6986,9 @@ try {
     /* 关闭失败不影响结论 */
   }
   try {
-    rmSync(profileDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+    cleanupArtifactDir(profileDir);
   } catch {
-    /* Windows 上 crashpad 文件可能仍被占用：留给系统临时目录清理 */
+    /* Windows 上 crashpad 文件可能仍被占用：留到下次启动前由 test-artifacts 的根目录清理 */
   }
 }
 

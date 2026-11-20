@@ -13,7 +13,8 @@
  */
 import puppeteer from "puppeteer-core";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { sameCommit } from "./served-build.mjs";
+import { fetchServedProvenance, sameCommit } from "./served-build.mjs";
+import { testArtifactTempDir, cleanupArtifactDir } from "./test-artifacts.mjs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -46,12 +47,15 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 mkdirSync(dirname(outPath), { recursive: true });
 const consoleErrors = [];
 let browser = null;
+const profileDir = testArtifactTempDir("postdeploy", "postdeploy-");
+process.on("exit", () => cleanupArtifactDir(profileDir));
 const startedAt = new Date().toISOString();
 
 try {
   browser = await puppeteer.launch({
     executablePath,
     headless: "new",
+    userDataDir: profileDir,
     protocolTimeout: 120000,
     args: ["--no-sandbox", "--disable-dev-shm-usage", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"],
   });
@@ -61,6 +65,11 @@ try {
   const resp = await page.goto(url, { waitUntil: "domcontentloaded", timeout: timeoutMs });
   const status = resp?.status() ?? 0;
   await page.waitForFunction(() => document.getElementById("fps")?.textContent !== "-- fps", { timeout: timeoutMs });
+  // 页面通过 SW 的 network-first 取回构建身份；未取到时让 provenanceMatch 明确失败。
+  try {
+    await page.waitForFunction(() => Boolean(window.attitudeDemo?.build?.()?.buildId), { timeout: timeoutMs });
+  } catch { /* 报告会写明页面缺失 buildId */ }
+  const served = await fetchServedProvenance(url, timeoutMs);
 
   const browserVersion = await browser.version();
   const before = await page.evaluate(() => ({
@@ -94,20 +103,23 @@ try {
   const clockOk = after.clock > before.clock + 1;
   const rowsOk = after.rows >= 5;
   const stampOk = /[0-9a-f]{7,}/i.test(before.stamp);
-  const pass = status === 200 && commitOk && expectOk && clockOk && rowsOk && stampOk && after.hasCanvas && consoleErrors.length === 0;
+  const provenanceOk = served.ok && before.build?.buildId === served.provenance.buildId;
+  const pass = status === 200 && commitOk && expectOk && clockOk && rowsOk && stampOk && provenanceOk && after.hasCanvas && consoleErrors.length === 0;
 
   const report = {
     generatedAt: new Date().toISOString(), startedAt, finishedAt: new Date().toISOString(),
     url, httpStatus: status, expectedCommit: expect || null,
     // 溯源：报告必须能回答「用哪个浏览器、看的是哪个提交的线上产物」（复核 P2 证据治理）
     browserVersion,
-    observed: { commit: before.build?.commit ?? null, builtAt: before.build?.builtAt ?? null, stamp: before.stamp, clockFrom: before.clock, clockTo: after.clock, metricRows: after.rows, fps: after.fps, canvas: after.hasCanvas },
-    checks: { statusOk: status === 200, commitOk, expectOk, clockAdvanced: clockOk, fiveEstimatorRows: rowsOk, stampRendered: stampOk, canvas: after.hasCanvas, consoleClean: consoleErrors.length === 0 },
+    servedProvenance: served.ok ? { href: served.href, buildId: served.provenance.buildId } : { error: served.error },
+    observed: { commit: before.build?.commit ?? null, builtAt: before.build?.builtAt ?? null, buildId: before.build?.buildId ?? null, stamp: before.stamp, clockFrom: before.clock, clockTo: after.clock, metricRows: after.rows, fps: after.fps, canvas: after.hasCanvas },
+    checks: { statusOk: status === 200, commitOk, expectOk, clockAdvanced: clockOk, fiveEstimatorRows: rowsOk, stampRendered: stampOk, provenanceMatch: provenanceOk, canvas: after.hasCanvas, consoleClean: consoleErrors.length === 0 },
     consoleErrors, pass,
   };
   writeFileSync(outPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
   console.log(`[${pass ? "PASS" : "FAIL"}] 部署后 smoke：${url}`);
   console.log(`  构建标识 ${before.build?.commit ?? "（缺失）"}${expect ? `（期望 ${expect}）` : ""}；页脚「${before.stamp}」`);
+  console.log(`  溯源一致：${provenanceOk ? "是" : `否（HTTP ${served.ok ? served.provenance.buildId : served.error} / 页面 ${before.build?.buildId ?? "缺失"}）`}`);
   console.log(`  时钟 ${before.clock.toFixed(1)}→${after.clock.toFixed(1)} s；评测表 ${after.rows} 行；canvas=${after.hasCanvas}；控制台错误 ${consoleErrors.length}`);
   console.log(`  报告：${outPath}`);
   process.exitCode = pass ? 0 : 1;

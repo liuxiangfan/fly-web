@@ -16,15 +16,18 @@ import {
   KalmanEstimator,
   MahonyEstimator,
   MadgwickEstimator,
-  PureGyroEstimator,
+  createEstimators,
   type Estimator,
 } from "./estimators";
 import { DEG, qAngleBetween, qConj, qFromEuler, qId, qMul, qNorm, qRotInv, qSlerp, qToAxisAngle, qToEuler, RAD, symmetricEigen3, type Quat, type V3 } from "./core/quat";
 import { TruthTrack } from "./core/truth-track";
 import { gimbalDemo, gimbalInnerQuat, toDisplayVec } from "./core/gimbal";
-import * as THREE from "three";
+import { ArrowHelper, Color, Group, Material, Matrix4, Mesh, Vector3 } from "three";
+import { selectViewAction } from "./ui/view-action";
 import { applyViewDom, narrateGimbal, type UiView } from "./ui/mode";
+import { errorText } from "./core/html-escape";
 import { buildDocIndex, hitsHtml, MIN_QUERY_LENGTH, movedSelection, searchDocBlocks, type DocBlock } from "./ui/doc-search";
+import { applyFontTier, isFontTier, loadFontTier, saveFontTier } from "./ui/preferences";
 import { createFormulaCopy, formulaText, selectFormulaText } from "./ui/formula-copy";
 import { Gauss, mulberry32 } from "./core/rng";
 import {
@@ -54,18 +57,22 @@ import {
   type AccelFace,
 } from "./core/accelcal";
 import { ErrorTracker } from "./core/stats";
-import { EXPERIMENTS, type ExperimentSpec } from "./ui/experiments";
-import { CHALLENGES, type ChallengeSpec } from "./ui/challenges";
+import type { ExperimentSpec } from "./ui/experiments";
+import type { ChallengeSpec } from "./ui/challenges";
+import type { TourStep } from "./ui/tour";
 import { fitInsetCanvas } from "./ui/canvas-util";
-import { drawInsMap } from "./ui/ins-view";
+import { drawInsMap, fmtMeters } from "./ui/ins-view";
 import { b64urlDecode, b64urlEncode } from "./ui/b64";
 import { parseImuCsv, type ReplayFrame, type ReplayParseResult } from "./core/replay";
+import type { LogRow, RawRow } from "./core/csv-export";
 import { SolveLoop } from "./core/solve-loop";
 import { ReplayPlayer } from "./core/replay-player";
 import { pushBounded } from "./core/serial-queue";
 import { ReconnectPolicy } from "./core/reconnect";
+import { scheduleTransportReconnect } from "./core/reconnect-schedule";
 import { NotificationSession, SerialTransportSession, TransportSession } from "./core/transport-session";
-import { RUN_H } from "./core/runner";
+import { RUN_H } from "./core/run-constants";
+import { applyTuning } from "./core/tuning";
 import {
   buildArchive as buildArchiveObject,
   describeArchiveRun,
@@ -105,25 +112,22 @@ import {
   type MagCalModel,
 } from "./core/experiment-config";
 import { archiveControlRoundTripProblems, archiveUiSteps, quantizeSliderValue, type ControlSpecs } from "./core/archive-ui";
-import { TraceEvents } from "./core/trace-events";
 /** 构建期注入（vite define）：线上页面必须能回答「我看的是哪个提交」 */
 declare const __BUILD_COMMIT__: string;
 declare const __BUILD_TIME__: string;
 
-import {
-  applyTuning,
-  resultDigest,
-  runExperiment,
-  runExperimentAsync,
-  runMonteCarlo,
-  runTrace,
-  seedSequence,
-  summarizeMetricsLists,
-  summarizeRuns,
-  type EstimatorRunMetrics,
-  type HeadlessRunResult,
-} from "./core/runner";
+import type { EstimatorRunMetrics, HeadlessRunResult } from "./core/runner";
+import { loadRunner } from "./ui/runner-loader";
+type RunnerModule = Awaited<ReturnType<typeof loadRunner>>;
+type BatchSummary = ReturnType<RunnerModule["summarizeRuns"]>["summary"];
 import type { BatchRequest, BatchResponse } from "./core/batch-protocol";
+import type { ComparisonApplyResult, ComparisonPanelApi, ComparisonPanelSnapshot } from "./ui/comparison-panel";
+import type { TaskDescriptor, TaskStripApi } from "./ui/task-strip";
+import type { LearningPanelApi } from "./ui/learning-panel";
+import type { PredictionAnswer } from "./ui/learning-activities";
+import type { TelemetryDiagnosticsApi } from "./ui/telemetry-diagnostics";
+import type { ReportPanelApi } from "./ui/report-panel-ui";
+import batchWorkerUrl from "virtual:worker-url/batch";
 import {
   hasPhysicalReference,
   isExternalSource,
@@ -139,10 +143,6 @@ const LOG_DT = 0.04; // 曲线记录间隔
 const CHART_WINDOW = 30;
 
 const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
-
-function errorText(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
 
 // 仿真步异常保护：记录一次并暂停，渲染循环与交互不受影响（可切模式后继续）
 let simErrorShown = false;
@@ -177,13 +177,7 @@ const experimentConfig: ExperimentConfig = defaultExperimentConfig();
  */
 let steadyFromSec: number | null = null;
 const world = new World(scenarios.hover, experimentConfig.seed);
-const ests: Estimator[] = [
-  new PureGyroEstimator(),
-  new ComplementaryEstimator(),
-  new MahonyEstimator(),
-  new MadgwickEstimator(),
-  new KalmanEstimator(),
-];
+const ests: Estimator[] = createEstimators();
 const comp = ests[1] as ComplementaryEstimator;
 const mahony = ests[2] as MahonyEstimator;
 const madg = ests[3] as MadgwickEstimator;
@@ -354,6 +348,30 @@ function beginAccelCalFace(face: AccelFace): void {
   updateAccelCalUi();
 }
 
+/**
+ * 任务条按需模块的句柄。声明必须在首次 `resetSim()` 调用之前：
+ * `resetSim()` 会通过 `noteReset()` 上报真实复位，若 `let` 声明留在文件尾部，
+ * 顶层初始化阶段会触发 TDZ（ReferenceError），页面连 attitudeDemo 都挂不上。
+ */
+let taskStripApi: TaskStripApi | null = null;
+
+/** 配置版本：任何真实参数/装载/档案提交都会推进；对照报告据此判断是否 stale。 */
+let configRevision = 0;
+function bumpConfigRevision(): void {
+  configRevision += 1;
+  queueMicrotask(() => comparisonPanel?.markStaleIfChanged());
+}
+const onConfigEdit = (ev: Event): void => {
+  const el = ev.target;
+  if ((el instanceof HTMLInputElement || el instanceof HTMLSelectElement) && el.closest("#panel")) bumpConfigRevision();
+};
+document.addEventListener("input", onConfigEdit, false);
+document.addEventListener("change", onConfigEdit, false);
+
+/* C/D：诊断服务与 ESKF 单步快照（服务未接线时全部为空，零每帧成本） */
+let diagnosticsApi: TelemetryDiagnosticsApi | null = null;
+let latestKalmanStep: Parameters<NonNullable<KalmanEstimator["diagnostics"]>>[0] | null = null;
+
 const state = {
   playing: true,
   source: "mahony" as "truth" | Estimator["id"],
@@ -494,11 +512,7 @@ const abState = {
  * 否则新增一个算法参数时极易漏拷（历史上 kalmanResetCov 就漏过一次）。
  */
 function cloneFromTuning(id: EstimatorId, t: EstimatorTuning): Estimator {
-  const c = id === "pure" ? new PureGyroEstimator()
-    : id === "comp" ? new ComplementaryEstimator()
-    : id === "mahony" ? new MahonyEstimator()
-    : id === "madg" ? new MadgwickEstimator()
-    : new KalmanEstimator();
+  const c = createEstimators().find((e) => e.id === id)!;
   applyTuning(c, t);
   return c;
 }
@@ -629,42 +643,13 @@ function rebuildImuLegend(): void {
   imuLegend.chips.forEach((c, i) => c.classList.toggle("off", !imuVisible[imuLegend.indices[i]]));
 }
 
-// 原始记录（切换通道时不丢历史）
-interface LogRow {
-  t: number;
-  euler: number[][]; // [真实, pure, comp, mahony, madg, kalman] × [φ,θ,ψ]（度，原始值）
-  err: number[]; // 总误差（度）
-  /** 每个算法在该时刻的四元数 + 参考姿态（CSV 导出用；四元数无法从欧拉角可靠反算，
-   *  尤其在万向节锁附近——锁点欧拉三元组不唯一，必须原样记录） */
-  quats: Quat[];
-  qTrue: Quat;
-  /** 该时刻最近一帧**源** IMU（可选导出；也是「导入回放」能闭环的前提） */
-  imu: ImuSample | null;
-  /**
-   * 该时刻**实际喂给估计器**的读数（= 源读数经过「当时」的校准链）。
-   *
-   * 为什么必须逐行存：导出的「校准后 IMU 列」以前是**按导出时的当前标定重算**的，
-   * 于是同一批历史数据在改过标定之后再导出，数值会变（复核实测：磁行 30 → 25）。
-   * 导出必须是「序列化记录」，不是「按现在的参数重算历史」——记录追加不可变。
-   */
-  imuConsumed: ImuSample | null;
-  /** `imuConsumed` 对应的解算时刻（秒）；NaN = 该行没有可用的消费快照 */
-  consumedSolveT: number;
-  /** 该行的源读数是否**本来就是**校准后读数（回放 `# imu=calibrated` 的日志） */
-  sourceCalibrated: boolean;
-}
+// 原始记录（切换通道时不丢历史）；快照类型与 CSV 序列化在 core/csv-export.ts。
 const logRows: LogRow[] = [];
 /** 记录窗口上限与一次裁剪量（导出弹窗会据此提示「更早的行已丢弃」） */
 const LOG_ROW_CAP = 850;
 const LOG_ROW_TRIM = 100;
 
 /* ---------- 全帧源 IMU 记录（默认关，用于导出→回放与逐帧分析） ---------- */
-interface RawRow {
-  t: number;
-  gyro: V3;
-  accel: V3;
-  mag: V3;
-}
 const RAW_ROW_CAP = 30000; // ≈ 60 s @500 Hz
 const RAW_ROW_TRIM = 5000;
 /** `sourceCalibrated`：本段全帧记录里的读数是否本来就是校准后读数（回放校准日志时为真） */
@@ -1576,16 +1561,16 @@ function stepQuatPlay(dt: number): void {
 }
 
 // ---------- 四元数视图组切换过渡（淡入淡出 + 轻缩放，取代瞬切） ----------
-const quatFades = new Map<THREE.Group, { k: number; target: number }>();
+const quatFades = new Map<Group, { k: number; target: number }>();
 const QUAT_FADE_SEC = 0.4;
 
 /** 首次触碰时记录每个材质的基准透明度，淡入淡出后可精确还原 */
-function prepQuatMats(g: THREE.Group): void {
+function prepQuatMats(g: Group): void {
   g.traverse((o) => {
-    const mats = (o as THREE.Mesh).material;
+    const mats = (o as Mesh).material;
     if (!mats) return;
     for (const m of Array.isArray(mats) ? mats : [mats]) {
-      const mm = m as THREE.Material & { opacity: number; transparent: boolean };
+      const mm = m as Material & { opacity: number; transparent: boolean };
       if (mm.userData.__quatBaseOp === undefined) {
         mm.userData.__quatBaseOp = mm.opacity;
         mm.userData.__quatBaseTr = mm.transparent;
@@ -1594,7 +1579,7 @@ function prepQuatMats(g: THREE.Group): void {
   });
 }
 
-function quatGroupFade(g: THREE.Group, show: boolean): void {
+function quatGroupFade(g: Group, show: boolean): void {
   let f = quatFades.get(g);
   if (!f) {
     f = { k: show ? 0 : g.visible ? 1 : 0, target: show ? 1 : 0 };
@@ -1606,14 +1591,14 @@ function quatGroupFade(g: THREE.Group, show: boolean): void {
   prepQuatMats(g);
 }
 
-function applyQuatFade(g: THREE.Group, k: number, done: boolean): void {
+function applyQuatFade(g: Group, k: number, done: boolean): void {
   const ease = k * k * (3 - 2 * k);
   g.scale.setScalar(0.93 + 0.07 * ease);
   g.traverse((o) => {
-    const mats = (o as THREE.Mesh).material;
+    const mats = (o as Mesh).material;
     if (!mats) return;
     for (const m of Array.isArray(mats) ? mats : [mats]) {
-      const mm = m as THREE.Material & { opacity: number; transparent: boolean };
+      const mm = m as Material & { opacity: number; transparent: boolean };
       if (mm.userData.__quatBaseOp === undefined) continue;
       if (done) {
         mm.opacity = mm.userData.__quatBaseOp;
@@ -1645,8 +1630,8 @@ function stepQuatFades(dt: number): void {
 const quatCamTween = {
   active: false,
   t: 0,
-  fromPos: new THREE.Vector3(), toPos: new THREE.Vector3(),
-  fromTgt: new THREE.Vector3(), toTgt: new THREE.Vector3(),
+  fromPos: new Vector3(), toPos: new Vector3(),
+  fromTgt: new Vector3(), toTgt: new Vector3(),
 };
 const QUAT_FRAMING = {
   // 四元数视图：球半径 0.85 + 两侧姿态展示位 ±1.12，相机要能同时装下
@@ -1923,12 +1908,17 @@ function applyExperiment(spec: ExperimentSpec): void {
   }
   // 顺序：基线复位 → 剧本 → 滑块 → 开关（A/B 快照需在参数就位后）→ 视图 → 重置
   const abWasOn = abState.on; // 基线会把 A/B 复位为关闭：必须明说，否则"参数对比中"的实验语义含混
-  resetExperimentBaseline();
-  for (const [id, v] of Object.entries(spec.selects ?? {})) setSelectValue(id, v);
-  for (const [id, v] of Object.entries(spec.sliders ?? {})) setSliderValue(id, v);
-  for (const [id, v] of Object.entries(spec.checks ?? {})) setCheckValue(id, v);
-  if (spec.view) applyView(spec.view);
-  if (spec.reset !== false) resetSim();
+  taskStripApi?.beginProgrammatic();
+  try {
+    resetExperimentBaseline();
+    for (const [id, v] of Object.entries(spec.selects ?? {})) setSelectValue(id, v);
+    for (const [id, v] of Object.entries(spec.sliders ?? {})) setSliderValue(id, v);
+    for (const [id, v] of Object.entries(spec.checks ?? {})) setCheckValue(id, v);
+    if (spec.view) applyView(spec.view);
+    if (spec.reset !== false) resetSim();
+  } finally {
+    taskStripApi?.endProgrammatic();
+  }
   const note = document.getElementById("experiment-note");
   if (note) {
     note.innerHTML =
@@ -1941,8 +1931,139 @@ function applyExperiment(spec: ExperimentSpec): void {
   document.querySelectorAll<HTMLButtonElement>("#experiment-list button").forEach((b) => {
     b.classList.toggle("active", b.dataset.exp === spec.id);
   });
+  setTaskContext({
+    kind: "experiment",
+    id: spec.id,
+    title: `实验：${spec.name}`,
+    conditions: `实验库基线 · 种子 ${experimentConfig.seed} · 场景 ${spec.selects?.["scenario-select"] ?? "沿用当前"}`,
+    variable: "实验声明的参数组（不是单变量对照）",
+    observe: spec.observe,
+    next: "先看曲线与读数；要做因果对照，打开「单变量对照」冻结同一配置后只改一个变量。",
+    allowedIds: [
+      ...Object.keys(spec.sliders ?? {}),
+      ...Object.keys(spec.checks ?? {}),
+      ...Object.keys(spec.selects ?? {}),
+    ],
+  });
   toast(`实验已就位：${spec.name}`);
 }
+
+/**
+ * 实验库／挑战目录：从 public/data/*.json 读取，不再把纯数据打进 JS 包。
+ *
+ * 数据仍由 TS 源（ui/experiments.ts、ui/challenges.ts、scripts/emit-catalog.ts 里的
+ * TOUR_STEPS）维护，`npm run catalog` 生成确定性 JSON。这里只做最小校验：
+ * 顶层必须是数组、id 为非空字符串且唯一、必填字段类型正确。任何失败只影响对应面板，
+ * 不向主循环抛出——console.warn + toast，页面其余部分照常可交互。
+ */
+let EXPERIMENTS: readonly ExperimentSpec[] = [];
+let CHALLENGES: readonly ChallengeSpec[] = [];
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function catalogRows(raw: unknown, file: string): unknown[] {
+  if (!Array.isArray(raw)) throw new Error(`${file}: 顶层必须是数组`);
+  return raw;
+}
+
+function checkId(item: Record<string, unknown>, ids: Set<string>, where: string): void {
+  if (typeof item.id !== "string" || item.id.length === 0) throw new Error(`${where}.id 必须是非空字符串`);
+  if (ids.has(item.id)) throw new Error(`${where}: id 重复（${item.id}）`);
+  ids.add(item.id);
+}
+
+function requireStrings(item: Record<string, unknown>, keys: readonly string[], where: string): void {
+  for (const key of keys) {
+    if (typeof item[key] !== "string" || item[key].length === 0) {
+      throw new Error(`${where}.${key} 必须是非空字符串`);
+    }
+  }
+}
+
+function parseExperimentCatalog(raw: unknown): ExperimentSpec[] {
+  const ids = new Set<string>();
+  return catalogRows(raw, "experiments.json").map((item, i) => {
+    const where = `experiments.json[${i}]`;
+    if (!isRecord(item)) throw new Error(`${where}: 必须是对象`);
+    checkId(item, ids, where);
+    requireStrings(item, ["name", "tag", "observe"], where);
+    return item as unknown as ExperimentSpec;
+  });
+}
+
+function parseChallengeCatalog(raw: unknown): ChallengeSpec[] {
+  const ids = new Set<string>();
+  return catalogRows(raw, "challenges.json").map((item, i) => {
+    const where = `challenges.json[${i}]`;
+    if (!isRecord(item)) throw new Error(`${where}: 必须是对象`);
+    checkId(item, ids, where);
+    requireStrings(item, ["name", "scene", "goal", "hint"], where);
+    const grade = item.grade;
+    if (
+      !isRecord(grade) ||
+      typeof grade.est !== "string" ||
+      !["comp", "mahony", "madg", "kalman"].includes(grade.est) ||
+      typeof grade.limit !== "number" ||
+      !Number.isFinite(grade.limit)
+    ) {
+      throw new Error(`${where}.grade 必须是 { est, limit } 评分口径`);
+    }
+    return item as unknown as ChallengeSpec;
+  });
+}
+
+function parseTourCatalog(raw: unknown): TourStep[] {
+  if (!Array.isArray(raw) || raw.length === 0) throw new Error("tour.json: 顶层必须是非空数组");
+  const ids = new Set<string>();
+  return raw.map((item, i) => {
+    const where = `tour.json[${i}]`;
+    if (!isRecord(item)) throw new Error(`${where}: 必须是对象`);
+    checkId(item, ids, where);
+    requireStrings(item, ["title", "body", "look"], where);
+    if (typeof item.sec !== "number" || !Number.isFinite(item.sec) || item.sec <= 0) {
+      throw new Error(`${where}.sec 必须是正数`);
+    }
+    return item as unknown as TourStep;
+  });
+}
+
+async function fetchCatalog<T>(file: string, parse: (raw: unknown) => T[]): Promise<T[]> {
+  const url = new URL(`data/${file}`, document.baseURI).href;
+  // no-cache：拿到最新目录；离线时由 Service Worker 的 CORE 缓存兜底。
+  const res = await fetch(url, { cache: "no-cache" });
+  if (!res.ok) throw new Error(`${file}: HTTP ${res.status}`);
+  return parse(await res.json());
+}
+
+const catalogsReadyPromise: Promise<void> = (async () => {
+  const [experiments, challenges] = await Promise.allSettled([
+    fetchCatalog("experiments.json", parseExperimentCatalog),
+    fetchCatalog("challenges.json", parseChallengeCatalog),
+  ]);
+  const errors: string[] = [];
+  if (experiments.status === "fulfilled") {
+    EXPERIMENTS = experiments.value;
+  } else {
+    errors.push(errorText(experiments.reason));
+    console.warn("实验库加载失败：", experiments.reason);
+  }
+  if (challenges.status === "fulfilled") {
+    CHALLENGES = challenges.value;
+  } else {
+    errors.push(errorText(challenges.reason));
+    console.warn("挑战目录加载失败：", challenges.reason);
+  }
+  // 无论成功失败都算「已尝试」：applyExperimentById 不会对已失败的目录无限重试。
+  buildExperimentList();
+  buildChallengeList();
+  updateChallengeUi();
+  if (errors.length) toast(`实验库/挑战目录加载失败：${errors.join("；")}`, "#f85149");
+})().catch((err: unknown) => {
+  console.warn("实验库/挑战目录初始化失败：", err);
+  toast(`实验库/挑战目录初始化失败：${errorText(err)}`, "#f85149");
+});
 
 function buildExperimentList(): void {
   const list = document.getElementById("experiment-list");
@@ -1958,7 +2079,6 @@ function buildExperimentList(): void {
     list.appendChild(btn);
   }
 }
-buildExperimentList();
 $("btn-sandbox").addEventListener("click", () => enterSandbox());
 
 // ---------- 参数整定挑战（评分读的是「本轮评测」同一个 ErrorTracker） ----------
@@ -1984,11 +2104,16 @@ function startChallenge(c: ChallengeSpec): void {
     return;
   }
   const abWasOn = abState.on; // 基线会关闭 A/B：挑战评分读的是 A 组「本轮评测」，必须说清
-  resetExperimentBaseline();
-  for (const [id, v] of Object.entries(c.selects ?? {})) setSelectValue(id, v);
-  for (const [id, v] of Object.entries(c.sliders ?? {})) setSliderValue(id, v);
-  for (const [id, v] of Object.entries(c.checks ?? {})) setCheckValue(id, v);
-  resetSim();
+  taskStripApi?.beginProgrammatic();
+  try {
+    resetExperimentBaseline();
+    for (const [id, v] of Object.entries(c.selects ?? {})) setSelectValue(id, v);
+    for (const [id, v] of Object.entries(c.sliders ?? {})) setSliderValue(id, v);
+    for (const [id, v] of Object.entries(c.checks ?? {})) setCheckValue(id, v);
+    resetSim();
+  } finally {
+    taskStripApi?.endProgrammatic();
+  }
   challengeState.set(c.id, { startedAt: state.simTime, passed: challengeState.get(c.id)?.passed ?? false });
   const note = document.getElementById("challenge-note");
   if (note) {
@@ -2002,6 +2127,20 @@ function startChallenge(c: ChallengeSpec): void {
         ? '<br /><span class="dim">本次装载关闭了 A/B 对比（评分只看 A 组「本轮评测」）。</span>'
         : "");
   }
+  setTaskContext({
+    kind: "challenge",
+    id: c.id,
+    title: `挑战：${c.name}`,
+    conditions: c.scene,
+    variable: "把面板参数调到目标阈值以内（题目不指定唯一路径）",
+    observe: `${c.goal}；至少积累 15 秒样本后才允许结算。`,
+    next: "调参 → 看误差曲线与当前 RMSE → 跑够 15 秒后点「结算」。",
+    allowedIds: [
+      ...Object.keys(c.sliders ?? {}),
+      ...Object.keys(c.checks ?? {}),
+      ...Object.keys(c.selects ?? {}),
+    ],
+  });
   toast(`挑战已装载：${c.name} —— 调参数，跑够 15 秒后结算`);
 }
 
@@ -2062,7 +2201,6 @@ function buildChallengeList(): void {
       `</div>`,
   ).join("");
 }
-buildChallengeList();
 document.getElementById("challenge-list")?.addEventListener("click", (e) => {
   const btn = (e.target as HTMLElement).closest<HTMLButtonElement>("button[data-ch]");
   if (!btn) return;
@@ -2188,14 +2326,19 @@ function planAccelPanel(d: CalUiDesc): AccelPanelPlan {
   };
 }
 
+type CalPanelCommonPlan = Pick<MagPanelPlan, "status" | "result" | "applyDisabled" | "applyChecked">;
 /** 应用计划：只有赋值与节点搬移，没有 HTML 解析 */
-function applyMagPanel(p: MagPanelPlan): void {
-  const status = document.getElementById("magcal-status");
-  const result = document.getElementById("magcal-result");
+function applyCalPanel(kind: "mag" | "accel", p: CalPanelCommonPlan): void {
+  const status = document.getElementById(`${kind}cal-status`);
+  const result = document.getElementById(`${kind}cal-result`);
   if (status) status.textContent = p.status;
   if (result) result.replaceChildren(...p.result);
-  const apply = document.getElementById("magcal-apply") as HTMLInputElement | null;
+  const apply = document.getElementById(`${kind}cal-apply`) as HTMLInputElement | null;
   if (apply) { apply.disabled = p.applyDisabled; apply.checked = p.applyChecked; }
+}
+
+function applyMagPanel(p: MagPanelPlan): void {
+  applyCalPanel("mag", p);
   const start = document.getElementById("magcal-start") as HTMLButtonElement | null;
   if (start) start.textContent = p.startLabel;
   const synth = document.getElementById("magcal-synthetic") as HTMLButtonElement | null;
@@ -2203,12 +2346,7 @@ function applyMagPanel(p: MagPanelPlan): void {
 }
 
 function applyAccelPanel(p: AccelPanelPlan): void {
-  const status = document.getElementById("accelcal-status");
-  const result = document.getElementById("accelcal-result");
-  if (status) status.textContent = p.status;
-  if (result) result.replaceChildren(...p.result);
-  const apply = document.getElementById("accelcal-apply") as HTMLInputElement | null;
-  if (apply) { apply.disabled = p.applyDisabled; apply.checked = p.applyChecked; }
+  applyCalPanel("accel", p);
 }
 
 function updateMagCalUi(): void {
@@ -2474,14 +2612,7 @@ $("quat-mode").addEventListener("change", () => {
   document.querySelectorAll(".quat-interp-only").forEach((el) => el.classList.toggle("hidden", proj));
   $("quat-proj-group").classList.toggle("hidden", !proj);
   // 只有四元数视图当前可见时才动相机/淡入淡出（深链在后台切模式时不应打断姿态视图取景）
-  if (state.view === "quat") {
-    if (proj) {
-      enterQuatScene("proj");
-      projApply(projState.q);
-    } else {
-      enterQuatScene(($("quat-neg-toggle") as HTMLInputElement).checked ? "neg" : "interp");
-    }
-  }
+  if (state.view === "quat") enterQuatSelectedMode();
 });
 
 /** 投影动画推进（独立于仿真暂停） */
@@ -2571,11 +2702,21 @@ function stepDemo(dt: number): void {
 const scenarioSelect = $<HTMLSelectElement>("scenario-select");
 const sourceSelect = $<HTMLSelectElement>("source-select");
 
+/**
+ * 模型显示名/颜色。切换数据源期间 state.source 可能指向一个**已不在 ests 里**的算法
+ * （例如回放/真实模式会重建估计器集合），此时不能对 find() 的结果直接取属性：
+ * 那会抛 TypeError 并把仿真步打断。回退到第一个可用算法，再不济用真实姿态。
+ */
+function sourceEstimator(): (typeof ests)[number] | undefined {
+  return ests.find((e) => e.id === state.source);
+}
 function sourceLabel(): string {
-  return state.source === "truth" ? "真实姿态" : ests.find((e) => e.id === state.source)!.label;
+  if (state.source === "truth") return "真实姿态";
+  return sourceEstimator()?.label ?? ests[0]?.label ?? "真实姿态";
 }
 function sourceColor(): string {
-  return state.source === "truth" ? "#e6edf3" : ests.find((e) => e.id === state.source)!.color;
+  if (state.source === "truth") return "#e6edf3";
+  return sourceEstimator()?.color ?? ests[0]?.color ?? "#e6edf3";
 }
 function updateSourceChip(): void {
   const chip = $("readout-source");
@@ -2606,16 +2747,22 @@ function applyView(view: UiView): void {
   sceneHandles.setView(view, ($("ghost-toggle") as HTMLInputElement).checked);
   syncSeg("view-seg", "view", view);
   if (view === "gimbal") updateGimbalUi();
-  if (view === "quat") {
-    // 进入四元数视图时按当前下拉状态选内部演示组（插值 / q−q / 4D 投影）
-    const proj = ($("quat-mode") as HTMLSelectElement).value === "proj";
-    if (proj) {
-      enterQuatScene("proj");
-      projApply(projState.q);
-    } else {
-      enterQuatScene(($("quat-neg-toggle") as HTMLInputElement).checked ? "neg" : "interp");
-    }
+  if (view === "quat") enterQuatSelectedMode();
+}
+
+/** 按当前下拉与 q/−q 开关进入同一套四元数演示，避免两处模式映射漂移。 */
+function enterQuatSelectedMode(): void {
+  if (($("quat-mode") as HTMLSelectElement).value === "proj") {
+    enterQuatScene("proj");
+    projApply(projState.q);
+  } else {
+    enterQuatScene(($("quat-neg-toggle") as HTMLInputElement).checked ? "neg" : "interp");
   }
+}
+
+/** 真实用户切换视图（F-05）：记录前后视图；程序化装载走 applyView，不记成用户动作。 */
+function userSelectView(view: UiView): void {
+  selectViewAction(view, state.view, applyView, (before, after) => diagnosticsApi?.userAction("view-change", `切换视图：${before}→${after}`, { view: before }, { view: after }));
 }
 
 /* ==========================================================================
@@ -2666,7 +2813,7 @@ glCanvas.addEventListener(
 
 $("view-seg")
   .querySelectorAll<HTMLButtonElement>(".seg-btn")
-  .forEach((btn) => btn.addEventListener("click", () => applyView(btn.dataset.view as UiView)));
+  .forEach((btn) => btn.addEventListener("click", () => userSelectView(btn.dataset.view as UiView)));
 
 scenarioSelect.addEventListener("change", () => {
   world.setScenario(scenarioSelect.value);
@@ -3043,9 +3190,14 @@ for (const id of ["att-canvas", "err-canvas", "imu-canvas"]) {
     if (rect.width <= 0) return;
     const frac = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
     const { t0, t1 } = attChart.timeRange();
-    setSharedCursor(t0 + frac * (t1 - t0));
+    const t = t0 + frac * (t1 - t0);
+    if (diagnosticsApi?.state().reviewActive) diagnosticsApi.seekReview(t);
+    else setSharedCursor(t);
   });
-  canvas.addEventListener("mouseleave", () => setSharedCursor(null));
+  canvas.addEventListener("mouseleave", () => {
+    // 回看锁定时鼠标离开曲线不得静默清掉历史游标。
+    if (!diagnosticsApi?.state().reviewActive) setSharedCursor(null);
+  });
 }
 window.addEventListener("keydown", (e) => {
   if (state.playing || (e.key !== "ArrowLeft" && e.key !== "ArrowRight")) return;
@@ -3054,7 +3206,8 @@ window.addEventListener("keydown", (e) => {
   const { t0, t1 } = attChart.timeRange();
   const cur = cursorT ?? t1;
   const next = Math.min(t1, Math.max(t0, cur + (e.key === "ArrowLeft" ? -0.04 : 0.04)));
-  setSharedCursor(next);
+  if (diagnosticsApi?.state().reviewActive) diagnosticsApi.seekReview(next);
+  else setSharedCursor(next);
   e.preventDefault();
 });
 
@@ -3103,6 +3256,7 @@ function resetSim(): void {
   // 但此刻还没决定是否接受这份档案。只有 applyArchiveChecked 验证通过后
   // 才会退出抑制并显式提交一次。
   if (archiveProbeDepth > 0) return;
+  taskStripApi?.noteReset();
   simResetCount++; // 诊断计数：每帧都在复位说明有控件事件在自激（时钟/曲线永远停在 0）
   // 确定性复位：World 用同一 seed 重新播种，传感器噪声序列从实验起点完整重放
   world.reset(experimentConfig.seed);
@@ -3118,6 +3272,7 @@ function resetSim(): void {
   solveLoop.reset();
   solveRunId++; // 新的一轮：消费快照随之作废（旧消费值不得出现在新轮记录里）
   clearSolveInput();
+  diagnosticsApi?.reset(solveRunId);
   replayPlayer.rewind(); // 重置播放预算、未完成帧、游标（日志/倍速仍保留）
   replayState.idx = 0;
   replayState.acc = 0;
@@ -3173,7 +3328,9 @@ const fmtVec = (v: [number, number, number]): string =>
 /** 当前「模型姿态来源」对应的四元数；真实模式且无外部真值时回退到 Mahony 基准 */
 function selectedQ(): Quat {
   if (state.source === "truth") return referenceQ();
-  return ests.find((e) => e.id === state.source)!.q;
+  // 换源/回放会重建估计器集合，此刻 state.source 可能暂时指向已不存在的算法；
+  // 直接对 find() 取 .q 会抛错并打断仿真步，这里回退到第一个可用算法。
+  return sourceEstimator()?.q ?? ests[0]?.q ?? world.q;
 }
 
 function eulerText(e: ReturnType<typeof qToEuler>, separator = " "): string {
@@ -3247,6 +3404,7 @@ function metricRow(name: string, color: string, s: ReturnType<ErrorTracker["summ
   );
 }
 
+let metricsRowsCache = "";
 function updateMetricsTable(): void {
   const body = document.getElementById("metrics-body");
   if (!body) return;
@@ -3275,8 +3433,14 @@ function updateMetricsTable(): void {
       if (s) rows.push(metricRow(`${e.label} ·B`, abAlpha(e.color), s));
     });
   }
-  body.innerHTML = rows.join("");
+  uiWorkCounters.metricsAttempts++;
+  const rowsHtml = rows.join("");
   const meta = document.getElementById("metrics-meta");
+  if (rowsHtml !== metricsRowsCache) {
+    body.innerHTML = rowsHtml;
+    metricsRowsCache = rowsHtml;
+    uiWorkCounters.metricsWrites++;
+  }
   if (meta) {
     const n = sums.find((s) => s.n > 0)?.n ?? 0;
     meta.textContent = `本轮 ${n} 个样本（25 Hz）· 收敛 = 连续 1 s 总误差 < 2°`;
@@ -3403,7 +3567,7 @@ let batchWorkerDisabled = false;
 /** 步数与墙钟双预算：固定步数不能保证慢机器上的响应时间。 */
 const BATCH_MAIN_SLICE_STEPS = 128;
 const batchSlices = { count: 0, maxComputeMs: 0 };
-let batchCompletedResult: { generation: number; seeds: number[]; summary: ReturnType<typeof summarizeRuns>["summary"] } | null = null;
+let batchCompletedResult: { generation: number; seeds: number[]; summary: BatchSummary } | null = null;
 
 /**
  * Worker 路径：把 N 个种子的评测整体搬出主线程。
@@ -3490,7 +3654,7 @@ function runBatchInWorker(
     }
     let worker: Worker;
     try {
-      worker = new Worker(new URL("./workers/batch.worker.ts", import.meta.url), { type: "module" });
+      worker = new Worker(batchWorkerUrl, { type: "module" });
     } catch {
       activeBatchJob = 0;
       resolve(null);
@@ -3569,12 +3733,26 @@ async function runBatch(): Promise<void> {
   body.innerHTML = "";
   status.classList.remove("hidden");
   status.textContent = `批量评测准备中：${runCount} 个种子 × ${durText} s…`;
-  const seeds = seedSequence(config.seed, runCount);
-  // 本批次的世代：任何回写前都要确认它仍是最新（取消/新批次会让它过期）
+  // 本批次的世代必须在任何 await 之前推进：用户点下按钮的那一刻就已经是
+  // 「运行中/可取消」，量具与取消逻辑不能等按需 runner 加载完才看到状态变化。
   const myGen = ++batchGeneration;
   const stale = (): boolean => batchGeneration !== myGen;
+  let runner: RunnerModule;
+  try {
+    runner = await loadRunner();
+  } catch (err) {
+    if (!stale()) {
+      batchRunning = false;
+      btn.textContent = "运行批量评测";
+      status.textContent = "批量评测失败：运行内核加载失败";
+      toast(`批量评测失败：${errorText(err)}`, "#f85149");
+    }
+    return;
+  }
+  if (stale()) return; // 加载期间被取消/替代：不再启动 Worker 或主线程任务
+  const seeds = runner.seedSequence(config.seed, runCount);
 
-  const finishBatch = (res: ReturnType<typeof summarizeRuns>, count: number, mode: "worker" | "main"): void => {
+  const finishBatch = (res: { seeds: number[]; summary: BatchSummary; approximate?: boolean }, count: number, mode: "worker" | "main"): void => {
     // 过期批次绝不写表格：取消后旧 Worker 的回调/看门狗仍可能走到这里
     if (stale()) return;
     batchLastMode = mode;
@@ -3609,7 +3787,7 @@ async function runBatch(): Promise<void> {
   // 取消会立刻结算 Promise（null）并把世代推进：这里必须直接结束，不能再走回退路径
   if (stale()) return;
   if (metricsList) {
-    finishBatch(summarizeMetricsLists(config, seeds, metricsList), metricsList.length, "worker");
+    finishBatch(runner.summarizeMetricsLists(config, seeds, metricsList), metricsList.length, "worker");
     return;
   }
 
@@ -3630,7 +3808,7 @@ async function runBatch(): Promise<void> {
   const cancelledNow = (): boolean => stale() || !batchRunning;
   for (let i = 0; i < seeds.length; i++) {
     if (cancelledNow()) return;
-    const result = await runExperimentAsync(
+    const result = await runner.runExperimentAsync(
       { ...config, seed: seeds[i] },
       {
         stepsPerSlice: BATCH_MAIN_SLICE_STEPS,
@@ -3670,7 +3848,7 @@ async function runBatch(): Promise<void> {
     status.textContent = `批量评测进行中（主线程）：${runs.length} / ${seeds.length}（当前 seed ${seeds[i]}）`;
   }
   if (cancelledNow()) return;
-  finishBatch(summarizeRuns(config, seeds, runs), runs.length, "main");
+  finishBatch(runner.summarizeRuns(config, seeds, runs), runs.length, "main");
 }
 $("btn-batch")?.addEventListener("click", () => void runBatch());
 
@@ -3824,6 +4002,7 @@ function commitArchiveRestore(panels?: { mag: MagPanelPlan; accel: AccelPanelPla
   if (panels) { applyMagPanel(panels.mag); applyAccelPanel(panels.accel); }
   else { updateMagCalUi(); updateAccelCalUi(); }
   resetSim();
+  bumpConfigRevision();
 }
 
 
@@ -4081,6 +4260,17 @@ $("palette-toggle").addEventListener("change", () => {
   applyPalette(($("palette-toggle") as HTMLInputElement).checked ? "cb" : "default");
 });
 
+// 界面文字档位（标准/大/特大，课堂投影）：独立偏好，刻意不加入 DEEP_SELS/DEEP_CHECKS。
+const fontTierSelect = $("font-tier") as HTMLSelectElement;
+const initialFontTier = loadFontTier();
+applyFontTier(initialFontTier);
+fontTierSelect.value = initialFontTier;
+fontTierSelect.addEventListener("change", () => {
+  const tier = isFontTier(fontTierSelect.value) ? fontTierSelect.value : "standard";
+  saveFontTier(tier);
+  applyFontTier(tier);
+});
+
 $("telemetry-toggle").addEventListener("change", () => {
   setTelemetryVisible(($("telemetry-toggle") as HTMLInputElement).checked);
 });
@@ -4178,10 +4368,10 @@ function updateCovEllipsoid(est: (typeof ests)[number] | null): void {
   const COV_SCALE = 4;
   const half = values.map((v) => Math.min(0.9, Math.max(0.16, 3 * Math.sqrt(Math.max(0, v)) * COV_SCALE)));
   // 机体系 → 显示系的基变换：协方差主轴按 S·v 转（与 toDisplayVec 同源）
-  const m = new THREE.Matrix4();
-  const col = (i: number): THREE.Vector3 => {
+  const m = new Matrix4();
+  const col = (i: number): Vector3 => {
     const v = toDisplayVec([vectors[i], vectors[3 + i], vectors[6 + i]]);
-    return new THREE.Vector3(v[0], v[1], v[2]).normalize();
+    return new Vector3(v[0], v[1], v[2]).normalize();
   };
   const e0 = col(0), e1 = col(1), e2 = col(2);
   m.set(
@@ -4191,7 +4381,7 @@ function updateCovEllipsoid(est: (typeof ests)[number] | null): void {
     0, 0, 0, 1,
   );
   // 椭球挂在四轴上（quad.group 已带机体系姿态），这里只补机体系内部的摆放
-  m.premultiply(new THREE.Matrix4().makeTranslation(0, 0.09, 0));
+  m.premultiply(new Matrix4().makeTranslation(0, 0.09, 0));
   mesh.matrix.copy(m);
   wire.matrix.copy(m);
   mesh.matrixWorldNeedsUpdate = true;
@@ -4199,6 +4389,8 @@ function updateCovEllipsoid(est: (typeof ests)[number] | null): void {
 }
 
 /** 内部读数块 + 3D 双箭头（每 0.1s 刷新一次） */
+let telDetailCache = "";
+const uiWorkCounters = { telemetryAttempts: 0, telemetryWrites: 0, metricsAttempts: 0, metricsWrites: 0, insPlaceholderDraws: 0 };
 function updateTelemetry(): void {
   const est = activeEstimator();
   const arrows = sceneHandles.gravityArrows;
@@ -4208,11 +4400,11 @@ function updateTelemetry(): void {
 
   const t = est.telemetry;
   // 3D 箭头方向：机体系向量经 toDisplayVec 翻转到显示约定，归一化后由 ArrowHelper 定向
-  const setDir = (arrow: THREE.ArrowHelper, v: [number, number, number], active: boolean) => {
+  const setDir = (arrow: ArrowHelper, v: [number, number, number], active: boolean) => {
     const len = Math.hypot(v[0], v[1], v[2]);
     arrow.visible = active && len > 1e-6;
     if (active && len > 1e-6) {
-      arrow.setDirection(new THREE.Vector3(v[0] / len, v[1] / len, v[2] / len));
+      arrow.setDirection(new Vector3(v[0] / len, v[1] / len, v[2] / len));
     }
   };
   setDir(arrows.predicted, toDisplayVec(t.predictedGravity), true);
@@ -4221,7 +4413,7 @@ function updateTelemetry(): void {
   // 受扰状态：实测箭头降饱和；提示带黏性（见 telState 注释）
   const disturbed = !t.accelValid && t.accelNorm > 0.1 * 9.80665;
   const failed = t.accelNorm <= 0.1 * 9.80665;
-  arrows.measured.setColor(new THREE.Color(disturbed || failed ? 0x8b5a92 : 0xe879f9));
+  arrows.measured.setColor(new Color(disturbed || failed ? 0x8b5a92 : 0xe879f9));
 
   const now = performance.now() / 1000;
   if (disturbed || failed) telState.disturbedUntil = now + TEL_HOLD_SEC;
@@ -4252,7 +4444,13 @@ function updateTelemetry(): void {
   $("tel-correction").textContent =
     est.id === "pure" ? "0（无修正）" : `${fmtDps(t.correction)} °/s（|Δ| ${corrMag.toFixed(1)}）`;
 
-  $("tel-detail").innerHTML = detailRows(est);
+  uiWorkCounters.telemetryAttempts++;
+  const detailHtml = detailRows(est);
+  if (detailHtml !== telDetailCache) {
+    $("tel-detail").innerHTML = detailHtml;
+    telDetailCache = detailHtml;
+    uiWorkCounters.telemetryWrites++;
+  }
   const ae = t.detail.alignErrorDeg;
   $("tel-alignerr").textContent = Number.isFinite(ae) ? `${ae.toFixed(2)}°` : "—";
 
@@ -4324,7 +4522,7 @@ function clearSolveInput(): void {
 }
 
 /** 统一的 onSolve：INS 逐子步积分 + 冻结实际消费输入（trace 换钩子时必须复用同一个） */
-function onSolveDefault(ctx: { sample: ImuSample; dt: number; accel: V3; mag: V3; t: number }): void {
+function onSolveDefault(ctx: { sample: ImuSample; dt: number; accel: V3; mag: V3; t: number; aligned?: boolean }): void {
   // 回放外部真值：必须取**本子步时刻**的插值真值，而不是帧末真值。
   // 这一行要在 stepIns / logRow / 误差统计之前，三者都通过 state.externalTruth 取值。
   if (replayActive()) state.externalTruth = replayTruth.at(ctx.t);
@@ -4346,6 +4544,14 @@ function onSolveDefault(ctx: { sample: ImuSample; dt: number; accel: V3; mag: V3
       logRow();
     }
   }
+  // C/D：服务未接线时这一行只是空判断，不产生分配。
+  diagnosticsApi?.sample({
+    t: ctx.t,
+    dt: ctx.dt,
+    aligned: ctx.aligned === true,
+    raw: ctx.sample,
+    consumed: { gyro: ctx.sample.gyro, accel: ctx.accel, mag: ctx.mag },
+  });
 }
 
 /**
@@ -4411,7 +4617,7 @@ function stepSim(): boolean {
   // 闭环演示：控制器改用所选解算结果（而非真实姿态）计算跟踪误差——
   // 「估计漂多少，机体就飞偏多少」；选真实姿态或关闭开关时为理想飞控。
   const loopOn = ($("loop-toggle") as HTMLInputElement).checked;
-  const fb = loopOn && state.source !== "truth" ? ests.find((e) => e.id === state.source)!.q : undefined;
+  const fb = loopOn && state.source !== "truth" ? sourceEstimator()?.q : undefined;
   const sample = world.step(H, imuParams, fb);
   state.simTime = world.t;
   state.lastImu = sample;
@@ -4551,12 +4757,15 @@ function frame(): void {
   }
 
   markPhase("simulation");
-  const q = selectedQ();
+  const review = diagnosticsApi?.reviewOverride() ?? null;
+  const q = review ? review.q : selectedQ();
   quad.group.quaternion.copy(toDisplay(q));
   // 真实模式无真值基准：幻影隐藏（它显示的是模拟剧本的姿态，与真实机体无关）
   // 幻影显示的是模拟世界的真值姿态：只有模拟模式有意义（外部真值回放不画，用它只会显示陈旧模拟姿态）
-  ghost.group.visible = !state.real && state.view === "attitude" && ($("ghost-toggle") as HTMLInputElement).checked;
-  ghost.group.quaternion.copy(toDisplay(world.q));
+  ghost.group.visible = review
+    ? review.truthQ !== null && state.view === "attitude"
+    : !state.real && state.view === "attitude" && ($("ghost-toggle") as HTMLInputElement).checked;
+  ghost.group.quaternion.copy(toDisplay(review?.truthQ ?? world.q));
 
   // 磁航向箭头：世界系水平箭头（挂 scene，不随机体姿态旋转），指向估计姿态
   // 的机头方位在水平面上的投影。四轴姿态视图可见；显示真实姿态时隐藏（无解算）。
@@ -4565,7 +4774,7 @@ function frame(): void {
     const eu = qToEuler(q);
     // 显示坐标：北=+X、东=+Z、上=+Y；NED 偏航 ψ（绕 z 下正转）在显示系是绕 +Y 的 −ψ
     sceneHandles.headingArrow.setDirection(
-      new THREE.Vector3(Math.cos(eu.yaw), 0, Math.sin(eu.yaw)),
+      new Vector3(Math.cos(eu.yaw), 0, Math.sin(eu.yaw)),
     );
   }
 
@@ -4580,7 +4789,7 @@ function frame(): void {
       sceneHandles.axisArrow.visible = false; // 近零旋转：轴无定义，藏起避免误导
     } else {
       const d = toDisplayVec(axis);
-      sceneHandles.axisArrow.setDirection(new THREE.Vector3(d[0], d[1], d[2]).normalize());
+      sceneHandles.axisArrow.setDirection(new Vector3(d[0], d[1], d[2]).normalize());
       sceneHandles.axisArrow.setLength(1.0 + 0.5 * (angle / Math.PI), 0.12, 0.07);
     }
   }
@@ -4593,8 +4802,9 @@ function frame(): void {
   if (uiAcc >= 0.1) {
     uiAcc = 0;
     updateReadouts();
+    diagnosticsApi?.update();
     updateLegendValues();
-    updateGimbalUi();
+    if (state.view === "gimbal") updateGimbalUi();
     updateTelemetry();
     if (chartState.att) attChart.render();
     if (chartState.err) errChart.render();
@@ -4802,13 +5012,13 @@ window.addEventListener("keydown", (e) => {
       toast("已重置：估计器、曲线与统计归零");
       break;
     case "1":
-      applyView("attitude");
+      userSelectView("attitude");
       break;
     case "2":
-      applyView("gimbal");
+      userSelectView("gimbal");
       break;
     case "3":
-      applyView("quat");
+      userSelectView("quat");
       break;
     case "d":
     case "D":
@@ -5018,6 +5228,27 @@ for (const p of docPageEls) {
   for (const el of p.querySelectorAll<HTMLElement>("section[id], h3[id]")) chapterObserver.observe(el);
 }
 
+/** 空闲预取：优先让浏览器选择空闲时机；不支持时退到有界延时，不抢首屏关键路径。 */
+function idlePrefetch(run: () => void, delayMs: number): void {
+  if (typeof requestIdleCallback === "function") requestIdleCallback(run);
+  else setTimeout(run, delayMs);
+}
+
+/** 懒装配骨架：已挂载直接返回；装载失败则清缓存 Promise、报告原因并继续向上抛。 */
+function lazyMount<T>(mount: () => Promise<T>, report: (err: unknown) => void): (api: T | null) => Promise<T> {
+  let load: Promise<T> | null = null;
+  return (api) => {
+    if (api) return Promise.resolve(api);
+    return load ??= mount().catch((err) => { load = null; report(err); throw err; });
+  };
+}
+function lazyFailure(label: string): (err: unknown) => void {
+  return (err) => toast(`${label}：${errorText(err)}${lazyOfflineHint}`, "#f85149");
+}
+function idleLoad(ensure: () => Promise<unknown>, delayMs: number): void {
+  idlePrefetch(() => void ensure().catch(() => {}), delayMs);
+}
+
 /* ==========================================================================
    文档内交互演示（互补滤波三路对比 / 旋转顺序 / 校准舞蹈 / Allan 方差 /
    一维卡尔曼 / 互补频域）
@@ -5059,28 +5290,46 @@ else setTimeout(() => void ensureDocDemos(), 1200);
 /* ==========================================================================
    引导课程：13 步顺序走完全部教学内容
    --------------------------------------------------------------------------
-   课程本身（步骤文案 + DOM 驱动）在 ui/tour.ts；这里只把三个「本模块办不到」
-   的动作交过去：装载实验、打开文档、弹提示。刻意不引入 localStorage 之类的
-   首次访问标记——本装置不落地任何持久状态（分享靠 URL 深链，见「深链分享」）。
+   步骤文案在 public/data/tour.json（TS 真源在 scripts/emit-catalog.ts），
+   DOM 驱动在 ui/tour.ts。这里负责取步骤、懒加载 UI chunk，并把三个「本模块办不到」
+   的动作接上：装载实验、打开文档、弹提示。刻意不引入 localStorage 之类的首次访问
+   标记——本装置不落地任何持久状态（分享靠 URL 深链，见「深链分享」）。
    ========================================================================== */
 
 /*
- * 引导课程**按需加载**：13 步文案（minify 后约 19 KB）只在用户点「开始」或按 G 时才需要，
- * 放在首屏会让主包 gzip 长期贴着上限（实测 106/108 KB）。首次点击由捕获阶段处理器负责
- * 「先加载、再启动」；加载完成后 mountTour 自己绑定的处理器接管按钮。
+ * 引导课程**按需加载**：13 步文案不再进 JS 包，而是和实验/挑战一样取 data/tour.json；
+ * UI chunk 只剩 DOM 驱动代码。首次点击由捕获阶段处理器负责「先取数据与模块、再启动」；
+ * 加载完成后 mountTour 自己绑定的处理器接管按钮。
  */
 type TourApi = import("./ui/tour").Tour;
 let tour: TourApi | null = null;
 let tourLoad: Promise<TourApi> | null = null;
+let tourSteps: readonly TourStep[] | null = null;
+let tourStepsLoad: Promise<readonly TourStep[]> | null = null;
+function ensureTourSteps(): Promise<readonly TourStep[]> {
+  if (tourSteps) return Promise.resolve(tourSteps);
+  if (!tourStepsLoad) {
+    tourStepsLoad = fetchCatalog("tour.json", parseTourCatalog)
+      .then((steps) => (tourSteps = steps))
+      .catch((err: unknown) => {
+        tourStepsLoad = null; // 允许重试（例如离线时 JSON 没取到）
+        throw err;
+      });
+  }
+  return tourStepsLoad;
+}
+async function applyExperimentById(id: string): Promise<void> {
+  await catalogsReadyPromise;
+  const spec = EXPERIMENTS.find((e) => e.id === id);
+  if (!spec) {
+    console.warn(`实验引用不存在：${id}`);
+    toast(`实验不存在：${id}`, "#f85149");
+    return;
+  }
+  applyExperiment(spec);
+}
 const tourHost = {
-  applyExperiment: (id: string): void => {
-    const spec = EXPERIMENTS.find((e) => e.id === id);
-    if (!spec) {
-      console.warn(`引导课程引用了不存在的实验：${id}`);
-      return;
-    }
-    applyExperiment(spec);
-  },
+  applyExperiment: applyExperimentById,
   openDocs: (page: string, anchor?: string): void => {
     showDocPage(page);
     if (anchor) {
@@ -5089,12 +5338,28 @@ const tourHost = {
     }
   },
   toast: (msg: string): void => toast(msg),
+  onStep: (step: { id: string; title: string; look: string }, index: number, total: number) => {
+    setTaskContext({
+      kind: "tour",
+      id: step.id,
+      title: `引导课程：${step.title}`,
+      conditions: `第 ${index + 1}/${total} 步 · 按步骤自动装载现场`,
+      variable: "按课程顺序观察，不要求改参数",
+      observe: step.look,
+      next: "按卡片「下一步」；可随时退出课程回到自由探索。",
+      allowedIds: [],
+    });
+  },
+  onExit: () => {
+    if (taskStripApi?.state().task?.kind === "tour") setTaskContext(null);
+  },
 };
 function ensureTour(): Promise<TourApi> {
   if (tour) return Promise.resolve(tour);
   if (!tourLoad) {
-    tourLoad = import("./ui/tour")
-      .then(({ mountTour }) => (tour = mountTour(tourHost)))
+    // 数据与 UI chunk 并行取；任一失败都走同一个错误出口。
+    tourLoad = Promise.all([import("./ui/tour"), ensureTourSteps()])
+      .then(([{ mountTour }, steps]) => (tour = mountTour(tourHost, steps)))
       .catch((err: unknown) => {
         tourLoad = null; // 允许重试（例如离线时 chunk 没取到）
         toast(`引导课程加载失败：${errorText(err)}`, "#f85149");
@@ -5260,218 +5525,37 @@ function toast(text: string, color = "#7ee787"): void {
   setTimeout(() => chip.remove(), 2400);
 }
 
-// ---------- 数据导出：把当前记录导出为 CSV（Excel/Matlab/Python 可直接读） ----------
-/**
- * 导出流程：点顶栏按钮 → 先弹选项（姿态角与误差 / 再带上四元数分量）→ 确认才下载。
- * 为什么不做成顶栏常驻复选框：那个复选框只写「含 q」三个字，说不清代价（表宽翻倍）
- * 与收益（欧拉角无法反算回 q），也没地方显示「本轮已记录多少行」。
- * 选择记在会话里，连着导几份不用每次重选。
- */
-let exportIncludeQuat = false;
-/** 是否附加原始 IMU 九列（勾上后这份文件可直接用「导入 IMU 日志回放」喂回装置） */
-let exportIncludeImu = false;
-
-function openExportDialog(): void {
-  const dlg = document.getElementById("export-dialog") as HTMLDialogElement | null;
-  if (!dlg) return;
-  if (logRows.length === 0 && rawRecord.rows.length === 0) {
-    toast("还没有记录到数据——等一两秒再导出", "#fbbf24");
-    return;
-  }
-  const meta = document.getElementById("export-meta");
-  if (meta) {
-    const span = logRows.length > 1 ? state.simTime - logRows[0].t : 0;
-    // 记录是滚动窗口（有上限）：长时间运行后最早的行会被丢弃，这一点必须说出来，
-    // 否则用户会以为「导出的行数」= 实际运行时长
-    const capped = logRows.length >= LOG_ROW_CAP ? `（滚动窗口上限 ${LOG_ROW_CAP} 行，更早的已丢弃）` : "";
-    meta.textContent =
-      `已记录 ${logRows.length} 行（25 Hz，约 ${span.toFixed(1)} s）${capped} · ` +
-      `数据源：${dataSourceLabel()}${hasGroundTruth() ? `（基准 = 真值，剧本 ${scenarioSelect.selectedOptions[0]?.textContent ?? "—"}）` : `（基准 = ${currentReferenceKind() === "external" ? "外部参考" : "Mahony"}）`}`;
-  }
-  // 单选组必须**恰好**选中一个：旧写法 `(value === "quat") === exportIncludeQuat`
-  // 在 exportIncludeQuat=false 时会把 "angles" 与 "raw" 同时选中（浏览器取最后一个 → 默认档变成全帧导出）。
-  const scopeWanted = exportIncludeQuat ? "quat" : "angles";
-  for (const r of document.querySelectorAll<HTMLInputElement>('input[name="export-scope"]')) {
-    r.checked = r.value === scopeWanted;
-  }
-  ($("export-imu") as HTMLInputElement).checked = exportIncludeImu;
-  updateExportCount();
-  dlg.showModal();
-}
-
-function csvNumberLine(values: number[]): string {
-  return values.map((v) => (Number.isFinite(v) ? v.toFixed(6) : "")).join(",");
-}
-
-function exportCsv(quatOn: boolean, imuOn: boolean, imuCalibratedCols = false): void {
-  /**
-   * 源列语义必须**逐行**判定（ROUND11 P1）：校准日志回放录下的源读数已经是校准后的，
-   * 旧实现无条件写 `# imu=raw`，于是这份文件再导入时会被二次校准（实测磁值 25 → 20）。
-   * 一份 CSV 的表头只能描述一种语义：混语义时明确拒绝，而不是挑一个标签骗下游。
-   */
-  const anyCalSrc = logRows.some((r) => r.sourceCalibrated);
-  const anyRawSrc = logRows.some((r) => !r.sourceCalibrated);
-  if (imuOn && !imuCalibratedCols && anyCalSrc && anyRawSrc) {
-    toast("这批记录混了「原始」与「已校准」两种源读数——表头只能标一种语义，请分段导出", "#f85149");
-    return;
-  }
-  const srcSemantics: "raw" | "calibrated" = anyCalSrc && !anyRawSrc ? "calibrated" : "raw";
-  const refKind = currentReferenceKind();
-  const refLabel = refKind === "groundTruth" ? "truth" : refKind === "external" ? "external_ref" : "mahony_ref";
-  const header = [
-    "t_s",
-    ...[0, 1, 2].map((k) => `${refLabel}_${["roll", "pitch", "yaw"][k]}_deg`),
-    ...ests.flatMap((e) => [0, 1, 2].map((k) => `${e.id}_${["roll", "pitch", "yaw"][k]}_deg`)),
-    ...ests.map((e) => `err_${e.id}_deg`),
-    // 四元数列可选：做双重覆盖/符号连续性/复现插值的人需要原始 q，
-    // 光有欧拉角反算会在万向节锁附近失真（锁点欧拉三元组不唯一）
-    ...(quatOn
-      ? ests.flatMap((e) => ["w", "x", "y", "z"].map((k) => `${e.id}_q${k}`))
-      : []),
-    // 参考姿态的四元数列与欧拉角列同源：模拟模式是 truth_*，真实串口模式是 mahony_ref_*
-    ...(quatOn ? ["w", "x", "y", "z"].map((k) => `${refLabel}_q${k}`) : []),
-    // 原始 IMU（可选）：列名与「导入 IMU 日志回放」的识别规则一致，导出即可回灌
-    ...(imuOn ? IMU_EXPORT_COLUMNS : []),
-  ];
-  const lines = [header.join(",")];
-  for (const row of logRows) {
-    const vals: number[] = [row.t];
-    for (let s = 0; s < row.euler.length; s++) vals.push(row.euler[s][0], row.euler[s][1], row.euler[s][2]);
-    vals.push(...row.err);
-    if (quatOn) {
-      for (const q of row.quats) vals.push(q.w, q.x, q.y, q.z);
-      vals.push(row.qTrue.w, row.qTrue.x, row.qTrue.y, row.qTrue.z);
-    }
-    if (imuOn) {
-      // 源列与校准列都取自**记录时刻**的快照：
-      //  · raw 档 = 当时收到的源读数；calibrated 档 = 当时喂给估计器的读数。
-      // 绝不是「拿现在的标定把历史重算一遍」——那会让同一批记录在改过标定后导出不同数值。
-      const acq = imuCalibratedCols ? row.imuConsumed : row.imu;
-      if (acq) {
-        const g = acq.gyro.map((v) => v * DEG);
-        vals.push(...g, ...acq.accel, ...acq.mag);
-      } else {
-        vals.push(...new Array<number>(IMU_EXPORT_COLUMNS.length).fill(NaN));
-      }
-    }
-    lines.push(csvNumberLine(vals));
-  }
-  const meta = [
-    `# quaternion-attitude-demo export`,
-    `# mode=${state.real ? "real-serial" : "simulation"} scenario=${state.real ? "serial" : scenarioSelect.value}`,
-    `# algorithm_params=${JSON.stringify({
-      compAlpha: comp.alpha,
-      mahonyKp: mahony.kp,
-      mahonyKi: mahony.ki,
-      madgwickBeta: madg.beta,
-      kalmanQ: kalman.gyroNoiseDps,
-      kalmanR: kalman.obsNoise,
-      magEnabled: ($("mag-enable") as HTMLInputElement).checked,
-      magMode: $<HTMLSelectElement>("mag-mode").value,
-      accelGate: ($("gate-toggle") as HTMLInputElement).checked,
-      gateDeg: $<HTMLInputElement>("gate-deg").valueAsNumber,
-      gateMagPct: $<HTMLInputElement>("gate-mag").valueAsNumber / 100,
-      gateRecovery: ($("gate-recovery") as HTMLInputElement).checked,
-      solveRateHz: solveState.hz,
-      insEnabled: insState.on,
-      insScale: insState.scale,
-    })}`,
-    `# imu_params=${JSON.stringify(imuParams)}`,
-    // 三路滞后（各通道采样时刻与当前时刻之差）：有带宽/降采样/延迟时才存在
-    ...(state.lastImu?.times
-      ? [`# sensor_lag_ms=gyro:${((state.simTime - state.lastImu.times.gyro) * 1000).toFixed(2)},accel:${((state.simTime - state.lastImu.times.accel) * 1000).toFixed(2)},mag:${((state.simTime - state.lastImu.times.mag) * 1000).toFixed(2)}`]
-      : []),
-    // IMU 列语义：回放侧据此决定是否再次应用校准，避免「校准后导出 → 回放」被二次校准
-    // 源列不能恒写 raw——校准来源的源读数本来就是校准后的（ROUND11）
-    ...(imuOn ? [`# imu=${imuCalibratedCols ? "calibrated" : srcSemantics}`] : []),
-    ...(imuOn
-      ? [
-          "# imu_note=记录时刻快照，不随后续改标定变化",
-        ]
-      : []),
-    `# note: reference = ${state.real ? "Mahony (real mode has no ground truth)" : "ground truth (simulation)"}`,
-  ].join("\n");
-  const csv = `${meta}\n${lines.join("\n")}\n`;
-  downloadExport("\ufeff" + csv, "text/csv;charset=utf-8", "log", "csv");
-  toast(`已导出 ${logRows.length} 行 CSV${imuOn ? `（IMU 列=${imuCalibratedCols ? "消费" : srcSemantics}）` : ""}`);
-}
-
-document.getElementById("btn-export")?.addEventListener("click", openExportDialog);
-
-/**
- * 全帧源 IMU 导出：按数据源真实帧率写 t + 九轴；列名与回放识别规则一致，
- * 因此这份文件可以直接用「导入 IMU 日志回放」喂回装置（与 25 Hz 记录导出的闭环互补）。
- *
- * 「源」而不是「原始」：记录点在校准链之前，所以模拟/串口来源写出的确实是原始读数；
- * 但**回放一份声明了 `# imu=calibrated` 的日志**时，记录下来的本来就是校准后读数。
- * 早期版本无条件写 `# imu=raw`，于是这种文件被再导入时会被**二次校准**（复核实测：
- * 实际消费的磁值 25 → 20 → 20，多轮往返持续走偏）。
- */
-function exportRawCsv(): void {
-  if (rawRecord.rows.length === 0) {
-    toast("全帧记录为空——先在 IMU 面板勾选「记录全帧源 IMU」，让它跑一会儿再导出", "#fbbf24");
-    return;
-  }
-  // 记录期间换过来源也不会混语义：recordRaw 在语义变化时已清空重记，这里直接读标注
-  const calibrated = rawRecord.sourceCalibrated;
-  const header = ["t_s", ...IMU_EXPORT_COLUMNS];
-  const lines = [header.join(",")];
-  for (const r of rawRecord.rows) {
-    const g = r.gyro.map((v) => v * DEG);
-    lines.push(csvNumberLine([r.t, ...g, ...r.accel, ...r.mag]));
-  }
-  const meta = [
-    "# quaternion-attitude-demo raw IMU export",
-    `# source=${dataSourceLabel()} scenario=${state.real ? "external" : scenarioSelect.value} seed=${experimentConfig.seed}`,
-    `# rows=${rawRecord.rows.length} duration_s=${(rawRecord.rows[rawRecord.rows.length - 1].t - rawRecord.rows[0].t).toFixed(3)}`,
-    // 语义标注：raw = 校准链之前的读数（回放时按需补校准）；calibrated = 已经是校准后读数（回放不得再校准）
-    `# imu=${calibrated ? "calibrated" : "raw"}`,
-    "# note: 列名与「导入 IMU 日志回放」的识别规则一致，导出后可直接回放",
-  ].join("\n");
-  downloadExport(`\ufeff${meta}\n${lines.join("\n")}\n`, "text/csv;charset=utf-8", "raw-imu", "csv");
-  toast(
-    `已导出 ${rawRecord.rows.length} 帧全帧源 IMU（可直接回放，标注 # imu=${calibrated ? "calibrated" : "raw"}）`,
-  );
-}
-document.getElementById("export-cancel")?.addEventListener("click", () => {
-  (document.getElementById("export-dialog") as HTMLDialogElement | null)?.close();
-});
-/** 导出弹窗的实时列数：让「多 24 列 / 多 9 列」这种代价在选择前就可见 */
-function updateExportCount(): void {
-  const el = document.getElementById("export-count");
-  if (!el) return;
-  const picked = document.querySelector<HTMLInputElement>('input[name="export-scope"]:checked')?.value;
-  if (picked === "raw") {
-    el.textContent = `将导出 ${1 + IMU_EXPORT_COLUMNS.length} 列全帧源 IMU（当前已记录 ${rawRecord.rows.length} 帧，标注 # imu=${rawRecord.sourceCalibrated ? "calibrated" : "raw"}，可直接回放）`;
-    return;
-  }
-  const quat = picked === "quat";
-  const imu = ($("export-imu") as HTMLInputElement).checked;
-  const calBox = $<HTMLInputElement>("export-imu-calibrated");
-  if (calBox) calBox.disabled = !imu || picked === "raw";
-  const cols = 24 + (quat ? 24 : 0) + (imu ? IMU_EXPORT_COLUMNS.length : 0);
-  const imuKind = imu ? (calBox?.checked ? "（含校准后 IMU 列，标注 # imu=calibrated）" : "（含原始 IMU，可再导入回放）") : "";
-  el.textContent = `将导出 ${cols} 列${imuKind}`;
-}
-document.querySelectorAll('input[name="export-scope"]').forEach((r) =>
-  r.addEventListener("change", updateExportCount),
-);
-$("export-imu").addEventListener("change", updateExportCount);
-$("export-imu-calibrated").addEventListener("change", updateExportCount);
-
-document.getElementById("export-confirm")?.addEventListener("click", () => {
-  const picked = document.querySelector<HTMLInputElement>('input[name="export-scope"]:checked');
-  const scope = picked?.value ?? "angles";
-  (document.getElementById("export-dialog") as HTMLDialogElement | null)?.close();
-  if (scope === "raw") {
-    exportRawCsv();
-    return;
-  }
-  exportIncludeQuat = scope === "quat";
-  const imuOn = ($("export-imu") as HTMLInputElement).checked;
-  const imuCalCols = imuOn && ($("export-imu-calibrated") as HTMLInputElement).checked;
-  exportIncludeImu = imuOn;
-  exportCsv(exportIncludeQuat, imuOn, imuCalCols);
+// ---------- 数据导出：弹窗与 CSV 序列化按需加载，主包只保留装配依赖 ----------
+const lazyOfflineHint = "。若当前离线且该模块尚未缓存，请联网后重试";
+type ExportDialogApi = { open(): void };
+let exportDialogApi: ExportDialogApi | null = null;
+const loadExportDialog = lazyMount(() => import("./ui/export-dialog")
+  .then(({ createExportDialog }) => {
+    exportDialogApi = createExportDialog({
+    logRows: () => logRows,
+    rawRecord: () => rawRecord,
+    state: () => state,
+    estimatorIds: () => ests.map((e) => e.id),
+    comp: () => comp,
+    mahony: () => mahony,
+    madg: () => madg,
+    kalman: () => kalman,
+    imuParams: () => imuParams,
+    solveState: () => solveState,
+    insState: () => insState,
+    scenarioSelect: () => scenarioSelect,
+    experimentConfig: () => experimentConfig,
+    dataSourceLabel,
+    hasGroundTruth,
+    currentReferenceKind,
+    logRowCap: () => LOG_ROW_CAP,
+    toast,
+    downloadExport,
+  });
+    return exportDialogApi;
+  }), lazyFailure("导出模块加载失败"));
+document.getElementById("btn-export")?.addEventListener("click", () => {
+  void loadExportDialog(exportDialogApi).then((api) => api.open()).catch(() => { /* 已提示 */ });
 });
 
 $("btn-share").addEventListener("click", async () => {
@@ -5486,10 +5570,39 @@ $("btn-share").addEventListener("click", async () => {
   }
 });
 
-// ---------- PWA：生产环境注册 Service Worker（首次访问后可离线使用） ----------
+// ---------- PWA：生产环境注册 Service Worker（联网访问一次后可离线使用） ----------
+// 更新不由 worker 自动 skipWaiting：页面发现 waiting worker 后展示持久横幅，用户点击才确认接管。
+// 首次访问的离线承诺只在 SW 接管后的空闲预热完成时成立；预热只取懒模块，不挂载、不采样。
 if (import.meta.env.PROD && "serviceWorker" in navigator) {
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("/sw.js").catch(() => {
+    const preheat = (): void => idlePrefetch(() => void Promise.allSettled([
+      import("./ui/telemetry-diagnostics-ui"),
+      import("./ui/export-dialog"),
+    ]), 1200);
+    let awaitUpdate = false;
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      if (!awaitUpdate) return;
+      awaitUpdate = false;
+      location.reload();
+    });
+    navigator.serviceWorker.register("/sw.js").then((registration) => {
+      const banner = $<HTMLElement>("sw-banner");
+      const button = $<HTMLButtonElement>("sw-update");
+      const showUpdate = (): void => {
+        if (navigator.serviceWorker.controller) banner.hidden = false;
+      };
+      button.addEventListener("click", () => {
+        if (!registration.waiting) return;
+        awaitUpdate = true;
+        registration.waiting.postMessage("SKIP_WAITING");
+      });
+      registration.addEventListener("updatefound", () => {
+        showUpdate();
+        registration.installing?.addEventListener("statechange", showUpdate, { once: true });
+      });
+      showUpdate();
+      void navigator.serviceWorker.ready.then(preheat);
+    }).catch(() => {
       /* SW 不可用不影响功能 */
     });
   });
@@ -5514,7 +5627,7 @@ for (const e of ests) insList.set(e.id, new InsIntegrator());
 /** 俯视图轨迹（按 25 Hz 记录，与曲线同源）：每条算法一串北-东坐标 */
 const insTrails = new Map<Estimator["id"], number[]>();
 
-const insState = { on: true, scale: "auto" as string, range: 10 };
+const insState = { on: true, scale: "auto" as string, range: 10, placeholderKey: "" };
 
 function resetIns(): void {
   for (const ins of insList.values()) ins.reset();
@@ -5553,19 +5666,16 @@ function logInsTrail(): void {
   }
 }
 
-/** 米数的可读格式（跨越 0.01 m – 10 km） */
-function fmtMeters(v: number): string {
-  const a = Math.abs(v);
-  if (a >= 1000) return `${(v / 1000).toFixed(a >= 10000 ? 0 : 1)} km`;
-  return `${v.toFixed(a >= 100 ? 0 : a >= 10 ? 1 : a >= 1 ? 2 : 3)} m`;
-}
-
 /** 收集各通道的当前位置与轨迹，交给 ui/ins-view.ts 绘制（本函数只负责取数） */
 function drawIns(): void {
   const canvas = document.getElementById("ins-canvas") as HTMLCanvasElement | null;
   if (!canvas) return;
   if (!insState.on) {
-    // 关闭时清空画面，避免留下一张误导性的旧图
+    // 关闭时清空画面，避免留下一张误导性的旧图；同一尺寸只画一次占位。
+    const key = `${canvas.clientWidth}x${canvas.clientHeight}`;
+    if (insState.placeholderKey === key) return;
+    insState.placeholderKey = key;
+    uiWorkCounters.insPlaceholderDraws++;
     const ctx = canvas.getContext("2d");
     if (ctx) {
       const { w, h } = fitInsetCanvas(canvas, 1.1, 320);
@@ -5579,6 +5689,7 @@ function drawIns(): void {
     }
     return;
   }
+  insState.placeholderKey = "";
   insState.range = drawInsMap(
     canvas,
     [
@@ -5605,8 +5716,9 @@ function updateInsReadout(): void {
   const el = document.getElementById("ins-readout");
   const sum = document.getElementById("sum-ins");
   if (!insState.on) {
-    if (el) el.innerHTML = `<div class="ir-head">位置积分已关闭</div>`;
-    if (sum) sum.textContent = "已关闭";
+    const closed = '<div class="ir-head">位置积分已关闭</div>';
+    if (el && el.innerHTML !== closed) el.innerHTML = closed;
+    if (sum && sum.textContent !== "已关闭") sum.textContent = "已关闭";
     return;
   }
   const rows = ests.map((e) => ({ e, ins: insList.get(e.id)! }));
@@ -5754,15 +5866,16 @@ function setSerialBaudLocked(locked: boolean): void {
   if (inv) inv.disabled = locked;
 }
 
-function serialStatusChip(): HTMLElement {
-  return $("serial-status");
-}
-
-function setSerialStatus(text: string, warn = false): void {
-  const chip = serialStatusChip();
+function setChipStatus(id: string, text: string, warn = false): void {
+  const chip = document.getElementById(id);
+  if (!chip) return;
   chip.textContent = text;
   chip.classList.toggle("warn", warn);
   chip.classList.remove("hidden");
+}
+
+function setSerialStatus(text: string, warn = false): void {
+  setChipStatus("serial-status", text, warn);
 }
 
 /** 状态行（2 Hz）：帧率、真实 dt、丢帧、断流看门狗 */
@@ -5946,9 +6059,19 @@ const serialReconnectPolicy = new ReconnectPolicy({
   enabled: () => serialReconnectState.enabled,
 });
 
+interface ReconnectSlot { reconnecting: boolean }
+function cancelReconnect(state: ReconnectSlot, policy: ReconnectPolicy): void {
+  policy.cancel();
+  state.reconnecting = false;
+}
+function abandonTransport(state: ReconnectSlot, policy: ReconnectPolicy): void {
+  cancelReconnect(state, policy);
+  sourceIntent = "simulation";
+  applyDataSourceSemantics();
+}
+
 function cancelSerialReconnect(): void {
-  serialReconnectPolicy.cancel();
-  serialReconnectState.reconnecting = false;
+  cancelReconnect(serialReconnectState, serialReconnectPolicy);
 }
 
 /**
@@ -6090,36 +6213,21 @@ function handleSerialDrop(reason: string): void {
  * （复核反例 P1-C：1/3/7 秒连续失败后仍 reconnecting=true、timer 未排，画面从此不动）。
  */
 function abandonSerialTransport(): void {
-  serialReconnectState.reconnecting = false;
-  serialReconnectPolicy.cancel(); // 清掉可能的挂起定时器（pending 也是 reconnectPending 的一项）
-  sourceIntent = "simulation"; // 来源身份确实变回模拟了
-  applyDataSourceSemantics();
+  // 三个状态必须一起清，否则 reconnectPending() 会永远为真，主循环永久冻结。
+  abandonTransport(serialReconnectState, serialReconnectPolicy);
 }
 
 /** 安排一次自动重连（多次失败后放弃并提示） */
 function scheduleSerialReconnect(reason: string): void {
-  if (!serialReconnectState.lastPort) return;
-  const plan = serialReconnectPolicy.onFailure(() => {
-    void serialAutoReconnect().catch(reportTransportError);
-  });
-  if (!plan) {
-    // 开关在这期间被关掉：不排程，也不能把过渡态挂着
-    abandonSerialTransport();
-    return;
-  }
-  if (plan.exhausted) {
-    setSerialStatus(
-      `${reason}——自动重连 ${SERIAL_RECONNECT_MAX} 次仍失败，检查线缆后点「连接真实 IMU」`,
-      true,
-    );
-    // 放弃重连 = 真正回到模拟模式：这时清零本轮实验是**对的**（数据源确实换了）
-    abandonSerialTransport();
-    return;
-  }
-  serialReconnectState.reconnecting = true;
-  setSerialStatus(
-    `${reason}——${(plan.delayMs / 1000).toFixed(0)} s 后自动重连（第 ${plan.attempt}/${SERIAL_RECONNECT_MAX} 次）…`,
-    true,
+  scheduleTransportReconnect(
+    diagnosticsApi, "serial", reason, SERIAL_RECONNECT_MAX, "检查线缆后点「连接真实 IMU」",
+    serialReconnectState.lastPort !== null,
+    () => serialReconnectPolicy.onFailure(() => {
+      void serialAutoReconnect().catch(reportTransportError);
+    }),
+    () => { serialReconnectState.reconnecting = true; },
+    abandonSerialTransport,
+    setSerialStatus,
   );
 }
 
@@ -6168,6 +6276,8 @@ async function serialAutoReconnect(): Promise<void> {
     serialReconnectState.reconnecting = false;
     serialReconnectPolicy.onSuccess();
     serialReconnectCount++;
+    diagnosticsApi?.dataGap(false);
+    diagnosticsApi?.dataReconnect("success", { transport: "serial" });
     serialState.queue.length = 0;
     serialState.lastTickMs = -1;
     serialState.lastSeq = -1;
@@ -6438,13 +6548,6 @@ $("serial-mounting").addEventListener("change", () => {
    幻影隐藏、模拟控件停用。区别只在数据来自文件而不是端口，所以没有「断流看门狗」，
    改成「播完提示」，并且多了倍速与进度。
    ========================================================================== */
-
-/** 原始 IMU 的导出列名（与 core/replay.ts 的识别规则对齐：导出即可回灌） */
-const IMU_EXPORT_COLUMNS = [
-  "gyro_x_dps", "gyro_y_dps", "gyro_z_dps",
-  "accel_x_ms2", "accel_y_ms2", "accel_z_ms2",
-  "mag_x_ut", "mag_y_ut", "mag_z_ut",
-];
 
 const replayState = {
   frames: [] as ReplayFrame[],
@@ -6818,11 +6921,7 @@ const bleState = {
 };
 
 function bleStatus(text: string, warn = false): void {
-  const chip = document.getElementById("ble-status");
-  if (!chip) return;
-  chip.textContent = text;
-  chip.classList.toggle("warn", warn);
-  chip.classList.remove("hidden");
+  setChipStatus("ble-status", text, warn);
 }
 
 /** 当前选定的服务 UUID（自定义档读输入框） */
@@ -6939,8 +7038,7 @@ const bleReconnectPolicy = new ReconnectPolicy({
 let bleSubToken = 0;
 
 function cancelBleReconnect(): void {
-  bleReconnectPolicy.cancel();
-  bleReconnectState.reconnecting = false;
+  cancelReconnect(bleReconnectState, bleReconnectPolicy);
 }
 
 async function bleAutoReconnect(): Promise<void> {
@@ -6983,6 +7081,8 @@ async function bleAutoReconnect(): Promise<void> {
     bleReconnectState.reconnecting = false;
     bleReconnectPolicy.onSuccess();
     bleReconnectCount++;
+    diagnosticsApi?.dataGap(false);
+    diagnosticsApi?.dataReconnect("success", { transport: "ble" });
     const btn = document.getElementById("btn-ble");
     if (btn) btn.textContent = "断开 BLE";
     bleStatus(`BLE 已自动重连 · ${device.name ?? "未命名"} · 等待数据…`);
@@ -7019,33 +7119,21 @@ async function disposeBleAttempt(session: BleSession | null): Promise<void> {
 }
 
 function scheduleBleReconnect(reason: string): void {
-  if (!bleReconnectState.lastDevice) return;
-  const plan = bleReconnectPolicy.onFailure(() => {
-    void bleAutoReconnect().catch(reportTransportError);
-  });
-  if (!plan) {
-    abandonBleTransport();
-    return;
-  }
-  if (plan.exhausted) {
-    bleStatus(`${reason}——自动重连 ${BLE_RECONNECT_MAX} 次仍失败，请靠近设备后手动重连`, true);
-    // 与串口同一条教训：放弃时必须把 reconnecting 一并清掉，否则 reconnectPending() 永远为真、主循环永久冻结
-    abandonBleTransport();
-    return;
-  }
-  bleReconnectState.reconnecting = true;
-  bleStatus(
-    `${reason}——${(plan.delayMs / 1000).toFixed(0)} s 后自动重连（第 ${plan.attempt}/${BLE_RECONNECT_MAX} 次）…`,
-    true,
+  scheduleTransportReconnect(
+    diagnosticsApi, "ble", reason, BLE_RECONNECT_MAX, "请靠近设备后手动重连",
+    bleReconnectState.lastDevice !== null,
+    () => bleReconnectPolicy.onFailure(() => {
+      void bleAutoReconnect().catch(reportTransportError);
+    }),
+    () => { bleReconnectState.reconnecting = true; },
+    abandonBleTransport,
+    bleStatus,
   );
 }
 
 /** 彻底放弃 BLE 链路（次数用尽 / 无可用设备 / 自动重连被关掉） */
 function abandonBleTransport(): void {
-  bleReconnectState.reconnecting = false;
-  bleReconnectPolicy.cancel();
-  sourceIntent = "simulation";
-  applyDataSourceSemantics();
+  abandonTransport(bleReconnectState, bleReconnectPolicy);
 }
 
 /**
@@ -7302,6 +7390,285 @@ updateMagCalUi();
 updateAccelCalUi();
 syncLoopAvailability();
 resetSim(); // 统一时钟/统计/曲线起点（不改变已还原的深链参数）
+// 初始数据源属性：不调用 applyDataSourceSemantics（它会再 reset），但徽标/自动化
+// 从首帧起就必须能读到 "sim"/"real"，不能等第一次切换来源才出现。
+document.body.dataset.imuMode = isExternalSource(currentDataSource()) ? "real" : "sim";
+
+/* ==========================================================================
+   单变量对照台（F-01）：按需加载装配层
+   --------------------------------------------------------------------------
+   对照面板连同对比曲线、Worker 协议与报告逻辑只在第一次使用时下载；
+   首屏不背 runner 的第二份副本。装载后复用当前界面配置与档案事务，
+   不从局部控件另拼一份配置。
+   ========================================================================== */
+const taskStripMount = lazyMount(() => import("./ui/task-strip")
+  .then(({ mountTaskStrip }) => {
+    taskStripApi = mountTaskStrip({
+      onExit: (kind) => {
+        if (kind === "tour") void ensureTour().then((t) => t.exit()).catch(() => {});
+        else if (kind === "learning") void ensureLearningPanel().then((p) => p.reset()).catch(() => {});
+      },
+      onAction: (a) => diagnosticsApi?.userAction(a.kind, a.summary, a.before, a.after),
+    });
+    return taskStripApi;
+  }), (err) => console.warn("任务条加载失败：", err));
+function ensureTaskStrip(): Promise<TaskStripApi> {
+  return taskStripMount(taskStripApi);
+}
+function setTaskContext(task: TaskDescriptor | null): void {
+  void ensureTaskStrip()
+    .then((api) => (task ? api.setTask(task) : api.clearTask()))
+    .catch(() => { /* 任务条不是核心功能：失败不阻断实验 */ });
+}
+idleLoad(ensureTaskStrip, 1600);
+
+/* ---------- 预测—验证式学习：只挂在「实验与练习」文档页 ---------- */
+let learningPanel: LearningPanelApi | null = null;
+function openDocAt(page: string, anchor?: string): void {
+  setDocsOpen(true);
+  showDocPage(page);
+  if (!anchor) return;
+  requestAnimationFrame(() => {
+    const el = document.getElementById(anchor);
+    if (el) el.scrollIntoView({ block: "start" });
+  });
+}
+const learningPanelMount = lazyMount(() => import("./ui/learning-panel-ui")
+  .then(async ({ mountLearningPanel }) => {
+    const page = document.getElementById("labs");
+    if (!page) throw new Error("找不到 labs 文档页");
+    // 入口必须可见：插在「三条学习路径」之前，而不是追加到整页底部。
+    const root = document.createElement("div");
+    root.id = "learning-panel-host";
+    const firstSection = page.querySelector("section");
+    if (firstSection) page.insertBefore(root, firstSection);
+    else page.appendChild(root);
+    const panel = await mountLearningPanel(
+      {
+        runEvidence: async (config, _activity, shouldCancel) => {
+          const runner = await loadRunner();
+          const result = await runner.runExperimentDetailedAsync(config, {
+            stepsPerSlice: 128,
+            maxSliceMs: 4,
+            ...(shouldCancel ? { shouldCancel } : {}),
+          });
+          return { metrics: result.metrics, termination: result.termination };
+        },
+        currentConfig: () => currentExperimentConfig(5),
+        openDocs: openDocAt,
+        closeDocs: () => setDocsOpen(false),
+        loadExperiment: applyExperimentById,
+        ensureComparison: ensureComparisonPanel,
+        onTask: setTaskContext,
+        ensureTaskStrip: ensureTaskStrip,
+        toast,
+      },
+      root,
+    );
+    // 预测练习也进入统一任务上下文：读取点击后的真实状态，而不是猜按钮文案。
+    root.addEventListener("click", () => {
+      queueMicrotask(() => {
+        const st = panel.state();
+        if (!st.activityId) return;
+        setTaskContext({
+          kind: "learning",
+          id: st.activityId,
+          title: `预测练习：${st.activityTitle ?? st.activityId}`,
+          conditions: "固定 5 s 离线复算证据；现场曲线可来自不同时长",
+          variable: "先提交预测，再看实测证据",
+          observe: "题目指标、预测与实际证据的差异",
+          next: st.canReveal ? "阅读解释，或重新挑战。" : "提交预测，然后运行证据。",
+          allowedIds: [],
+        });
+      });
+    });
+    learningPanel = panel;
+    return panel;
+  }), lazyFailure("预测练习加载失败"));
+function ensureLearningPanel(): Promise<LearningPanelApi> {
+  return learningPanelMount(learningPanel);
+}
+// 文档页首次打开前不阻塞；空闲预取后点进「实验与练习」即可用。
+idleLoad(ensureLearningPanel, 1800);
+
+/* ==========================================================================
+   C/D：可观性、事件时间轴、历史回看、ESKF 单步解剖
+   --------------------------------------------------------------------------
+   服务与四个面板都在 teaching-ui 按需 chunk 里；默认不采样、不分配。
+   只有用户打开「玻璃盒」分区才创建服务；回看帧与 ESKF 快照另有各自开关。
+   ========================================================================== */
+function estimatorGateEnabled(e: Estimator): boolean {
+  return e.id === "comp" || e.id === "mahony" || e.id === "madg"
+    ? (e as ComplementaryEstimator | MahonyEstimator | MadgwickEstimator).accelGate
+    : false;
+}
+const diagnosticsMount = lazyMount(() => import("./ui/telemetry-diagnostics-ui")
+  .then(({ createTelemetryDiagnostics }) => {
+    const root = document.getElementById("body-telemetry");
+    if (!root) throw new Error("缺少玻璃盒面板容器");
+    const getKalman = (): KalmanEstimator | undefined =>
+      ests.find((e) => e.id === "kalman") as KalmanEstimator | undefined;
+    diagnosticsApi = createTelemetryDiagnostics({
+    root,
+    getEstimators: () => ests.filter((e) => e.id !== "truth").map((e) => ({
+      id: e.id as EstimatorId,
+      label: e.label,
+      telemetry: e.telemetry,
+    })),
+    getSelected: () => {
+      const est = state.source === "truth"
+        ? ests.find((e) => e.id === "mahony") ?? null
+        : ests.find((e) => e.id === state.source) ?? null;
+      if (!est) return null;
+      return {
+        id: est.id as EstimatorId,
+        label: est.label,
+        magEnabled: est.magEnabled,
+        gateEnabled: estimatorGateEnabled(est),
+        telemetry: est.telemetry,
+        q: est.q,
+      };
+    },
+    getTruth: () => {
+      const kind = currentReferenceKind();
+      const hasTruth = kind === "groundTruth" || kind === "external";
+      return {
+        kind,
+        q: hasTruth ? referenceQ() : null,
+        label: hasTruth ? (kind === "groundTruth" ? "模拟真值" : "外部参考") : "无真值参考",
+      };
+    },
+    getKalmanSnapshot: () => latestKalmanStep,
+    getTime: () => state.simTime,
+    getRunId: () => solveRunId,
+    setCursor: (t) => setSharedCursor(t),
+    openDocs: openDocAt,
+      setKalmanSink: (sink) => {
+        const kalman = getKalman();
+        if (!kalman) return;
+        kalman.diagnostics = sink ? (snap) => { latestKalmanStep = snap; sink(snap); } : undefined;
+        if (!sink) latestKalmanStep = null;
+      },
+      setKalmanFullMatrix: (on) => {
+        const kalman = getKalman();
+        if (kalman) kalman.diagFullP = on;
+      },
+    });
+    return diagnosticsApi;
+  }), lazyFailure("教学诊断面板加载失败"));
+function ensureDiagnostics(): Promise<TelemetryDiagnosticsApi> {
+  return diagnosticsMount(diagnosticsApi);
+}
+function activateDiagnostics(): void {
+  void ensureDiagnostics().catch(() => { /* 已提示 */ });
+}
+document.querySelector<HTMLButtonElement>("#sec-telemetry .panel-toggle")?.addEventListener("click", activateDiagnostics);
+document.getElementById("telemetry-toggle")?.addEventListener("change", activateDiagnostics);
+// 诊断按钮的真实 GUI 入口：与自动化 open/setReviewCapture 共用同一服务，不另建面板。
+const diagButtonWiring: [string, () => void][] = [
+  ["btn-diag-review", () => { void ensureDiagnostics().then((api) => api.setReviewCapture(!api.state().reviewCapture)); }],
+  ["btn-diag-eskf", () => { void ensureDiagnostics().then((api) => api.setEskfEnabled(!api.state().eskfEnabled)); }],
+  ["btn-diag-obs", activateDiagnostics],
+  ["btn-diag-events", activateDiagnostics],
+];
+for (const [id, onClick] of diagButtonWiring) document.getElementById(id)?.addEventListener("click", onClick);
+
+
+
+
+
+
+let comparisonPanel: ComparisonPanelApi | null = null;
+let comparisonTaskActive = false;
+const comparisonPanelMount = lazyMount(() => import("./ui/comparison-panel")
+  .then(({ mountComparisonPanel }) => {
+    const panel = mountComparisonPanel({
+    // 对照固定 10 s：两轮完整运行仍可交互；与在线仿真现场分开，不改当前曲线。
+    baseConfig: () => currentExperimentConfig(10),
+    applyConfig: (cfg) => {
+      const applied = applyArchiveChecked(cfg);
+      return applied.ok
+        ? { ok: true, warnings: applied.warnings }
+        : { ok: false, error: applied.error };
+    },
+    toast,
+    getConfigRevision: () => configRevision,
+    buildInfo: {
+      commit: BUILD_INFO.commit,
+      builtAt: BUILD_INFO.builtAt,
+      buildId: BUILD_IDENTITY.buildId,
+    },
+    onTaskState: (s) => {
+      if (s.state === "empty") {
+        if (comparisonTaskActive) {
+          comparisonTaskActive = false;
+          setTaskContext(null);
+        }
+        return;
+      }
+      comparisonTaskActive = true;
+      const running = s.state === "running-a" || s.state === "running-b";
+      setTaskContext({
+        kind: "comparison",
+        id: s.kind ?? "comparison",
+        title: running ? "单变量对照 · 运行中" : s.reportReady ? "单变量对照 · 已完成" : "单变量对照",
+        conditions: "同一配置与种子；A/B 两次独立完整运行",
+        variable: s.kind ?? "尚未选择变量",
+        observe: "同窗口指标、A/B 总误差曲线与配置差异",
+        next: running ? "可等待完成或取消；完成前不显示最终差值。" : s.reportReady ? "查看差值、导出报告，或显式将 B 应用到装置。" : "选择唯一变量并运行对照。",
+        allowedIds: [],
+      });
+    },
+  });
+    comparisonPanel = panel;
+    return panel;
+  }), lazyFailure("对照台加载失败"));
+function ensureComparisonPanel(): Promise<ComparisonPanelApi> {
+  return comparisonPanelMount(comparisonPanel);
+}
+document.querySelector<HTMLButtonElement>("#sec-compare .panel-toggle")?.addEventListener("click", () => {
+  void ensureComparisonPanel().catch(() => { /* 已提示 */ });
+});
+// 空闲预取：不占首屏关键路径；用户第一次点开时通常已就绪。
+idleLoad(ensureComparisonPanel, 1500);
+
+// ---------- 只读实验报告（tools-ui 按需 chunk）：生成 / 打印 / 导出 JSON / 导入只读查看 ----------
+let reportPanel: ReportPanelApi | null = null;
+const reportPanelMount = lazyMount(() => import("./ui/report-panel-ui")
+  .then(({ mountReportPanel }) => {
+    const root = document.getElementById("diag-report-host");
+    const fileInput = document.getElementById("report-file") as HTMLInputElement | null;
+    if (!root || !fileInput) throw new Error("缺少实验报告面板容器");
+    reportPanel = mountReportPanel({
+    root,
+    fileInput,
+    archive: () => buildArchive(),
+    // 构建身份取不到就如实写 null（报告里显示「无构建信息」），不编造。
+    build: () => BUILD_IDENTITY.buildId && BUILD_IDENTITY.sourceDigest
+      ? { buildId: BUILD_IDENTITY.buildId, sourceDigest: BUILD_IDENTITY.sourceDigest }
+      : null,
+    // null = 诊断事件采集从未开启；[] = 已采集但窗口内无事件。两者语义不同。
+    events: () => diagnosticsApi?.events() ?? null,
+    comparison: () => comparisonPanel?.result() ?? null,
+    toast,
+    download: downloadExport,
+    nowIso: () => new Date().toISOString(),
+    print: () => window.print(),
+  });
+    return reportPanel;
+  }), lazyFailure("实验报告加载失败"));
+function ensureReportPanel(): Promise<ReportPanelApi> {
+  return reportPanelMount(reportPanel);
+}
+document.getElementById("btn-diag-report")?.addEventListener("click", () => {
+  void ensureReportPanel().then((api) => api.generate()).catch(() => { /* 已提示 */ });
+});
+document.getElementById("btn-diag-report-import")?.addEventListener("click", () => {
+  void ensureReportPanel().then((api) => api.pickFile()).catch(() => { /* 已提示 */ });
+});
+
+const openLazy = (ensure: () => Promise<unknown>): (() => Promise<boolean>) =>
+  async () => { await ensure(); return true; };
 
 // 控制台调试入口（教学/自动化验收用）：不参与 UI，不影响性能
 (window as unknown as { attitudeDemo: unknown }).attitudeDemo = {
@@ -7419,7 +7786,14 @@ resetSim(); // 统一时钟/统计/曲线起点（不改变已还原的深链参
     insTrailCap: number;
     serialQueue: number;
     serialQueueCap: number;
-    charts: { count: number; cap: number }[];
+    charts: { count: number; cap: number; attempts: number; draws: number; skips: number }[];
+    uiWork: {
+      telemetryAttempts: number;
+      telemetryWrites: number;
+      metricsAttempts: number;
+      metricsWrites: number;
+      insPlaceholderDraws: number;
+    };
   } => ({
     simTime: state.simTime,
     logRows: logRows.length,
@@ -7431,6 +7805,7 @@ resetSim(); // 统一时钟/统计/曲线起点（不改变已还原的深链参
     serialQueue: serialState.queue.length,
     serialQueueCap: SERIAL_QUEUE_MAX,
     charts: [attChart.size, errChart.size, imuChart.size],
+    uiWork: { ...uiWorkCounters },
   }),
   /**
    * 可复现实验出口（自动化与批量评测用）：
@@ -7484,9 +7859,9 @@ resetSim(); // 统一时钟/统计/曲线起点（不改变已还原的深链参
       return { simTime: state.simTime, finalQuats };
     },
     /** runner 侧同一条 trace：同 step 数、同配置（不需要真等 500 Hz × n 的真实时间） */
-    runTrace: (steps: number): { simTime: number; finalQuats: Record<string, Quat> } => {
+    runTrace: async (steps: number): Promise<{ simTime: number; finalQuats: Record<string, Quat> }> => {
       const cfg = { ...currentExperimentConfig(1), durationSec: Math.max(0.002, steps * RUN_H) };
-      const r = runExperiment(cfg);
+      const r = (await loadRunner()).runExperiment(cfg);
       const finalQuats: Record<string, Quat> = {};
       for (const [id, q] of Object.entries(r.finalQuats)) finalQuats[id] = { ...q };
       return { simTime: r.window.endSec, finalQuats };
@@ -7496,16 +7871,16 @@ resetSim(); // 统一时钟/统计/曲线起点（不改变已还原的深链参
      * runner 侧用 `runner.runTrace`（同一份 SolveLoop）。两者逐帧比对才能发现
      * 「中途偏差被末态掩盖」的问题——只比终点是不够的。
      */
-    traceFrames: (
+    traceFrames: async (
       steps: number,
-    ): Array<{
+    ): Promise<Array<{
       t: number;
       dt: number;
       quats: Array<{ w: number; x: number; y: number; z: number }>;
       aligned: boolean;
       raw: { gyro: number[]; accel: number[]; mag: number[] };
       consumed: { accel: number[]; mag: number[] };
-    }> => {
+    }>> => {
       const n = Math.max(0, Math.floor(steps));
       const frames: Array<{
         t: number;
@@ -7515,6 +7890,7 @@ resetSim(); // 统一时钟/统计/曲线起点（不改变已还原的深链参
         raw: { gyro: number[]; accel: number[]; mag: number[] };
         consumed: { accel: number[]; mag: number[] };
       }> = [];
+      const { TraceEvents } = await import("./core/trace-events");
       const events = new TraceEvents();
       let rec = true;
       solveLoop.setHooks({
@@ -7543,9 +7919,9 @@ resetSim(); // 统一时钟/统计/曲线起点（不改变已还原的深链参
     },
     /** runner 侧逐帧 trace（与 traceFrames 同口径：时间 + 五算法姿态） */
     traceEvents: () => ({ alignTimes: uiTraceEvents.alignTimes.slice(), eventCounts: { ...uiTraceEvents.eventCounts } }),
-    traceFramesRunner: (steps: number) => {
+    traceFramesRunner: async (steps: number) => {
       const cfg = { ...currentExperimentConfig(1), durationSec: Math.max(0.002, steps * RUN_H) };
-      const tr = runTrace(cfg, Math.max(1, Math.floor(steps)));
+      const tr = (await loadRunner()).runTrace(cfg, Math.max(1, Math.floor(steps)));
       return {
         steps: tr.steps.map((st) => ({
           t: st.t,
@@ -7565,16 +7941,19 @@ resetSim(); // 统一时钟/统计/曲线起点（不改变已还原的深链参
      * 主线程分片批量评测（自动化复算/Worker 降级验证用）：与面板同一条聚合口径，
      * 但同步阻塞——只应在脚本里用，不要接进界面按钮（界面走 Worker 路径）。
      */
-    batchOnMain: (durationSec = 10, count = 3): ReturnType<typeof runMonteCarlo>["summary"] =>
-      runMonteCarlo(currentExperimentConfig(durationSec), count).summary,
+    batchOnMain: async (durationSec = 10, count = 3): Promise<BatchSummary> => {
+      const runner = await loadRunner();
+      return runner.runMonteCarlo(currentExperimentConfig(durationSec), count).summary;
+    },
     setSeed: (seed: number): void => {
       experimentConfig.seed = Math.max(0, Math.floor(seed)) >>> 0;
       if (seedInput) seedInput.value = String(experimentConfig.seed);
       resetSim();
     },
-    run: (durationSec = 2, seedOffset = 0): { digest: string; metrics: ReturnType<typeof runExperiment>["metrics"] } => {
-      const r = runExperiment({ ...currentExperimentConfig(durationSec), seed: currentExperimentConfig(durationSec).seed + seedOffset });
-      return { digest: resultDigest(r), metrics: r.metrics };
+    run: async (durationSec = 2, seedOffset = 0): Promise<{ digest: string; metrics: EstimatorRunMetrics[] }> => {
+      const runner = await loadRunner();
+      const r = runner.runExperiment({ ...currentExperimentConfig(durationSec), seed: currentExperimentConfig(durationSec).seed + seedOffset });
+      return { digest: runner.resultDigest(r), metrics: r.metrics };
     },
     archive: (): ExperimentArchive => buildArchive(),
     /**
@@ -7693,6 +8072,53 @@ resetSim(); // 统一时钟/统计/曲线起点（不改变已还原的深链参
     }),
   },
   /** 构建标识（部署后 smoke 用）：线上页面报的提交必须等于被部署的那个 */
+  /**
+   * 单变量对照台的自动化出口（用户路径仍是右侧面板按钮）。
+   * 所有会改变状态的入口都先等待按需装配层完成，避免测试在模块未挂载时读到 null
+   * 却误判为功能失败。
+   */
+  diagnostics: {
+    open: openLazy(ensureDiagnostics),
+    state: () => diagnosticsApi?.state() ?? null,
+    setReviewCapture: (on: boolean): void => diagnosticsApi?.setReviewCapture(on),
+    setEskfEnabled: (on: boolean): void => diagnosticsApi?.setEskfEnabled(on),
+    setEskfFullMatrix: (on: boolean): void => diagnosticsApi?.setEskfFullMatrix(on),
+    events: () => diagnosticsApi?.events() ?? [],
+    evidence: () => diagnosticsApi?.evidence() ?? null,
+    seekEvidence: (delta: -1 | 0 | 1) => diagnosticsApi?.seekEvidence(delta) ?? null,
+    reviewOverride: () => diagnosticsApi?.reviewOverride() ?? null,
+  },
+  learning: {
+    open: openLazy(ensureLearningPanel),
+    state: () => learningPanel?.state() ?? null,
+    setActivity: async (id: string): Promise<void> => (await ensureLearningPanel()).setActivity(id),
+    submitPrediction: async (answer: PredictionAnswer) => (await ensureLearningPanel()).submitPrediction(answer),
+    run: async () => (await ensureLearningPanel()).run(),
+    reset: async (): Promise<void> => (await ensureLearningPanel()).reset(),
+  },
+  task: {
+    open: openLazy(ensureTaskStrip),
+    state: () => taskStripApi?.state() ?? null,
+    clear: async (): Promise<void> => {
+      (await ensureTaskStrip()).clearTask();
+    },
+  },
+  comparison: {
+    open: openLazy(ensureComparisonPanel),
+    state: (): ComparisonPanelSnapshot | null => comparisonPanel?.state() ?? null,
+    result: () => comparisonPanel?.result() ?? null,
+    setWindow: async (durationSec: number): Promise<void> => {
+      (await ensureComparisonPanel()).setWindow(durationSec);
+    },
+    freeze: async (): Promise<void> => {
+      (await ensureComparisonPanel()).freeze();
+    },
+    selectVariable: async (id: string): Promise<void> => (await ensureComparisonPanel()).selectVariable(id),
+    run: async (): Promise<void> => (await ensureComparisonPanel()).run(),
+    cancel: async (): Promise<void> => (await ensureComparisonPanel()).cancel(),
+    disableWorker: async (): Promise<void> => (await ensureComparisonPanel()).disableWorker(),
+    applyB: async (): Promise<ComparisonApplyResult> => (await ensureComparisonPanel()).applyB(),
+  },
   build: () => ({ ...BUILD_INFO, ...BUILD_IDENTITY }),
   /** 校准状态快照（自动化验收用）：模型、是否应用、对象是否在 */
   calibration: (): {
@@ -7795,6 +8221,8 @@ resetSim(); // 统一时钟/统计/曲线起点（不改变已还原的深链参
     showDocPage(page);
     return true;
   },
+  /** 实验库/挑战目录就绪（失败也会 resolve：面板为空并已 toast，不会卡住调用方） */
+  catalogReady: (): Promise<void> => catalogsReadyPromise,
   /** 引导课程的入口（自动化测试用；正常路径是右侧栏「引导课程」面板上的按钮） */
   tour: {
     start: (): void => { void ensureTour().then((t) => t.start()).catch(() => {}); },

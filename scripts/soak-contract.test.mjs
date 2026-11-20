@@ -1,6 +1,57 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseSoakArgs, heapVerdict, sampleCoverageProblems, tailVerdict, validateReconnectEvents, validateBatch, validateSamples } from './soak-contract.mjs';
+import { exerciseReplaySwitch, replaySwitchProblems } from './teaching-load.mjs';
+
+function switchFixture() {
+  const phase = (active, sourceKind, runId, idx = 0) => ({ active, sourceKind, runId, idx, reviewActive: false });
+  return { imported: 'ok:151 帧 / 3.00 s', error: null,
+    before: phase(false, 'simulation', 1), during: phase(true, 'replay', 2, 5), after: phase(false, 'simulation', 3) };
+}
+
+test('真实换源：active 与来源和 runId 必须同时成立，动作名不能证明切换', () => {
+  assert.deepEqual(replaySwitchProblems(switchFixture()), []);
+  for (const edit of [
+    (e) => { e.during.active = false; },
+    (e) => { e.during.sourceKind = 'simulation'; },
+    (e) => { e.during.runId = e.before.runId; },
+    (e) => { e.after.runId = e.during.runId; },
+    (e) => { e.during.idx = 0; },
+    (e) => { e.after.active = true; },
+    (e) => { e.during.reviewActive = true; },
+    (e) => { e.imported = 'error: invalid CSV'; },
+  ]) {
+    const evidence = switchFixture(); edit(evidence);
+    assert.ok(replaySwitchProblems(evidence).length > 0);
+  }
+  assert.ok(replaySwitchProblems({ kind: 'source', ok: true }).length > 0);
+});
+
+test('真实换源执行器：导入与 stop 的结果来自生产端口，失败也保留三阶段记录', async () => {
+  const previous = globalThis.window;
+  let active = false, runId = 1, idx = 0;
+  const api = {
+    diagnostics: { state: () => ({ runId, reviewActive: false, reviewFrames: 0, eventCount: 0 }) },
+    plumbing: () => ({ sourceKind: active ? 'replay' : 'simulation' }),
+    replay: {
+      get info() { return { active, idx }; },
+      import() { active = true; runId++; idx = 3; return 'ok:151 帧'; },
+      stop() { if (active) runId++; active = false; },
+    },
+  };
+  globalThis.window = { attitudeDemo: api };
+  try {
+    assert.deepEqual(replaySwitchProblems(await exerciseReplaySwitch('csv')), []);
+    api.replay.import = () => 'error: invalid CSV';
+    const failedImport = await exerciseReplaySwitch('bad CSV');
+    assert.ok(replaySwitchProblems(failedImport).includes('回放导入失败'));
+    api.replay.import = () => { active = true; idx = 3; runId++; return 'ok:151 帧'; };
+    api.replay.stop = () => { throw new Error('stop failed'); };
+    const failedStop = await exerciseReplaySwitch('csv');
+    assert.equal(failedStop.after.active, true);
+    assert.ok(replaySwitchProblems(failedStop).length > 0);
+  } finally { globalThis.window = previous; }
+});
 
 test('CLI uses strict booleans, finite positive numbers and rejects combined modes', () => {
   const x = parseSoakArgs(['--batch=false', '--reconnect', '--allow-no-heap=false', '--seconds=600', '--drop-every=3', '--output=out/reconnect.json']);
@@ -11,7 +62,8 @@ test('CLI uses strict booleans, finite positive numbers and rejects combined mod
   assert.equal(parseSoakArgs(['--batch']).tailObserve, 90);
   assert.equal(parseSoakArgs(['--batch', '--tail-observe-seconds=0']).tailObserve, 0);
   for (const bad of ['--tail-observe-seconds=-1', '--tail-observe-seconds=abc']) assert.throws(() => parseSoakArgs(['--batch', bad]));
-  for (const args of [['--batch', '--reconnect'], ['--batch=no'], ['--seconds=NaN'], ['--interval=0'], ['--seconds=-1'], ['--seeds=1.5'], ['--drop-every=Infinity'], ['--heap-limit-mb=-1'], ['--unknown']]) assert.throws(() => parseSoakArgs(args));
+  assert.equal(parseSoakArgs(['--teaching', '--seconds=600']).teaching, true);
+  for (const args of [['--batch', '--reconnect'], ['--batch', '--teaching'], ['--reconnect', '--teaching'], ['--batch=no'], ['--seconds=NaN'], ['--interval=0'], ['--seconds=-1'], ['--seeds=1.5'], ['--drop-every=Infinity'], ['--heap-limit-mb=-1'], ['--unknown']]) assert.throws(() => parseSoakArgs(args));
 });
 test('heap exemption is NOT_MEASURED, may continue gate, never erases measurements', () => {
   const empty = heapVerdict([null, null], 24, false);

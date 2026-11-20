@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { testArtifactRoot, cleanupArtifactDir } from './test-artifacts.mjs';
 import { parseSoakArgs, heapVerdict, sampleCoverageProblems, validateReconnectEvents, validateBatch, validateSamples, ALGORITHMS, SOAK_BATCH_RUNS } from './soak-contract.mjs';
 import { sourceDigest, worktreeState } from './source-digest.mjs';
 import { distHashOf, readProvenance } from './build-provenance.mjs';
@@ -19,7 +20,8 @@ const candidates=[process.env.CHROME_PATH,process.env.EDGE_PATH,'C:/Users/32988/
 const executablePath=candidates.find(p=>existsSync(p));
 if(!executablePath) {console.error('找不到 Chrome/Edge，可用 CHROME_PATH 指定');process.exit(2);}
 // Chromium profile never falls back to C: TEMP on this D:-hosted project.
-const tempRoot=resolve(args.profileRoot??(/^[dD]:[\\/]/.test(process.env.TEMP??'')?process.env.TEMP:join(root,'.audit-current','soak-profiles')));
+// 默认进入 D 盘测试现场；显式 profileRoot 仍允许调用方覆盖。
+const tempRoot=resolve(args.profileRoot??testArtifactRoot("soak"));
 if(process.platform==='win32'&&!/^[dD]:[\\/]/.test(tempRoot)) {console.error('[FAIL] profileRoot 必须在 D 盘');process.exit(2);}
 mkdirSync(tempRoot,{recursive:true});
 const profile=mkdtempSync(join(tempRoot,'profile-'));
@@ -148,7 +150,7 @@ try {
         },{timeout:120000},start.generation);outcome='completed';
       } catch {outcome='timeout';}
       const after=await page.evaluate(()=>({state:window.attitudeDemo.experiment.batchState(),result:window.attitudeDemo.experiment.batchResult?.()??null,status:document.getElementById('batch-status')?.textContent??'',cells:[...document.querySelectorAll('#batch-table tbody tr')].map(tr=>[...tr.querySelectorAll('td')].map(td=>td.textContent.trim()))}));
-      const labels=await page.evaluate(()=>window.attitudeDemo.experiment.run(0.002).metrics.map(m=>({id:m.id,label:m.label})));
+      const labels=await page.evaluate(async()=>{const r=await window.attitudeDemo.experiment.run(0.002);return r.metrics.map(m=>({id:m.id,label:m.label}))});
       const algorithms=after.cells.map(row=>labels.find(m=>m.label===row[0])?.id??'UNKNOWN');
       const metrics=after.cells.map(row=>row.slice(1).map(cell=>/^\d+(?:\.\d+)?[°%]$/.test(cell)?Number(cell.slice(0,-1)):NaN));
       const entry={index:batchLog.length+1,outcome,elapsedMs:Date.now()-startedAt,genBefore,genStarted:start.generation,genAfter:after.state.generation,runningAfter:after.state.running,requestedSeeds:args.seeds,rows:after.cells.length,algorithms,metrics,seedsDeclared:new RegExp(`^完成：${args.seeds} 个种子 ×`).test(after.status),resultGeneration:after.result?.generation??null,resultSeeds:after.result?.seeds??null,resultAlgorithms:after.result?.summary?.map(m=>m.id)??null};
@@ -197,7 +199,7 @@ try {
     console.log(`[tail] 停载后最低水位 ${settled===null?'n/a':settled.toFixed(1)+'MB'}（前段水位 ${floor===null?'n/a':floor.toFixed(1)+'MB'}）→ ${tailPhase.fellBack?'已回落（判为峰值波动）':'仍未回落（判为泄漏）'}`);
   }
 } catch(e) {failure=e instanceof Error?e.message:String(e);consoleErrors.push(failure);}
-finally {if(browser) await browser.close();}
+finally {if(browser) await browser.close(); cleanupArtifactDir(profile);}
 
 driftProblems = captureDriftProblems(root, identityBefore);
 const provenanceAllProblems = [...provenanceProblems, ...servedProblems, ...driftProblems];

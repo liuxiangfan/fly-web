@@ -21,8 +21,8 @@
  * 前置：`gh auth status` 已登录（只读 API + 下载运行产物）。脚本不会触发任何 workflow。
  */
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { testArtifactTempDir, cleanupArtifactDir } from "./test-artifacts.mjs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { entryFor, pickStabilityJobs, roundResultProblems, smokeStepProblems, summaryProblems } from "./ci-registration.mjs";
@@ -82,7 +82,7 @@ const asCurrent = headMatchesBaseline;
 
 /** 下载运行产物并解包（gh 会按 artifact 名建子目录）；失败返回 null。 */
 function downloadArtifacts() {
-  const dir = mkdtempSync(join(tmpdir(), `ci-reg-${runId}-`));
+  const dir = testArtifactTempDir("ci-downloads", `ci-reg-${runId}-`);
   try {
     execFileSync("gh", ["run", "download", String(runId), "--dir", dir], { cwd: root, stdio: "ignore" });
     return dir;
@@ -115,6 +115,8 @@ let rounds = {};
 if (!legacyReason) {
   artifactDir = downloadArtifacts();
   if (artifactDir) {
+    // 产物目录只服务于本次登记；退出（含失败分支）后即删。
+    process.on("exit", () => cleanupArtifactDir(artifactDir));
     summaries = findFiles(artifactDir, /^summary-.*\.json$/).map(readJson).filter(Boolean);
     for (const f of findFiles(artifactDir, /^smoke-(app|devices)-run\d+\.json$/)) {
       const m = /smoke-(app|devices)-run(\d+)\.json$/.exec(f);

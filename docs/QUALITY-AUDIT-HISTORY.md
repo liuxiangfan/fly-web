@@ -4,7 +4,9 @@
 > 原始全文已进入 Git 历史；需要逐字复核时使用下表的“原路径 + 最后保留提交”读取，例如：
 > `git show 56e3d0b:docs/QUALITY-REVIEW-2026-11-01-ROUND12.md`。
 >
-> **注意**：各轮评分使用的量表不同，不能画成简单上升曲线。当前唯一评分见 [`QUALITY-STATUS.md`](QUALITY-STATUS.md)。
+> **注意**：各轮评分使用的量表不同，不能画成简单上升曲线。本文件只提供历史索引，不提供当前评分。
+> 2026-11-03／11-05 的质量快照已于 2026-11-19 整合进本文件；原始全文可按第 5 节的 Git 定位读取。
+> 当前待办见 [`ROADMAP.md`](ROADMAP.md)，教学最新评估见 [`TEACHING-REVIEW-FIFTH-2026-11-19.md`](TEACHING-REVIEW-FIFTH-2026-11-19.md)。
 
 ## 1. 评分与判断演变
 
@@ -20,7 +22,12 @@
 | ROUND11 | 独立复核 | 子步姿态末态误用、串口锁与 BLE 回调所有权、25 Hz 源列语义、strict 仍默认化 | ROUND12 提出真正分拍、会话事务、recursive strict |
 | ROUND12 | 软件 P1 清单 | backlog 不真分拍、系统断链跳过锁释放、消费快照跨 reset、BLE 竞态、strict/校准判据不同步 | 提交 `56e3d0b` 完成主干修复 |
 | 2026-11-02 满分任务书 | 对 `d6c4a22` 重新按严格量表评为 84/100 | 回退时间重复积分、帧末真值提前、档案非原子、ratio:null、close 丢引用、setup/close 无界、门禁不稳 | 提交 `8161ef3` 等完成大部分 P1/P2，并新增 CI/证据体系 |
-| 2026-11-03 当前复核 | `830e4e3`：86/100 | 软件主线、单轮 CI、部署和线上 smoke 强；严格档案事务、主动连接 timeout、当前双 OS 5×、真机与证据溯源仍缺 | 当前工单见 `ROADMAP.md` |
+| 2026-11-03 当前复核 | `830e4e3`：86/100 | 软件主线、单轮 CI、部署和线上 smoke 强；严格档案事务、主动连接 timeout、当前双 OS 5×、真机与证据溯源仍缺 | 后续软件复核与实施工单继续修正 |
+| 2026-11-03 质量快照 | 95/100（完整系统旧口径） | 当时声称档案严格零副作用、配置唯一规范形、连接动作有界，扣分集中于真机与外部验证 | 后续反例推翻「只剩外部条件」；原文 `QUALITY-STATUS.md` 已整合删除 |
+| 2026-11-05 软件评估 | 93/100（软件旧口径） | SW-01～SW-12 实施后，正确性、异常安全与证据绑定提升；剩余为减重、可访问性与装配层拆分 | 后续教学评审发现新反例；原文 `QUALITY-SOFTWARE-ONLY.md` 已整合删除 |
+| 2026-11-18 阶段优化评估 | 87/100（后被推翻） | 在深入核对教学长稳换源前给出 | 四次复核发现 `source-select` 并未真正换源，回调暂定 84/100；临时治理方案 `CLEANUP-AND-REVIEW-2026-11-18.md` 已整合删除 |
+| 2026-11-19 第五次复核与结构减重 | 保留暂定 84/100，不自动加分 | 全部 JS 净省 4018 B、余 4096 B；依赖裁剪、轻量控制器、估计器工厂与具名动态入口；新候选完整证据重采 | 五轮 117×5、三份 600 s、性能、11 张实际逐图、尺寸与 strict 全通过；7 条新 current、125 输入文件；GPU IBL 外观未实测，远端未授权 |
+| 2026-11-19 第四次整改回填 | 保留暂定 84/100，不重新评分 | 真实 replay 三阶段量具、Ki 普适命题、Gate 生产配置口径、视觉独立采集与历史丢失证据保真已实施；一轮 CSV 纯 core 拆分 | 净省 32 B、余 78 B，距 ≥4 KiB 余量目标仍差 4018 B；最终冻结构建教学／批量／重连 600 s、五轮稳定性、性能与 strict 新绑定均已 PASS（9 次真实换源，批量 116 样本，重连 66/66）；11 张截图已实际逐张查看，单项通过与边界均已登记 |
 
 ## 2. 核心反例如何转为永久契约
 
@@ -52,6 +59,19 @@
 - 文档基准结构/关系/正文渲染/复算：`doccheck.ts`。
 - soak 的 heap 起终/峰值/趋势、批次数与逐段 reconnect：`soak-contract.mjs`。
 - 浏览器进程重启不再假绿，app/devices 分片与 CI 驱动：`browser-smoke.mjs`、`ci-run-smoke.mjs`、`.github/workflows/ci.yml`。
+
+- 教学换源不再按动作名称计数：`scripts/teaching-load.mjs`／`soak-contract.test.mjs` 验证 `replay.import()/stop()` 的 active、sourceKind、idx 与诊断 runId 三阶段；`evidence-report.mjs`／`evidence-contract.test.mjs` 要求 `teaching-load/v2`、完整记录与汇总一致，拒绝旧假换源成为 current。旧教学报告的当时 PASS 保留，但标 `current=false`、`measurementStatus=invalid-source-switch`，只用于容量／内存观测。
+- 视觉复采与历史丢失：完整 sourceDigest／buildId／UUID 独立路径并拒绝覆盖；本地 PNG 如实标 `localOnly:true`。`evidencecheck.mjs` 与证据契约将不可恢复历史保留为 `OBSERVED/unrecoverable`，未知覆盖者／覆盖时间成对 `null`；保留已知原 hash／前缀，不伪造关联或把缺失报告当 PASS。
+
+### 2026-11-19 第四次整改的证据状态（不重评）
+
+冻结身份为 `sourceDigest=2d93cd3d5131d3eb6eeb9f594c4346c6`、`buildId=2d93cd3d5131-15c789e0829d1fe9`、`sourceFiles=121`。已完成代码和完整回填见四次复核第 8.4／9 节：真实 replay 三阶段、teaching-load/v2 全记录、取消 settled／旧 job 隔离、关 review/ESKF＋暂停生产后的静默（事件没有独立停采开关）、Ki 普适命题与 Gate 生产配置口径。
+
+- `tsc → check（155 基础项＋全契约 0 FAIL）→ build → budget（18/18）` 有磁盘回执；CSV 纯 core 拆分的 schema 106 PASS/0 FAIL。JS 299474→299442 B，净省 32 B，有效上限 299520 B、余 78 B，距 ≥4 KiB 余量目标差 4018 B；已停止机械拆分、不抬线、不删功能。
+- 最终教学 600 s PASS 后，五轮 117 项稳定性、批量／重连 600 s、性能与 strict 新绑定也已全部通过；索引 79 条、current 8 条，丢失原件只保留 note。不拿旧 current 当整体验收。
+- 五轮 117 项稳定性已全部通过（每轮零失败／warning／未计划重启），批量 600 s（116 样本、常驻水位 +2.747 MB、峰值 27.218 MB、趋势 6.910 MB）、重连 600 s（122 样本、66/66 恢复、水位 +9.316 MB、峰值 26.331 MB、趋势 18.476 MB）均 PASS，性能报告通过（33.3 fps、真实输入 p95 4.97 ms、取消 18.1 ms、控制台 0），strict 新绑定已通过。
+- **本版视觉已完成**：早期工具返回 `Media omitted`／模型不支持图像的错误保留为过程记录；后续图像输入成功，已实际查看全部 11 张独立采集 PNG，未见意外重叠、横向溢出或空白画布，控制台 0。这仅代表模型视觉检查，不扩大所有者确认或读屏范围。
+- 最终重采串行 runner 已安排；首次 `_ops/` 辅助 runner 的 Windows ESM `d:` 导入路径错误已改 `pathToFileURL`，未改源码，不计产品失败或测试通过；教学 600 s、五轮稳定性、批量／重连、性能、视觉与 strict 随后全部通过。保留评分和磁盘回执，不删除文件、不提交／推送／发布。
 
 ## 3. 被后轮推翻的重要旧结论
 
@@ -94,6 +114,9 @@
 | `docs/IMPROVEMENT-PROPOSAL.md` | `8bda0bb`（后续提交含状态更新，可用 `git log -- path` 选择） |
 | `docs/NEXT-ITERATION-ROADMAP.md` | `9da9bfc`（后续合并提交含补遗） |
 | `docs/QUALITY-FULL-SCORE-PLAN-2026-11-02.md` | `aba9bf6` |
+| `docs/QUALITY-STATUS.md` | `eded35a`（Git 原文）；2026-11-18 的后续标头修订见当前未提交工作树 |
+| `docs/QUALITY-SOFTWARE-ONLY.md` | `7d5cf97`（Git 原文）；2026-11-18 的后续标头修订见当前未提交工作树 |
+| `docs/CLEANUP-AND-REVIEW-2026-11-18.md` | 未提交文件；87 分阶段结论与 D 盘治理已保留在四次复核及本节 |
 
 示例：
 
@@ -102,10 +125,11 @@ git show 56e3d0b:docs/QUALITY-REVIEW-2026-11-01-ROUND12.md
 git log --all -- docs/NEXT-ITERATION-ROADMAP.md
 ```
 
-## 6. 当前入口
+## 6. 后续与当前入口
 
-- 当前百分制与问题：[`QUALITY-STATUS.md`](QUALITY-STATUS.md)
-- 实施工单：[`ROADMAP.md`](ROADMAP.md)
-- 证据边界：[`VERIFICATION-EVIDENCE.md`](VERIFICATION-EVIDENCE.md)
-- 架构与约定：[`PROJECT-STATE.md`](PROJECT-STATE.md)
+- 历史软件评估（2026-11-03／11-05）与 2026-11-18 阶段评分：见第 1 节与第 5 节 Git 定位
+- 当前实施工单：[`ROADMAP.md`](ROADMAP.md)
+- 证据使用原则及历史验证：[`VERIFICATION-EVIDENCE.md`](VERIFICATION-EVIDENCE.md)
+- 教学最新评估、体积与磁盘治理：[`TEACHING-REVIEW-FOURTH-2026-11-18.md`](TEACHING-REVIEW-FOURTH-2026-11-18.md)
+- 架构与当前事实：[`PROJECT-STATE.md`](PROJECT-STATE.md)
 - 产品变更：[`CHANGELOG.md`](CHANGELOG.md)

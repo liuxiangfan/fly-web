@@ -10,6 +10,7 @@
 | 日期 | 工单 | 做了什么 | 证据 |
 |---|---|---|---|
 | 2026-11-07 | WP-01 | 新增 `scripts/perf-probe.mjs`：同一页面、同一批量负载下单变量切换阴影／环境贴图／像素比／是否渲染，采 rAF 间隔、`render()` 同步耗时、运行期 timer、真实鼠标 event→handler／event→runner，并可用 CDP 采样分析器按函数自耗时排序 | `.audit-current/perf-probe-*.json` |
+| 2026-11-16 | WP-03 A | 消除确定重复工作：canvas 位图尺寸未变不重设、RollingChart revision 脏绘制、INS 关闭占位缓存、telemetry detail／评测表按内容去重、非万向节视图不刷新万向节 DOM；新增确定性 `uiWork` 计数出口 | 暂停 5 s：两条展开曲线各 46 次 render 调用、46 次跳过、0 次绘制；评测表 10 次刷新、0 次写 DOM；恢复播放后曲线恢复实际绘制。三视图/暂停/继续/游标/INS 冒烟无退化 |
 | 2026-11-07 | WP-03 | 软件渲染画质档：SwiftShader／llvmpipe／基础显示驱动下无 MSAA、无阴影贴图、无 IBL、像素比封顶 1；`attitudeDemo.renderQuality()` 可断言 | 本机 800×600 单帧 JS 峰值 22.4→8.2 ms，`scene` 21.5→5.0 ms |
 | 2026-11-07 | WP-04 | 课程首次点击即时反馈（冷 chunk 下载期间不再像没点上） | 本地完整集合课程 13 步全过 |
 | 2026-11-07 | WP-02 | **实测后判定不做**：ESKF `update()` 7.35 µs/步（40 万步基准，指纹逐位稳定）。500 Hz 下单个实例约占单核 0.37%，两个实例（界面 + 批量）合计不足 1%；CI 的 200 ms 指标当前余量 13 倍。矩阵改成复用缓冲区只会增加字节与逐位风险，没有用户可见收益 | `.audit-current/eskf-bench.ts`（诊断脚本，未入库） |

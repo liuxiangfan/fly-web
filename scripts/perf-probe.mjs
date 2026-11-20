@@ -23,6 +23,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { distHashOf, readProvenance } from "./build-provenance.mjs";
 import { sourceDigest, worktreeState } from "./source-digest.mjs";
+import { testArtifactTempDir, cleanupArtifactDir } from "./test-artifacts.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const arg = Object.fromEntries(process.argv.slice(2).map((a) => {
@@ -53,8 +54,10 @@ const check = (name, pass, reason) => ({ name, pass, reason });
 const checks = [];
 const record = (name, pass, reason) => { checks.push(check(name, pass, reason)); console.log(`  [${pass ? "PASS" : "FAIL"}] ${name} — ${reason}`); };
 
+const profileDir = testArtifactTempDir("perf", "probe-");
+process.on("exit", () => cleanupArtifactDir(profileDir));
 const browser = await puppeteer.launch({
-  executablePath, headless: "new", protocolTimeout: 300000,
+  executablePath, headless: "new", protocolTimeout: 300000, userDataDir: profileDir,
   args: ["--no-sandbox", "--disable-dev-shm-usage", "--use-angle=swiftshader", "--enable-unsafe-swiftshader",
     "--disable-background-timer-throttling", "--disable-backgrounding-occluded-windows", "--disable-renderer-backgrounding"],
 });

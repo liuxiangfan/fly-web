@@ -8,7 +8,14 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { gzipSync } from "node:zlib";
+import { execFileSync } from "node:child_process";
+import { testArtifactTempDir, cleanupArtifactDir } from "./test-artifacts.mjs";
+import { sourceDigest } from "./source-digest.mjs";
+import { distHashOf } from "./build-provenance.mjs";
+import { collectChunks, chunkKind, mappedCodeMatches, sizeIdentity, sizeDriftProblems } from "./size-report.mjs";
 import { classifyRun } from "./smoke-verdict.mjs";
 import { budgetVerdict, reductionHint, verdictLine } from "./budget-core.mjs";
 
@@ -70,7 +77,7 @@ test("冻结基线表必须覆盖全部受控项（增量才可比）", () => {
   assert.ok(limits.length >= 10, "上限表疑似被清空");
 });
 
-test("预算项不许被悄悄删掉：14 项指标名一个不少", () => {
+test("预算项不许被悄悄删掉：19 项指标名一个不少", () => {
   const names = [...src.matchAll(/name: "([^"]+)"/g)].map((m) => m[1]);
   for (const name of [
     "产物总量",
@@ -83,19 +90,26 @@ test("预算项不许被悄悄删掉：14 项指标名一个不少", () => {
     "主包 JS",
     "文档页演示 JS（按需 chunk）",
     "引导课程 JS（按需 chunk）",
+    "实验/挑战目录 JS（按需 chunk）",
+    "教学交互按需 JS（对照台/任务条）",
+    "诊断按需 JS（可观性/事件/回看/ESKF）",
+    "CSV 导出 JS（按需 tools-ui）",
+    "共享数值内核 JS（按需 runner/trace）",
     "Service Worker JS（离线缓存，加载后注册）",
-    "批量评测 Worker JS（懒加载）",
+    "评测 Worker 入口 JS（懒加载）",
     "全部 JS 合计（gzip，含按需 chunk/three/Worker/SW）",
     "主包 JS（gzip 传输体积）",
   ]) assert.ok(names.includes(name), `预算项被删掉了：${name}`);
-  assert.equal(names.length, 14, `预算项数应为 14，实测 ${names.length}`);
+  assert.equal(names.length, 19, `预算项数应为 19，实测 ${names.length}`);
 });
 
 test("字数统计口径：上限值必须写成「KB × 1024」，避免有人用 1000 偷偷放宽", () => {
   for (const m of src.matchAll(/^\s{2}(\w+): (\d+) \* 1024,/gm)) {
     assert.ok(Number(m[2]) > 0, `${m[1]} 上限必须为正数`);
   }
-  assert.match(src, /total: 2200 \* 1024,/, "总量上限必须以 1024 为基数");
+  assert.match(src, /total: 2255 \* 1024,/, "总量上限必须以 1024 为基数");
+  assert.match(src, /toolsUi: 24 \* 1024,/, "CSV 导出按需分类上限必须为 24 KiB");
+  assert.match(src, /!\/tools-ui-\/\.test\(f\)/, "tools-ui 必须从首屏主包收集中排除");
 });
 
 /**
@@ -122,4 +136,120 @@ test("冒烟失败归因：用例级断言失败优先于基础设施超时（�
   assert.equal(classifyRun(1, log("something exploded")), "product");
   // ⑥ 非零退出码但日志里有用例级 FAIL → product
   assert.equal(classifyRun(2, log("[FAIL] 窄屏布局无横向溢出 — scroll=390/390")), "product");
+});
+
+/**
+ * 体积**归因**也必须对账（三次复核 TR-06 问题二）：
+ * size-report 曾只扫 assets/、漏掉 dist/sw.js，还把三个 lazy chunk 归成 main，
+ * 于是「分项之和」与「全部 JS gzip」对不上——用这种报告做减重决策会算错账。
+ * 这里直接读两份脚本源码，锁住「同一分类口径 + 全目录扫描 + 总和字段」。
+ */
+test("体积归因：size-report 与 distbudget 同口径，且必须扫描整个产物目录", () => {
+  const sizeSrc = readFileSync(new URL("./size-report.mjs", import.meta.url), "utf8");
+  const budgetSrc = readFileSync(new URL("./distbudget.mjs", import.meta.url), "utf8");
+
+  // ① 分类口径：三个 lazy UI chunk 在两边都必须被单独识别，不许归成 main。
+  for (const name of ["teaching-ui", "comparison-ui", "diagnostics-ui"]) {
+    assert.ok(budgetSrc.includes(`${name}-`), `distbudget 未单独识别 ${name}`);
+    assert.ok(sizeSrc.includes(`${name}-`), `size-report 未单独识别 ${name}`);
+  }
+  // ② Service Worker 必须被计入（此前漏扫 dist 根）。
+  assert.match(sizeSrc, /name === "sw\.js"/, "size-report 必须显式识别 sw.js");
+  // ③ 必须扫整个 dist，而不是只看 assets/。
+  assert.match(sizeSrc, /collect\(distRoot, distRoot\)/, "size-report 必须从 dist 根扫描全部 JS");
+  // ④ 必须给出可对账的总和字段。
+  assert.match(sizeSrc, /gzipSum:/, "size-report 必须输出 gzipSum 以便与 distbudget 对账");
+});
+
+test("体积归因行为：根 SW、嵌套 lazy/Worker/目录 chunk 逐文件对账，gzip 只量被测 dist", () => {
+  const root = testArtifactTempDir('contracts', 'size-collect-');
+  try {
+    const files = [
+      ['sw.js', 'service-worker'], ['assets/three-x.js', 'vendor-three'], ['assets/index-x.js', 'main'],
+      ['assets/nested/teaching-ui-x.js', 'lazy-teaching-ui'], ['assets/comparison-ui-x.js', 'lazy-comparison-ui'],
+      ['assets/diagnostics-ui-x.js', 'lazy-diagnostics-ui'], ['assets/experiments-x.js', 'lazy-catalog'],
+      ['assets/challenges-x.js', 'lazy-catalog'], ['assets/comparison-config-x.js', 'lazy-comparison-ui'],
+      ['assets/task-strip-x.js', 'lazy-comparison-ui'], ['assets/learning-panel-x.js', 'lazy-comparison-ui'],
+      ['assets/batch.worker-x.js', 'worker-entry'], ['assets/runner-x.js', 'shared-runner'],
+      ['assets/trace-events-x.js', 'shared-runner'], ['assets/app-shared-x.js', 'shared-app'],
+    ];
+    const contents = new Map();
+    for (const [rel, kind] of files) {
+      const file = join(root, rel);
+      mkdirSync(dirname(file), { recursive: true });
+      const code = Buffer.from(`console.log(${JSON.stringify(rel)});\n`);
+      writeFileSync(file, code);
+      contents.set(rel, code);
+      assert.equal(chunkKind(rel.split('/').at(-1)), kind);
+    }
+    writeFileSync(join(root, 'ignored.js.map'), '{}');
+    const chunks = collectChunks(root);
+    assert.equal(chunks.length, files.length);
+    assert.deepEqual(chunks.map((c) => c.file).sort(), files.map(([rel]) => rel).sort());
+    for (const c of chunks) {
+      assert.equal(c.raw, contents.get(c.file).length);
+      assert.equal(c.gzip, gzipSync(contents.get(c.file), { level: 9 }).length);
+      assert.equal(c.kind, files.find(([rel]) => rel === c.file)[1]);
+    }
+    assert.equal(chunks.reduce((sum, c) => sum + c.gzip, 0), [...contents.values()].reduce((sum, code) => sum + gzipSync(code, { level: 9 }).length, 0));
+  } finally { cleanupArtifactDir(root); }
+});
+
+test("体积 sourcemap：只允许末尾 URL 注释偏差；正文变动不能给旧产物归因", () => {
+  const root = testArtifactTempDir('contracts', 'size-map-');
+  try {
+    const dist = join(root, 'main.js'), mapped = join(root, 'mapped.js');
+    const code = 'console.log("same");\n';
+    writeFileSync(dist, code);
+    writeFileSync(mapped, `${code}\n//# sourceMappingURL=main.js.map\n`);
+    assert.equal(mappedCodeMatches(dist, mapped), true);
+    assert.notEqual(gzipSync(readFileSync(dist), { level: 9 }).length, gzipSync(readFileSync(mapped), { level: 9 }).length, '临时 map 注释的 gzip 不能拿来当 dist 数字');
+    writeFileSync(mapped, 'console.log("changed");\n\n//# sourceMappingURL=main.js.map\n');
+    assert.equal(mappedCodeMatches(dist, mapped), false);
+    writeFileSync(mapped, `${code}//# sourceMappingURL=main.js.map\nconsole.log(2);`);
+    assert.equal(mappedCodeMatches(dist, mapped), false, '非末尾注释不得剥掉正文');
+    writeFileSync(dist, 'console.log(1);');
+    writeFileSync(mapped, 'console.log(1);\n//# sourceMappingURL=main.js.map\n');
+    assert.equal(mappedCodeMatches(dist, mapped), true, 'Vite 在无换行的压缩文件后追加换行+URL，必须只去追加尾部');
+    writeFileSync(mapped, 'console.log(1);\n');
+    assert.equal(mappedCodeMatches(dist, mapped), false, '没有 map URL 就不能消掉不同的换行');
+  } finally { cleanupArtifactDir(root); }
+});
+
+test("体积身份：采集前绑定源码/产物，之后 dist/source/buildId 任一漂移均拒", () => {
+  const root = testArtifactTempDir('contracts', 'size-identity-');
+  const write = (rel, content) => { const file = join(root, rel); mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, content); };
+  try {
+    execFileSync('git', ['init', '-q'], { cwd: root });
+    write('index.html', '<title>size</title>'); write('src/main.ts', 'export const x=1;'); write('dist/main.js', 'console.log(1);');
+    const provenance = { buildId: 'fixed-build', sourceDigest: sourceDigest(root).digest, distHash: distHashOf(join(root, 'dist')) };
+    write('dist/build-provenance.json', JSON.stringify(provenance));
+    const before = sizeIdentity(root);
+    assert.deepEqual(sizeDriftProblems(root, before), []);
+    write('dist/main.js', 'console.log(2);');
+    assert.ok(sizeDriftProblems(root, before).some((p) => p.includes('产物被重建')));
+    assert.throws(() => sizeIdentity(root), /不一致/);
+    write('dist/main.js', 'console.log(1);');
+    write('src/main.ts', 'export const x=2;');
+    assert.ok(sizeDriftProblems(root, before).some((p) => p.includes('源码发生')));
+    assert.throws(() => sizeIdentity(root), /不一致/);
+    write('src/main.ts', 'export const x=1;');
+    write('dist/build-provenance.json', JSON.stringify({ ...provenance, buildId: 'changed-build' }));
+    assert.ok(sizeDriftProblems(root, before).some((p) => p.includes('buildId')));
+  } finally { cleanupArtifactDir(root); }
+});
+
+test("体积归因：仓库内的 size-report.json 分项之和等于全部 JS gzip", () => {
+  const reportPath = new URL("../docs/generated/size-report.json", import.meta.url);
+  if (!existsSync(reportPath)) return; // 未采集过就跳过（不把"没报告"判成失败）
+  const report = JSON.parse(readFileSync(reportPath, "utf8"));
+  assert.ok(Array.isArray(report.chunks) && report.chunks.length > 0, "size-report 缺少 chunks");
+  const sum = report.chunks.reduce((total, chunk) => total + chunk.gzip, 0);
+  assert.equal(report.totals?.gzipSum, sum, "totals.gzipSum 必须等于分项之和");
+  const kinds = new Set(report.chunks.map((chunk) => chunk.kind));
+  for (const kind of ["service-worker", "vendor-three", "main"]) {
+    assert.ok(kinds.has(kind), `size-report 缺少分类：${kind}`);
+  }
+  const lazyKinds = [...kinds].filter((kind) => kind.startsWith("lazy-"));
+  assert.ok(lazyKinds.length >= 3, `lazy chunk 分类过少：${lazyKinds.join(",")}`);
 });

@@ -1,8 +1,42 @@
 # 验证证据与证明边界
 
-> 最新验证：2026-11-07 · 正式版 [v0.2.0](https://github.com/liuxiangfan/fly-web/releases/tag/v0.2.0) 已发布并部署，线上提交 `4c2176c`（合并提交 `db1a93f`）。
-> 当前验收源码摘要 `2bb7ea308692fcecbe6f5384b9618229`，本机构建 `2bb7ea308692-e791bb9d179928b1`；线上 `build-provenance.json` 的 `sourceDigest` 与之一致（产物摘要因提交戳不同而不同，属预期）。
-> 以下旧轮次细节保留为历史。最新结论只认机器索引里的 current 条目：`npm run evidence:verify`。
+> 文档定位（2026-11-18 整理）：本页是**证据使用规则 + 历史验证记录索引**。以下 v0.2.0 验收详情属于 2026-11-07 的旧构建，不表示当前源码已经通过同样验收。
+> **当前证据只认机器索引中的 current 条目**：[`generated/evidence-manifest.json`](generated/evidence-manifest.json)。当前机器事实见 [`PROJECT-STATE.md`](PROJECT-STATE.md)；当前教学评估与整改见 [`TEACHING-REVIEW-FIFTH-2026-11-19.md`](TEACHING-REVIEW-FIFTH-2026-11-19.md)。
+> 新代码／新构建必须重新采集并登记，不得将下列旧摘要、报告路径、像素或 CI 结果贴到新版本。历史细节继续保留，不能删除来伪造“当前通过”。
+
+## 后续优化阶段1/2/3/5 最终候选证据（2026-11-20）
+
+- 最终身份：`sourceDigest=ed0f78fb0e2f756be234f370b1954f11`、`buildId=ed0f78fb0e2f-fd379a47f3f6d9f4`、135 个输入文件（工作树 dirty，提交 `7d5cf97`）。预算 **19/19**：新增 CSV 导出 tools-ui 分类；全部 JS 名义经所有者授权 325→328 KiB（有效 292.5→295.2，实测 295.1、余 0.1 KiB）；产物总量 2029.5/2029.5 KB 贴线。贴线事实不粉饰。
+- 门禁：`npx tsc --noEmit` PASS；`npm run check` 全绿（含 statuscheck 与 evidencecheck）；`npm run build` PASS。五轮稳定性 `generated/stability-local-windows-ed0f78fb-final.json`：**129×5 全绿**（app 108 + devices 21，零 warning、零未计划重启）。过程记录：第一次尝试第 1 轮渲染进程被系统回收（工作集峰值 4.6 GB），第二次第 4 轮导航超时（均环境类，非产品断言），第三次完整通过；未把失败轮次丢弃成「一直稳定」。
+- 三份 600 s 长稳全 PASS、未豁免：教学 `soak-teaching-600-ed0f78fb-final.json`（119 样本、9 真实换源、11 取消落定、runId→20、水位 −0.984 MB／趋势 2.515 MB）；批量 `soak-batch-600-ed0f78fb-final.json`（水位 +2.410 MB／趋势 7.334 MB）；重连 `soak-reconnect-600-ed0f78fb-final.json`（66/66 恢复、水位 +8.348 MB／趋势 18.135 MB）。末段与采样覆盖均 PASS，控制台/动作错误 0。
+- 性能 `generated/perf-report.json`：30.3 fps、真实输入 p95 5.910 ms、可交互 2424 ms、控制台 0；与早期 2.86 ms 为不同机器负载下的不同采集，不归因性能回退。
+- 视觉 11 张（`generated/visual-evidence-ed0f78fb0e2f756be234f370b1954f11-ed0f78fb0e2f-fd379a47f3f6d9f4-1cf5519b-86b8-4802-8212-e4db0f795fa5.json`）已实际逐张查看：桌面/320/390/768、200% 缩放、三视图、文档与两种打印，无意外重叠、横向溢出或空白画布，控制台 0。复盘导航、实验报告（面板+打印态）、三档与更新横幅另有 `D:/test-artifacts/quaternion-attitude/visual/` 下专项截图。模型视觉检查，不扩大为所有者逐图验收或读屏通过。
+- 7 条新 current 已登记，`evidence:verify` 三层绑定通过（索引 98 条、current 8 条）。真实硬件仍为软件替身、GPU IBL 未实测、远端 CI/发布未授权；第4点新增预测题按所有者要求未做。主包静态引用 teaching-ui（共享 chart.ts）的边界已在 PROJECT-STATE 登记，留给后续结构专项。
+
+## F-05/F-07 当前候选证据（2026-11-19）
+
+- 当前候选：`sourceDigest=b4894a076955df40cc3eea063d299f44`、`buildId=b4894a076955-a26ac90a3b9dce09`、125 个输入文件。全部 JS gzip **296640 / 299520 B，余 2880 B**，12 个 JS、raw 987380 B；预算 18/18 通过，但 4 KiB 演进余量因新增功能回退，未通过删功能或抬线掩盖。
+- **120×5** 稳定性：每轮 app 99 + devices 21，零 FAIL／warning／未计划重启。事件新增用例覆盖真实饱和、串口断流/重连/恢复、参数/视图/装载动作；完整 P 矩阵开关与 6×6 展开在浏览器验证。
+- 教学 600 s：119 样本、118 动作、9 真实换源、停载静默；水位 +2.143 MB／峰值 28.092 MB／趋势 6.619 MB。批量 600 s：114 样本、水位 +3.612 MB／峰值 28.696 MB／趋势 7.660 MB。重连 600 s：122 样本、66/66、水位 +6.145 MB／峰值 27.572 MB／趋势 16.958 MB。均末段/覆盖 PASS、未豁免。
+- 性能 `generated/perf-report-b4894a07-f05.json`：31.1 fps、真实输入 p95 2.860 ms、取消 52.4 ms、可交互 2117 ms、堆峰值 19.8 MB、控制台 0。
+- 视觉 11 张已逐张查看，无异常；7 条 current 完成三层绑定（索引 93 条、current 8 条）。高 GPU IBL、读屏、真实硬件与远端 CI 仍不覆盖。
+
+## 第五次结构减重证据（e90，历史候选）
+
+- 当前候选：`sourceDigest=e90fe931c33d53fad2455d2650adcd92`、`buildId=e90fe931c33d-f56a3da77a48a479`、125 个输入文件。全部 JS gzip **295424 / 299520 B，余 4096 B**，raw 983509 B、12 个 JS，尺寸报告 `generated/size-report-e90fe931-fifth.json` 无漂移；未抬预算、未删教学能力或测试。
+- 五轮稳定性 `generated/stability-local-windows-e90fe931-fifth.json`：每轮 **117/117**，零失败／warning／未计划重启。教学 600 s：119 样本、118 动作、9 真实换源、停载静默、堆水位 +2.681 MB／趋势 −0.778 MB；批量 600 s：117 样本、水位 +4.278 MB／趋势 6.755 MB；重连 600 s：122 样本、66/66 恢复、水位 +7.841 MB／趋势 17.309 MB，均末段／覆盖 PASS、未豁免。
+- 性能 `generated/perf-report-e90fe931-fifth.json`：30.4 fps、真实输入 p95 2.887 ms、取消 request→runner 20.8 ms、可交互 3049 ms、堆峰值 22.9 MB、Worker 完成、控制台 0。与第四次 33.3 fps／2339 ms 是不同采集，不直接归因性能差异。
+- 新视觉报告 `generated/visual-evidence-e90fe931c33d53fad2455d2650adcd92-e90fe931c33d-f56a3da77a48a479-5d6e09c6-d57a-42c4-ae33-fcfa31b933d0.json`：11 张已实际逐图查看，未见意外重叠、横向溢出或空白画布；高质量 GPU 的 IBL 反射差异未实测。
+- 7 条新 current 已登记，`evidence:verify` 通过源码／产物／被服务 buildId 三层绑定；索引 **86 条、current 8 条**，历史不可复核原件仍只记 note。真实拖拽和暂停后滚轮相机位置变化另由 `D:/test-artifacts/quaternion-attitude/_ops/fifth-orbit-wheel-browser.log` 记录。
+
+## 第四次整改证据状态（2026-11-19，历史）
+
+- 冻结产品：`sourceDigest=2d93cd3d5131d3eb6eeb9f594c4346c6`、`buildId=2d93cd3d5131-15c789e0829d1fe9`、121 个输入文件。当前冻结构建证据已全部采集且 `evidence:verify` 通过 7 条新证据三层绑定（索引 79 条、current 8 条）；旧 `027b2d0c` 不代表本构建验收。批量 600 s 116 样本、水位 +2.747 MB／峰值 27.218 MB／趋势 6.910 MB；重连 600 s 122 样本、66/66 恢复、水位 +9.316 MB／峰值 26.331 MB／趋势 18.476 MB。
+- 教学换源只认 `teaching-load/v2` 保存的三阶段：`replay.active=false→true→false`、实际来源 `simulation→replay→simulation`、回放帧消费 `idx>0`、导入/退出两次真实诊断 runId 推进、旧回看覆盖解除。旧量具的动作名或 `sourceSwitches=11` 不证明换源；旧教学报告正文/hash 保留，索引降为历史 `invalid-source-switch`，仅适用于容量和内存观测。28 s 预检不是 600 s 证据。
+- 视觉报告及 PNG 每次采集按完整 sourceDigest/buildId/UUID 独立存放，拒绝同路径覆盖；`localOnly:true` 不免除本机有图时的像素哈希检查，clone 无图明确不可复核。历史报告丢失只能记 `OBSERVED/unrecoverable`，未知物理覆盖关系为成对 null，不用空 hash 或目录冒充 PASS。
+- 五轮稳定性：每轮 **117/117**，零失败／warning／未计划重启，见 `generated/stability-local-windows-2d93cd3d-fourth.json`。性能 `generated/perf-report-2d93cd3d-fourth.json`：墙钟 33.3 fps、真实输入 p95 4.97 ms、主线程取消 request→runner 18.1 ms、Worker 完成、控制台 0。
+- 新视觉采集为 `generated/visual-evidence-2d93cd3d5131d3eb6eeb9f594c4346c6-2d93cd3d5131-15c789e0829d1fe9-2c61c8f4-26c8-451b-a90b-9084b96838eb.json`，11 张 PNG 均位于对应完整 digest/buildId/UUID 目录。早期同会话的图像不支持错误如实保留；后续图像输入成功，已实际逐张查看全部桌面／窄屏／缩放／三视图／文档／打印，未发现意外重叠、横向溢出或空白画布，控制台 0。这是模型视觉检查，不扩大为所有者逐图验收，不代替读屏或 clone 缺图复核。未向外部服务发送截图。
+- 一轮 CSV 结构拆分实测全部 JS gzip 299474→299442 B，净省 32 B，距有效门槛 299520 B 只余 78 B；至少 4 KiB 演进余量目标未达（差 4018 B），已停止机械拆分。预算合规不等于减重目标完成，未自行抬线或删教学能力。
 
 ## v0.2.0 验收要点（2026-11-07）
 
@@ -22,7 +56,7 @@
 - 公式真实鼠标点击验证得到正文选区回退，选区不含按钮反馈；不将手动回退宣称为自动写入系统剪贴板成功。截图采集与控制台检查通过；当前模型接口未提供图像内容，人工视觉判定不声称已完成。
 - `evidence:verify` 已核对六类本地 current 报告的源码摘要、产物摘要及 buildId 一致；旧性能、视觉、体积原件归档为 `*-before-v0.2.0.json`，未重贴摘要。
 - **Windows CI／线上发布待远端操作确认**，本地通过不代替 GitHub smoke-suite 通过。
-> 机器索引：[`generated/evidence-manifest.json`](generated/evidence-manifest.json)；软件评分与未完成项见 [`QUALITY-SOFTWARE-ONLY.md`](QUALITY-SOFTWARE-ONLY.md)。
+> 机器索引：[`generated/evidence-manifest.json`](generated/evidence-manifest.json)；旧软件评分见 [`QUALITY-AUDIT-HISTORY.md`](QUALITY-AUDIT-HISTORY.md)，当前未完成项见 [`ROADMAP.md`](ROADMAP.md)。
 > 每一条 current 证据都要能同时回答四件事：**报告正文结论是什么**、**对应哪份源码**、**对应哪份产物**、**被测服务跑的是不是这份产物**。
 
 ## 1. 证据使用原则

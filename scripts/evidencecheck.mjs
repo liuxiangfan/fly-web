@@ -13,7 +13,7 @@
  *
  * 任何一层都不允许"读不动就跳过"：畸形输入返回明确失败，而不是抛异常退出。
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
@@ -36,6 +36,7 @@ const projectStatePath = join(root, "docs/PROJECT-STATE.md");
 const PROVENANCE_BY_KIND = {
   "software-soak-batch": ["sourceCommit", "distHash", "browserVersion"],
   "software-soak-reconnect": ["sourceCommit", "distHash", "browserVersion"],
+  "software-soak-teaching": ["sourceCommit", "distHash", "browserVersion"],
   "software-soak-legacy": [],
   "software-smoke-stability": ["sourceCommit", "distHash", "browserVersion", "runnerOs", "runs"],
   "postdeploy-smoke": ["sourceCommit", "externalRunId", "browserVersion"],
@@ -94,6 +95,26 @@ for (const [i, e] of entries.entries()) {
   if (typeof e.current !== "boolean") fail(`${at}.current 必须是布尔`);
   if (!Array.isArray(e.supersedes)) fail(`${at}.supersedes 必须是数组`);
   if (typeof e.notes !== "string" || !e.notes.trim()) fail(`${at}.notes 必须写清能证明什么/不能证明什么`);
+  if (e.kind === "visual-screenshot" && e.current === true && !/\.json$/i.test(e.path ?? "")) {
+    fail(`${at}.path 当前视觉证据必须指向可解析的 JSON 报告，不能用 PNG/目录代替正文`);
+  }
+  if (e.kind === "visual-screenshot" && !/^[0-9a-f]{64}$/.test(e.sha256 ?? "") &&
+      !(e.reportUnavailable === true && e.recoveryStatus === "unrecoverable" && e.current === false && e.result === "OBSERVED" && e.sha256 === null)) {
+    fail(`${at}.sha256 必须保留原报告/PNG 的完整 SHA-256，空 sha 不能代替丢失证据`);
+  }
+  if (e.pixelsOverwritten !== undefined || e.pixelsOverwrittenBy !== undefined || e.pixelsOverwrittenAt !== undefined) {
+    if (e.kind !== "visual-screenshot" || e.current !== false || e.localOnly !== true || e.pixelsOverwritten !== true) {
+      fail(`${at}.pixelsOverwritten 只能用于显式标记的历史 localOnly 视觉条目`);
+    }
+    if (typeof e.pixelsOverwrittenBy !== "string" || !e.pixelsOverwrittenBy || e.pixelsOverwrittenBy === e.id) {
+      fail(`${at}.pixelsOverwrittenBy 必须指向另一个视觉证据 id`);
+    } else if (!entries.some((item) => item?.id === e.pixelsOverwrittenBy && item.kind === "visual-screenshot")) {
+      fail(`${at}.pixelsOverwrittenBy 指向不存在的视觉证据：${e.pixelsOverwrittenBy}`);
+    }
+    if (typeof e.pixelsOverwrittenAt !== "string" || !Number.isFinite(Date.parse(e.pixelsOverwrittenAt))) {
+      fail(`${at}.pixelsOverwrittenAt 必须保留覆盖采集时间`);
+    }
+  }
   if (!(e.kind in PROVENANCE_BY_KIND)) {
     fail(`${at}.kind 未登记：${e.kind}（新证据类型必须同时登记它该有的溯源字段）`);
   } else if (e.provenanceComplete === true) {
@@ -114,18 +135,97 @@ for (const e of entries) {
     continue;
   }
   const abs = join(root, e.path);
-  if (!existsSync(abs)) {
-    if (e.localOnly !== true) fail(`${e.id} 的 path 不存在：${e.path}（本地证据请标 localOnly: true）`);
+  if (e.reportUnavailable === true) {
+    // 原路径/原 hash 不换成目录或新报告身份；不可复核不等于历史 PASS。
+    if (e.kind !== "visual-screenshot" || e.current !== false || e.localOnly !== true || e.result !== "OBSERVED" || e.provenanceComplete !== false || !/\.json$/i.test(e.path)) {
+      fail(`${e.id} 丢失报告只能保留原 JSON 路径/hash，标历史 localOnly OBSERVED、provenanceComplete: false`);
+    }
+    const successor = entries.find((item) => item?.id === e.reportOverwrittenBy && item.kind === "visual-screenshot" && item.id !== e.id);
+    const unknownCoverage = e.recoveryStatus === "unrecoverable" && e.reportOverwrittenBy === null && e.reportOverwrittenAt === null;
+    if (!unknownCoverage && (!successor || !Number.isFinite(Date.parse(e.reportOverwrittenAt)) ||
+        (e.recoveryStatus !== "unrecoverable" && (!Number.isFinite(Date.parse(e.startedAt)) || !Number.isFinite(Date.parse(e.finishedAt)))))) {
+      fail(`${e.id} 丢失报告缺少覆盖者、覆盖时间或原采集时间`);
+    }
+    notes.push(`${e.id}：原报告 ${e.path}（sha256 ${e.sha256}）不可复核，仅保留历史观察，不能计作 PASS`);
     continue;
   }
-  if (e.localOnly !== true || (typeof e.sha256 === "string" && e.sha256)) {
-    const sha = createHash("sha256").update(readFileSync(abs)).digest("hex");
-    if (e.sha256 !== sha) fail(`${e.id} 的 sha256 与文件不一致（索引 ${String(e.sha256).slice(0, 12)}… / 实际 ${sha.slice(0, 12)}…）`);
+  if (!existsSync(abs)) {
+    if (e.localOnly !== true || (e.kind === "visual-screenshot" && /\.json$/i.test(e.path))) {
+      fail(`${e.id} 的 path 不存在：${e.path}（报告丢失不能用 localOnly 绕过，应显式保留不可复核历史观察）`);
+    }
+    continue;
   }
-  reportCache.set(e.id, { abs, parsed: parseEvidenceReport(e.kind, abs) });
+  if (!statSync(abs).isFile()) {
+    fail(`${e.id} 的 path 不是文件：${e.path}（目录不能代替原报告）`);
+    continue;
+  }
+  try {
+    if (e.localOnly !== true || (typeof e.sha256 === "string" && e.sha256)) {
+      const sha = createHash("sha256").update(readFileSync(abs)).digest("hex");
+      if (e.sha256 !== sha) fail(`${e.id} 的 sha256 与文件不一致（索引 ${String(e.sha256).slice(0, 12)}… / 实际 ${sha.slice(0, 12)}…）`);
+    }
+    reportCache.set(e.id, { abs, parsed: parseEvidenceReport(e.kind, abs) });
+  } catch (err) { fail(`${e.id} 文件无法读取：${err.message}`); }
 }
 // 报告解析结果缓存：C 段落据此核对"索引说的"与"报告写的"
 function reportOf(id) { return reportCache.get(id); }
+const shaOf = (abs) => createHash("sha256").update(readFileSync(abs)).digest("hex");
+const sameTime = (declared, actual) => typeof declared === "string" && typeof actual === "string" &&
+  (declared.length === 10 ? declared === actual.slice(0, 10) : Date.parse(declared) === Date.parse(actual));
+const verifiedVisual = (e) => {
+  const cached = reportOf(e?.id);
+  try {
+    return e?.kind === "visual-screenshot" && cached?.parsed?.ok === true && shaOf(cached.abs) === e.sha256 ? cached.parsed : null;
+  } catch { return null; }
+};
+// 覆盖必须有逐跳证据：原报告 hash、同一像素路径、覆盖者报告 hash、采集时间。
+// 允许旧覆盖者又被覆盖，但整条链必须可核，不能凭一个布尔放过任意像素。
+function overwrittenPixel(e, shot, seen = new Set()) {
+  if (seen.has(e.id)) return false;
+  seen.add(e.id);
+  if (e.current !== false || e.localOnly !== true || e.pixelsOverwritten !== true) return false;
+  const original = verifiedVisual(e);
+  const successor = entries.find((item) => item?.id === e.pixelsOverwrittenBy);
+  const next = verifiedVisual(successor);
+  if (!original || !next || !sameTime(e.pixelsOverwrittenAt, next.report.startedAt) ||
+      !(Date.parse(next.report.startedAt) >= Date.parse(original.report.finishedAt)) ||
+      !(Date.parse(next.report.finishedAt) >= Date.parse(next.report.startedAt))) return false;
+  const replacement = next.pixels?.find((item) => item.file === shot.file);
+  if (!replacement) return false;
+  const abs = join(root, shot.file);
+  if (!existsSync(abs)) return true; // clone 不带本地像素；覆盖关联仍从两份原报告核验。
+  if (!statSync(abs).isFile()) return false;
+  return shaOf(abs) === replacement.sha256 || overwrittenPixel(successor, replacement, seen);
+}
+for (const e of entries) {
+  if (e.reportUnavailable !== true) continue;
+  if (e.recoveryStatus === "unrecoverable" && e.reportOverwrittenBy === null && e.reportOverwrittenAt === null) {
+    notes.push(`${e.id}：覆盖者与覆盖采集时间未知，不能核覆盖关联；仅保留不可恢复历史 OBSERVED，不构成 PASS 证据`);
+    const abs = join(root, e.path);
+    if (existsSync(abs)) fail(`${e.id} 原路径仍有内容，不能以未知覆盖关联绕过报告 hash mismatch`);
+    continue;
+  }
+  const successor = entries.find((item) => item?.id === e.reportOverwrittenBy);
+  const next = verifiedVisual(successor);
+  if (!next || (successor.path !== e.path && successor.originalReportPath !== e.path) ||
+      !sameTime(e.reportOverwrittenAt, next.report.startedAt) ||
+      !(Date.parse(next?.report?.finishedAt) >= Date.parse(next?.report?.startedAt)) ||
+      ((e.startedAt !== null || e.finishedAt !== null || e.recoveryStatus !== "unrecoverable") &&
+      (!(Date.parse(e.finishedAt) >= Date.parse(e.startedAt)) || !(Date.parse(next.report.startedAt) >= Date.parse(e.finishedAt))))) {
+    fail(`${e.id} 丢失报告的覆盖关联不可核：须核原路径、覆盖者报告 hash 与双方采集时间`);
+  }
+  const abs = join(root, e.path);
+  if (existsSync(abs) && (!statSync(abs).isFile() || !next || shaOf(abs) !== successor.sha256 || successor.path !== e.path)) {
+    fail(`${e.id} 原报告路径现有内容不能由覆盖者报告 hash 解释，拒绝绕过 hash mismatch`);
+  }
+}
+for (const e of entries) {
+  if (e.pixelsOverwritten !== true || e.reportUnavailable === true) continue;
+  const parsed = verifiedVisual(e);
+  if (!parsed?.pixels?.length || !parsed.pixels.every((shot) => overwrittenPixel(e, shot))) {
+    fail(`${e.id} 像素覆盖关联不可核：须核原路径、原报告/覆盖者报告 hash、覆盖者与采集时间`);
+  }
+}
 
 // ③ 每类**每个运行环境**最多一条 current。
 // 为什么带上 runnerOs：同一类证据会按平台各存一份（"Ubuntu 上 5× 全绿" 与
@@ -222,6 +322,12 @@ for (const e of entries) {
   if (!parsed.recognized) continue; // 复算基准等由 doccheck 负责
   if (!parsed.ok) { fail(`${e.id} 的报告无法解析：${parsed.error}`); continue; }
   const r = parsed.report;
+  if (e.kind === "visual-screenshot") {
+    if (r.localOnly !== null && r.localOnly !== undefined && e.localOnly !== r.localOnly) fail(`${e.id} 的 localOnly 与视觉报告不一致`);
+    if ((parsed.pixels ?? []).some((shot) => /^screenshots\//.test(shot.file)) && e.localOnly !== true) {
+      fail(`${e.id} PNG 在未分发的 screenshots/，必须 localOnly: true；本机有图不等于 clone 可复核`);
+    }
+  }
   if (r.pass !== undefined && (e.result === "PASS") !== r.pass) {
     fail(`${e.id} 报告正文结论是 ${r.pass ? "PASS" : "FAIL"}，索引却写 ${e.result}`);
   }
@@ -264,9 +370,17 @@ for (const e of entries) {
       }
       continue;
     }
+    if (!statSync(abs).isFile()) {
+      fail(`${e.id} 的截图 ${shot.name} 不是文件：${shot.file}`);
+      continue;
+    }
     const sha = createHash("sha256").update(readFileSync(abs)).digest("hex");
     if (sha !== shot.sha256) {
-      fail(`${e.id} 的截图 ${shot.name} 像素哈希与报告不符（报告 ${String(shot.sha256).slice(0, 12)}… / 实际 ${sha.slice(0, 12)}…）`);
+      if (overwrittenPixel(e, shot)) {
+        notes.push(`${e.id}（历史）：截图 ${shot.name} 已由 ${e.pixelsOverwrittenBy} 于 ${e.pixelsOverwrittenAt} 覆盖；原报告/覆盖链已核，旧像素不可复核`);
+      } else {
+        fail(`${e.id} 的截图 ${shot.name} 像素哈希与报告不符（报告 ${String(shot.sha256).slice(0, 12)}… / 实际 ${sha.slice(0, 12)}…）`);
+      }
     }
   }
 }
@@ -322,8 +436,8 @@ if (problems.length) {
   process.exit(1);
 }
 const currentCount = [...currentByKind.values()].reduce((n, l) => n + l.length, 0);
-console.log(`[PASS] 证据索引结构完整、哈希逐字节匹配（共 ${entries.length} 条、current ${currentCount} 条）`);
-console.log("[PASS] 索引与报告正文交叉一致（结果/源码摘要/产物摘要/构建/浏览器/平台/轮次/截图哈希）");
+console.log(`[PASS] 证据索引结构完整、可读取文件的哈希逐字节匹配（共 ${entries.length} 条、current ${currentCount} 条；缺失/不可复核范围见 note）`);
+console.log("[PASS] 可读取报告与索引交叉一致（结果/源码摘要/产物摘要/构建/浏览器/平台/轮次/截图声明；本机像素另核）");
 for (const n of notes) console.log(`[note] ${n}`);
 console.log(`
 证据索引校验通过 ✅${requireSource ? "（含当前源码硬绑定）" : ""}${requireBuild ? "（含当前构建硬绑定）" : ""}`);

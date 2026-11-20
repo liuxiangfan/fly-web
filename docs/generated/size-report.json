@@ -1,91 +1,120 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-11-06T06:09:57.003Z",
-  "sourceCommit": "dbf22c7de295395bd4faf88cc9802014fbb1cefb",
-  "sourceDigest": "63cd97bf0bf234009a816a841699303f",
-  "distHash": "afbbb5d7696c5008",
-  "buildId": "63cd97bf0bf2-afbbb5d7696c5008",
-  "note": "体积归因用的是一次**带 sourcemap 的独立重建**（dist-size/），不修改 dist/；chunk 级 raw/gzip 与 dist/ 同源同配置。",
+  "generatedAt": "2026-11-20T10:07:31.506Z",
+  "sourceCommit": "7d5cf97fdddfb9f25d660d199075a3ec84006d30",
+  "sourceDigest": "ed0f78fb0e2f756be234f370b1954f11",
+  "distHash": "fd379a47f3f6d9f4",
+  "buildId": "ed0f78fb0e2f-fd379a47f3f6d9f4",
+  "driftProblems": [],
+  "note": "体积归因用的是一次**带 sourcemap 的独立重建**（临时目录，测完即删），不修改 dist/；chunk 级 raw/gzip 与 dist/ 同源同配置。",
   "chunks": [
     {
-      "name": "three-Df8GycVh.js",
-      "file": "three-Df8GycVh.js",
+      "name": "three-BL1vKiW6.js",
+      "file": "assets/three-BL1vKiW6.js",
       "kind": "vendor-three",
-      "raw": 525393,
-      "gzip": 131882
+      "raw": 506943,
+      "gzip": 123454
     },
     {
-      "name": "index-C3qD0yf6.js",
-      "file": "index-C3qD0yf6.js",
+      "name": "index-D1Roi6gC.js",
+      "file": "assets/index-D1Roi6gC.js",
       "kind": "main",
-      "raw": 289775,
-      "gzip": 108665
+      "raw": 174695,
+      "gzip": 65363
     },
     {
-      "name": "batch.worker-B7-M4S-S.js",
-      "file": "batch.worker-B7-M4S-S.js",
-      "kind": "worker-batch",
-      "raw": 44093,
-      "gzip": 15828
+      "name": "teaching-ui-XNzX37_g.js",
+      "file": "assets/teaching-ui-XNzX37_g.js",
+      "kind": "lazy-teaching-ui",
+      "raw": 129016,
+      "gzip": 44414
     },
     {
-      "name": "doc-demos-BZ4J5nhn.js",
-      "file": "doc-demos-BZ4J5nhn.js",
-      "kind": "lazy-doc-demos",
-      "raw": 22808,
-      "gzip": 9304
+      "name": "worker-core-Dla-SGmF.js",
+      "file": "assets/worker-core-Dla-SGmF.js",
+      "kind": "main",
+      "raw": 108446,
+      "gzip": 37910
     },
     {
-      "name": "tour-B5wnUiRt.js",
-      "file": "tour-B5wnUiRt.js",
-      "kind": "lazy-tour",
-      "raw": 11945,
-      "gzip": 6545
+      "name": "diagnostics-ui-BxM8feTX.js",
+      "file": "assets/diagnostics-ui-BxM8feTX.js",
+      "kind": "lazy-diagnostics-ui",
+      "raw": 55932,
+      "gzip": 18916
+    },
+    {
+      "name": "runner-BfRBXFuN.js",
+      "file": "assets/runner-BfRBXFuN.js",
+      "kind": "shared-runner",
+      "raw": 11492,
+      "gzip": 4921
+    },
+    {
+      "name": "tools-ui-B8uHPr81.js",
+      "file": "assets/tools-ui-B8uHPr81.js",
+      "kind": "lazy-tools-ui",
+      "raw": 5884,
+      "gzip": 2784
+    },
+    {
+      "name": "app-shared-BHeTgDev.js",
+      "file": "assets/app-shared-BHeTgDev.js",
+      "kind": "shared-app",
+      "raw": 4245,
+      "gzip": 2098
+    },
+    {
+      "name": "comparison.worker-Cvuj48tH.js",
+      "file": "assets/comparison.worker-Cvuj48tH.js",
+      "kind": "worker-entry",
+      "raw": 1993,
+      "gzip": 988
+    },
+    {
+      "name": "batch.worker-2PagLWFM.js",
+      "file": "assets/batch.worker-2PagLWFM.js",
+      "kind": "worker-entry",
+      "raw": 1355,
+      "gzip": 679
+    },
+    {
+      "name": "sw.js",
+      "file": "sw.js",
+      "kind": "service-worker",
+      "raw": 1368,
+      "gzip": 651
     }
   ],
+  "totals": {
+    "gzipSum": 302178,
+    "rawSum": 1001369,
+    "files": 11
+  },
   "mainAttribution": {
     "groups": [
       {
         "group": "装配层(main.ts)",
-        "sourceBytes": 357452
-      },
-      {
-        "group": "数值内核",
-        "sourceBytes": 203811
-      },
-      {
-        "group": "数据通路/存档",
-        "sourceBytes": 168267
+        "sourceBytes": 375741
       },
       {
         "group": "场景渲染",
-        "sourceBytes": 69299
+        "sourceBytes": 70899
       },
       {
         "group": "界面",
-        "sourceBytes": 56528
+        "sourceBytes": 28756
+      },
+      {
+        "group": "数据通路/存档",
+        "sourceBytes": 14225
       }
     ],
     "topModules": [
       {
         "module": "main.ts",
         "group": "装配层(main.ts)",
-        "bytes": 357452
-      },
-      {
-        "module": "estimators/index.ts",
-        "group": "数值内核",
-        "bytes": 52544
-      },
-      {
-        "module": "core/runner.ts",
-        "group": "数值内核",
-        "bytes": 39671
-      },
-      {
-        "module": "core/experiment-config.ts",
-        "group": "数据通路/存档",
-        "bytes": 33426
+        "bytes": 375741
       },
       {
         "module": "scene/quatview.ts",
@@ -93,44 +122,9 @@
         "bytes": 28465
       },
       {
-        "module": "core/magcal.ts",
-        "group": "数据通路/存档",
-        "bytes": 23422
-      },
-      {
-        "module": "core/replay.ts",
-        "group": "数据通路/存档",
-        "bytes": 20774
-      },
-      {
-        "module": "core/serial.ts",
-        "group": "数值内核",
-        "bytes": 20466
-      },
-      {
         "module": "scene/gimbal.ts",
         "group": "场景渲染",
-        "bytes": 19324
-      },
-      {
-        "module": "core/transport-session.ts",
-        "group": "数据通路/存档",
-        "bytes": 19110
-      },
-      {
-        "module": "core/accelcal.ts",
-        "group": "数据通路/存档",
-        "bytes": 18970
-      },
-      {
-        "module": "core/solve-loop.ts",
-        "group": "数值内核",
-        "bytes": 16421
-      },
-      {
-        "module": "ui/experiments.ts",
-        "group": "界面",
-        "bytes": 14942
+        "bytes": 19210
       },
       {
         "module": "core/archive-ui.ts",
@@ -138,9 +132,59 @@
         "bytes": 14225
       },
       {
-        "module": "core/quat.ts",
-        "group": "数值内核",
-        "bytes": 13065
+        "module": "scene/setup.ts",
+        "group": "场景渲染",
+        "bytes": 13643
+      },
+      {
+        "module": "ui/calib-panel.ts",
+        "group": "界面",
+        "bytes": 8036
+      },
+      {
+        "module": "scene/quad.ts",
+        "group": "场景渲染",
+        "bytes": 6794
+      },
+      {
+        "module": "ui/doc-search.ts",
+        "group": "界面",
+        "bytes": 5414
+      },
+      {
+        "module": "ui/ins-view.ts",
+        "group": "界面",
+        "bytes": 3986
+      },
+      {
+        "module": "ui/formula-copy.ts",
+        "group": "界面",
+        "bytes": 3379
+      },
+      {
+        "module": "ui/batch-table.ts",
+        "group": "界面",
+        "bytes": 2923
+      },
+      {
+        "module": "scene/labels.ts",
+        "group": "场景渲染",
+        "bytes": 1710
+      },
+      {
+        "module": "ui/canvas-util.ts",
+        "group": "界面",
+        "bytes": 1697
+      },
+      {
+        "module": "ui/preferences.ts",
+        "group": "界面",
+        "bytes": 1566
+      },
+      {
+        "module": "scene/rounded-box.ts",
+        "group": "场景渲染",
+        "bytes": 1077
       }
     ]
   }
