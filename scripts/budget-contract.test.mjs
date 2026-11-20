@@ -107,7 +107,7 @@ test("字数统计口径：上限值必须写成「KB × 1024」，避免有人�
   for (const m of src.matchAll(/^\s{2}(\w+): (\d+) \* 1024,/gm)) {
     assert.ok(Number(m[2]) > 0, `${m[1]} 上限必须为正数`);
   }
-  assert.match(src, /total: 2255 \* 1024,/, "总量上限必须以 1024 为基数");
+  assert.match(src, /total: 2260 \* 1024,/, "总量上限必须以 1024 为基数（2026-11-20 所有者授权 2255→2260）");
   assert.match(src, /toolsUi: 24 \* 1024,/, "CSV 导出按需分类上限必须为 24 KiB");
   assert.match(src, /!\/tools-ui-\/\.test\(f\)/, "tools-ui 必须从首屏主包收集中排除");
 });
