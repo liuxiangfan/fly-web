@@ -9,7 +9,8 @@
 ## 2026-11-20 · 悬停读数布局抖动、空格快捷键与样式收敛
 
 - **游标读数**：`#chart-cursor` 从 `display:none` 切换改为占位常驻（`visibility:hidden` + 一行 `min-height` + `nowrap/ellipsis`）。此前光标进入/离开曲线会让 body grid 增删一行，整个图表区反复上下跳；JS 与 `.hidden` 语义不变，冒烟断言无需改。实测 idle/hover/leave 三态 `#charts` 均为 y=480、h=357，读数行恒 31px。
-- **空格键（两轮修复）**：第一轮只对引导课程上一步/下一步与回看步进按钮做 `blur()`，线上复测发现点过图表页签（如「俯仰」）后空格仍被原生激活吞掉，并触发 `:focus-visible` 焦点环。第二轮改为**全局捕获阶段规则**：指针点击（`detail>0`）命中任意 `<button>` 后统一 `blur()`，局部补丁撤回；键盘激活（detail=0）保留焦点。实测点「俯仰」后 `activeElement=BODY`、空格暂停/继续且 `aria-selected` 不变；点顶部「暂停」后空格恢复播放；Enter 仍可切 tab 且焦点保留。
+- **空格键（三轮修复，最终以空格语义优先）**：① 首轮只对引导课程/回看步进按钮 `blur()`；② 次轮改为指针点击任意 `<button>` 全局 `blur()`；线上复测仍复现——**文档层关闭时会把焦点程序化还给「文档」按钮**（`setDocsOpen(false)` 的 `back.focus()`），这不是指针焦点，空格又被原生激活吞掉并亮出焦点环。③ 终版：空格不再让位聚焦按钮，全局 `preventDefault` + 清掉目标焦点后切换暂停（`case " "`）；按钮键盘激活保留 Enter，文本/下拉/滑块聚焦仍整体让位，文档层内按键仍不触发后台快捷键。原生 `<dialog>` 关闭后的焦点归还同样被该规则覆盖。
+- **实测（三轮路径全覆盖）**：鼠标开→鼠标关文档、鼠标开→Esc 关文档、点图表页签（俯仰）后按空格，均 `#docs-overlay` 保持关闭、焦点回 BODY、时钟暂停/继续、`aria-selected` 不变；键盘 Enter 仍可打开文档。冒烟 app 108/108、devices 21/21，控制台零错误。
 - **样式收敛**：删除 quat 视图/`.section-quat`/`#readout-overlay`/`.formula b` 重复规则；新增 `--bg-raised`、`--bg-chip`、`--danger-text`、`--doc-ctrl-bg/line` 并归并 `#eef2f8`、`#ffc9c4`、`#0b688a`、`#0a1120` 等字面量，零像素变化。
 - **验证**：`tsc` / `npm run check`（0 FAIL）/ `build` / `budget` 通过（全部 JS 余 0.1 KB 贴线）；浏览器冒烟 app **108/108**、devices **21/21**，控制台零错误；截图与复测脚本存 `D:/test-artifacts/quaternion-attitude/smoke/designfix-verify/`。
 

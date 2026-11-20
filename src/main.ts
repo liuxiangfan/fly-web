@@ -5005,17 +5005,22 @@ window.addEventListener("keydown", (e) => {
   const target = e.target;
   // 按键守卫分两级：
   //  · 文本/下拉/滑块类控件聚焦时，所有单键快捷键都让位（否则打字/调值会被劫持）；
-  //  · 按钮/链接聚焦时只让位「空格」（空格本来就是激活按钮），其余快捷键照常——
-  //    否则从文档返回后焦点停在「文档」按钮上，1/2/3 会全部失灵（实测踩到过）。
+  //  · 按钮/链接聚焦时其余快捷键照常——否则从文档返回后焦点停在「文档」按钮上，
+  //    1/2/3 会全部失灵（实测踩到过）。
+  // 空格**不再**让给聚焦按钮：文档层关闭会把焦点程序化还给「文档」按钮，
+  // 原生空格会重新打开文档（并亮出焦点环），而空格对本装置的首要语义是暂停/继续。
+  // 按钮的键盘激活仍有 Enter；下面 case " " 里还会清掉残留焦点。
   // target 可能不是 Element（window/document 上派发的合成事件），不能直接 .matches()
   if (target instanceof Element) {
     if (target.matches("input, select, textarea, [contenteditable='true']")) return;
-    if (e.key === " " && target.matches("button, a")) return;
   }
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   switch (e.key) {
     case " ":
       e.preventDefault();
+      // 清掉残余焦点：否则按键会把该按钮升级成 :focus-visible，亮出「蓝色方框」，
+      // 用户会以为空格选中/触发了它。焦点回 body，Tab 可重新进入交互流。
+      if (target instanceof HTMLElement && target !== document.body) target.blur();
       setPlaying(!state.playing);
       break;
     case "r":
