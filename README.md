@@ -134,7 +134,7 @@ npm run smoke      # 真浏览器端到端 129 项（需先 build；驱动器会
 - 应用内：15 个分页的教材、控制项手册与排障手册（右上角「文档」，或 <kbd>Ctrl</kbd>+<kbd>K</kbd> 全文搜索）
 - 仓库内：[项目状态](docs/PROJECT-STATE.md) · [验证证据](docs/VERIFICATION-EVIDENCE.md) · [质量复核历史](docs/QUALITY-AUDIT-HISTORY.md) ·
   [改进方案](docs/SOFTWARE-IMPROVEMENT-PLAN.md) · [性能优化方案](docs/WINDOWS-PERFORMANCE-OPTIMIZATION-PLAN.md) ·
-  [可访问性验收](docs/ACCESSIBILITY-ACCEPTANCE.md) · [变更日志](docs/CHANGELOG.md)
+  [可访问性验收](docs/ACCESSIBILITY-ACCEPTANCE.md) · [变更日志](docs/CHANGELOG.md) · [教学功能与交互扩展实施方案](docs/TEACHING-INTERACTION-EXPANSION-PLAN.md)
 
 ## 贡献
 

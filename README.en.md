@@ -142,7 +142,7 @@ the index. Details: [docs/VERIFICATION-EVIDENCE.md](docs/VERIFICATION-EVIDENCE.m
 - In-app: 15 pages of textbook, control manual, and troubleshooting (top-right "文档", or <kbd>Ctrl</kbd>+<kbd>K</kbd> to search)
 - In the repo: [project state](docs/PROJECT-STATE.md) · [verification evidence](docs/VERIFICATION-EVIDENCE.md) · [quality review history](docs/QUALITY-AUDIT-HISTORY.md) ·
   [improvement plan](docs/SOFTWARE-IMPROVEMENT-PLAN.md) · [performance plan](docs/WINDOWS-PERFORMANCE-OPTIMIZATION-PLAN.md) ·
-  [accessibility acceptance](docs/ACCESSIBILITY-ACCEPTANCE.md) · [changelog](docs/CHANGELOG.md)
+  [accessibility acceptance](docs/ACCESSIBILITY-ACCEPTANCE.md) · [changelog](docs/CHANGELOG.md) · [teaching & interaction expansion plan](docs/TEACHING-INTERACTION-EXPANSION-PLAN.md)
 
 ## Contributing
 
