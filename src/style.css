@@ -1097,6 +1097,10 @@ body[data-view="gimbal"] .section-imu,
 body[data-view="gimbal"] .section-algo,
 body[data-view="gimbal"] .section-experiments,
 body[data-view="gimbal"] .section-magcal,
+body[data-view="gimbal"] .section-compare,
+body[data-view="gimbal"] .section-diagnostics,
+body[data-view="gimbal"] .section-challenge,
+body[data-view="gimbal"] .section-ins,
 body[data-view="gimbal"] .section-metrics { display: none; }
 
 body[data-view="gimbal"] .section-gimbal { display: block; }
@@ -1111,7 +1115,30 @@ body[data-view="quat"] .section-imu,
 body[data-view="quat"] .section-algo,
 body[data-view="quat"] .section-experiments,
 body[data-view="quat"] .section-magcal,
+body[data-view="quat"] .section-compare,
+body[data-view="quat"] .section-diagnostics,
+body[data-view="quat"] .section-challenge,
+body[data-view="quat"] .section-ins,
 body[data-view="quat"] .section-metrics { display: none; }
+
+/* 两个独立演示视图（万向节/四元数）都不依赖仿真解算产物，以下界面在这里只剩误导：
+   - 对照/诊断/挑战/INS 已随上方分区列表隐藏；
+   - 「真实 IMU」按钮的动作是自动展开 IMU 面板（这两个视图里它已被隐藏），接上硬件
+     也不会驱动演示；「导出 CSV」导出的是解算记录而非演示状态（「分享」保留：
+     深链本身编码 view，可以分享万向节/四元数现场）。
+   - 任务条/参数反馈是其它视图学习任务的状态残留，纯展示层隐藏，切回原视图自动恢复。
+   - #chart-cursor 是图表游标读数占位行，图表隐藏后不再保留空白（须 !important
+     覆盖 #chart-cursor.hidden 的 display:block）。 */
+body[data-view="gimbal"] #btn-serial-quick,
+body[data-view="quat"] #btn-serial-quick,
+body[data-view="gimbal"] #btn-export,
+body[data-view="quat"] #btn-export,
+body[data-view="gimbal"] .task-strip,
+body[data-view="quat"] .task-strip,
+body[data-view="gimbal"] .param-feedback,
+body[data-view="quat"] .param-feedback { display: none; }
+body[data-view="gimbal"] #chart-cursor,
+body[data-view="quat"] #chart-cursor { display: none !important; }
 
 /* ==========================================================================
    右侧面板：工具条 + 手风琴（信息密度分层）

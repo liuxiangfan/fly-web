@@ -2763,6 +2763,12 @@ function enterQuatSelectedMode(): void {
 /** 真实用户切换视图（F-05）：记录前后视图；程序化装载走 applyView，不记成用户动作。 */
 function userSelectView(view: UiView): void {
   selectViewAction(view, state.view, applyView, (before, after) => diagnosticsApi?.userAction("view-change", `切换视图：${before}→${after}`, { view: before }, { view: after }));
+  // 万向节/四元数是独立演示：引导课程展开的卡片内容全部指向其它视图，
+  // 留在这里只是误导，切进来时自动折叠（课程本身继续运行，不 exit）。
+  if (view === "gimbal" || view === "quat") {
+    const tour = $("sec-tour");
+    if (!tour.classList.contains("collapsed")) setSectionOpen(tour, false);
+  }
 }
 
 /* ==========================================================================
