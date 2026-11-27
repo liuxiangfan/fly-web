@@ -1,4 +1,5 @@
 import { defineConfig, type Plugin } from "vite";
+import { ShaderChunk } from "three";
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -95,6 +96,21 @@ export default defineConfig({
   },
   plugins: [
     sharedWorkerUrls(),
+    {
+      // 只处理与 Three 内置 ShaderChunk 完全相等的字面量；保留换行、宏和注释。
+      name: "compact-three-glsl",
+      apply: "build",
+      transform(code, id) {
+        if (!id.endsWith("/three/build/three.module.js")) return;
+        const shaders = new Map(Object.values(ShaderChunk).filter(s => !s.includes("/*") && !s.includes("\\")).map(s => {
+          const compact = s.split("\n").map(line => /^\s*#|\/\//.test(line) ? line : line.trimStart()
+            .replace(/[ \t]*([(),;{}\[\]])[ \t]*|(?<=\w) ([=+*/<>-]) (?=\w)/g, "$1$2")).join("\n");
+          return [JSON.stringify(s), JSON.stringify(compact)] as const;
+        }));
+        return code.replace(/^((?:var|const) [\w$]+ = )(".*");$/gm,
+          (decl, prefix, literal) => shaders.has(literal) ? prefix + shaders.get(literal) + ";" : decl);
+      },
+    },
     {
       // 只压缩**构建产物**：源码 index.html 仍保持可读，便于教材维护与契约检查。
       // 内联文档占产物体积的大头，折叠空白/注释能同时缓解总产物与外壳预算。

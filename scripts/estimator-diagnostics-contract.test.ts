@@ -723,5 +723,55 @@ test("ESKF 快照：resetCovOnInject 逐条已接受观测记录，关闭时如�
   assert.notDeepEqual(onLast.pDiagFinal, offLast.pDiagFinal);
 });
 
+test("教材 eskf-frame-worked：零陀螺、20° 横滚的预测/注入/拒绝，与零新息区分", () => {
+  const frame = (rollDeg: number, chi2 = false): KalmanStepSnapshot => {
+    const kal = new KalmanEstimator(); // 保留默认 P、Q/R、角门控和重置配置
+    if (chi2) kal.gateMode = "mahalanobis";
+    kal.diagFullP = true;
+    const snaps: KalmanStepSnapshot[] = [];
+    kal.diagnostics = (s) => snaps.push(s);
+    kal.update([0, 0, 0], gravityInBody(qFromAxisAngle([1, 0, 0], rollDeg * RAD)), [0, 0, 0], DT);
+    assert.equal(snaps.length, 1);
+    return snaps[0];
+  };
+
+  const s = frame(20);
+  const acc = s.observations[0];
+  assert.deepEqual(s.qPredicted, qId());
+  assert.equal(s.observations[1].gate.reason, "mag-disabled");
+  assert.ok(s.pFullPredicted && acc.innovation && acc.S && acc.K && acc.dx && acc.nis !== null);
+  assert.deepEqual(acc.gate, { kind: "angle", threshold: 40, accepted: true, reason: "applied" });
+  assert.equal(s.covarianceResetApplied, false);
+  // 按教材显示精度核对；K 的列是观测 x/y/z，前 3 行是姿态、后 3 行是零偏。
+  approx(s.pDiagPredicted[0], 0.007569031, 5e-10, "预测横滚方差");
+  approx(s.pFullPredicted[3], -1.89225e-7, 5e-13, "预测横滚/零偏互协方差");
+  approx(acc.innovation[1], 0.34202, 5e-6, "新息 y");
+  approx(acc.innovation[2], -0.06031, 5e-6, "新息 z");
+  approx(acc.S[4], 0.010069031, 5e-10, "Syy");
+  approx(acc.S[8], 0.0025, 1e-12, "Szz");
+  approx(acc.K[1], 0.751714, 5e-7, "Kθx,y");
+  approx(acc.dx[0], 0.257101, 5e-7, "注入 δθx (rad)");
+  approx(acc.dx[3], -6.4275e-6, 5e-11, "注入 δbx (rad/s)");
+  approx(2 * Math.atan2(s.qFinal.x, s.qFinal.w) * DEG, 14.6505, 5e-5, "实际横滚 (°)");
+  approx(s.pDiagFinal[0], 0.001879285, 5e-10, "更新后横滚方差");
+  assert.equal(s.pDiagFinal[2], s.pDiagPredicted[2], "此帧重力不约束偏航");
+  approx(acc.nis, 13.0724, 5e-5, "三分量方向新息 NIS");
+
+  const rejected = frame(20, true);
+  const r = rejected.observations[0];
+  assert.deepEqual(r.gate, { kind: "mahalanobis", threshold: 11.345, accepted: false, reason: "gate-mahalanobis" });
+  assert.equal(r.nis, acc.nis);
+  assert.equal(r.K, null);
+  assert.equal(r.dx, null);
+  assert.deepEqual(rejected.qFinal, rejected.qPredicted);
+  assert.deepEqual(rejected.pFullFinal, rejected.pFullPredicted);
+
+  const flat = frame(0).observations[0];
+  assert.equal(flat.applied, true);
+  assert.deepEqual(flat.K, acc.K); // 同一预测姿态与 P，增益相同且非零
+  assert.deepEqual(flat.dx, [0, 0, 0, 0, 0, 0]);
+  assert.equal(flat.pDiagAfter[0], s.pDiagFinal[0]);
+});
+
 console.log(`estimator-diagnostics-contract: ${pass} PASS / ${fail} FAIL`);
 if (fail) process.exitCode = 1;

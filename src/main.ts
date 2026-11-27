@@ -409,6 +409,7 @@ function setSimControlsDisabled(disabled: boolean): void {
     //  · replay-speed：回放进行中要能改倍速（否则 1× 只能干等）
     //  · replay-file：回放中要能再导入另一份日志（按钮是程序化点击它的，
     //    禁用会让 click() 静默失效——实测踩到过）
+    if (el.id === "replay-apply-cal" && replayActive()) continue; // 由日志是否已校准决定，而不是由模拟模式决定
     if (el.id === "serial-mounting" || el.id === "replay-speed" || el.id === "replay-file") continue;
     el.disabled = disabled;
   }
@@ -425,13 +426,9 @@ function setSimControlsDisabled(disabled: boolean): void {
   });
   const note = document.getElementById("real-mode-note");
   if (note) {
-    note.textContent = replayActive()
-      ? replayState.externalReference
-        ? "离线回放模式（带外部真值）：剧本 / 模拟噪声 / 手动目标 / 幻影 / 闭环 / 初始偏差已停用——数据来自日志，误差基准 = 日志真值；也可把「模型姿态来源」切到真实姿态查看真值。"
-        : "离线回放模式：剧本 / 模拟噪声 / 手动目标 / 幻影 / 闭环 / 初始偏差已停用——数据完全来自导入的日志（无真值，误差基准 = Mahony）。"
-      : bleState.connected && !serialState.running
-        ? "BLE IMU 模式：剧本 / 模拟噪声 / 手动目标 / 幻影 / 闭环 / 初始偏差已停用——数据完全来自蓝牙通知（无真值，误差基准 = Mahony）。"
-        : "真实 IMU 模式：剧本 / 模拟噪声 / 手动目标 / 幻影 / 闭环 / 初始偏差已停用——数据完全来自串口帧。";
+    if (disabled) note.textContent = `${dataSourceLabel()}：模拟控件已停用。` + (hasGroundTruth()
+      ? "误差以日志中的外部真值计算。"
+      : "无真值，曲线显示各算法相对 Mahony 的偏差。");
     note.classList.toggle("hidden", !disabled);
   }
 }
@@ -485,10 +482,9 @@ function applyDataSourceSemantics(): void {
   // 姿态曲线图例第一项随数据源改名：外部真值 / Mahony 基准 / 模拟真值
   const truthChip = attLegend?.chips[0];
   const truthName = truthChip?.children[1] as HTMLElement | undefined;
-  if (truthName) {
-    const kind = currentReferenceKind();
-    truthName.textContent = kind === "groundTruth" ? "真实" : kind === "external" ? "外部真值" : "基准(Mahony)";
-  }
+  const kind = currentReferenceKind();
+  truthSeries.label = kind === "groundTruth" ? "模拟真值" : kind === "external" ? "外部真值" : "Mahony 基准";
+  if (truthName) truthName.textContent = truthSeries.label;
 }
 $("btn-serial").addEventListener("dblclick", (e) => e.preventDefault());
 
@@ -585,7 +581,7 @@ if (sceneHandles.quality === "software") {
 }
 
 // ---------- 图表 ----------
-const truthSeries = { label: "真实", color: "#e6edf3" };
+const truthSeries = { label: "模拟真值", color: "#e6edf3" };
 const estSeries = ests.map((e) => ({ label: e.label, color: e.color }));
 const abSeries = AB_TARGETS().map((e) => ({ label: `${e.label} ·B`, color: abAlpha(e.color), dash: [5, 3] }));
 const attChart = new RollingChart($("att-canvas"), [truthSeries, ...estSeries], { windowSec: CHART_WINDOW });
@@ -1673,7 +1669,7 @@ const projState = {
   /** 当前画面上实际显示的 q（动画中途连按时从这里无缝续接，不跳变） */
   current: qId() as Quat,
   anim: null as null | { from: Quat; to: Quat; t: number; dur: number; reset?: boolean },
-  /** 已左乘 i/j/k 的次数（重置清零）：每按一次 = 绕基轴 180°，读数把它折算成累计转角 */
+  /** 已右乘 i/j/k 的次数（重置清零）：每按一次 = 绕机体基轴 180°，读数把它折算成累计转角 */
   presses: 0,
 };
 const PROJ_I: Quat = { w: 0, x: 1, y: 0, z: 0 };
@@ -1681,7 +1677,7 @@ const PROJ_J: Quat = { w: 0, x: 0, y: 1, z: 0 };
 const PROJ_K: Quat = { w: 0, x: 0, y: 0, z: 1 };
 
 /**
- * 累计旋转读数：本模式下 q 只会被左乘 i/j/k 改变，从单位姿态出发必然落在
+ * 累计旋转读数：本模式下 q 只会右乘 i/j/k，从单位姿态出发，按键终点必然落在
  * {±1, ±i, ±j, ±k} 八点上。按主导分量归类并给出「哪张皮」的解说——
  * 连按同一按钮两次（累计 360°）3D 姿态复原而 q 变号、四次（720°）才真正回 +1，
  * 双重覆盖从结论句变成随按钮实时刷新的数字。
@@ -1696,14 +1692,14 @@ function updateProjTurn(q: Quat): void {
   if (max === aw) {
     name = w >= 0 ? "+1" : "−1";
     note = w >= 0
-      ? "单位姿态（0° 或 720°：两张皮在此重合）"
-      : "累计 360°：3D 姿态已复原，q 却变号——转一圈 ≠ 没转";
+      ? "单位姿态，与重置值同号"
+      : "3D 姿态已复原，q 与重置值反号";
   } else {
     const axis: [string, number] = max === ax ? ["i", x] : max === ay ? ["j", y] : ["k", z];
     name = (axis[1] >= 0 ? "+" : "−") + axis[0];
     note = `物理 = 绕 ${axis[0]} 轴转 180°（S³ 赤道，${axis[1] >= 0 ? "第一" : "第二"}张皮）`;
   }
-  el.textContent = `已左乘 ${projState.presses} 次 · 累计 ${projState.presses * 180}° · q = ${name}（${note}）`;
+  el.textContent = `已右乘 ${projState.presses} 次 · 累计 ${projState.presses * 180}° · q = ${name}（${note}）`;
   drawProjSection(q);
 }
 
@@ -1711,7 +1707,7 @@ function updateProjTurn(q: Quat): void {
  * S³ 剖面 inset：把 q 画进「包含 +1 与 q 的大圆平面」——立体投影的「抬升」视角。
  *
  * 为什么不用固定的 w–i 平面：固定的两个坐标轴只在 q 的向量部分平行于 i 时才好看，
- * 一旦 q = j 或 k（左乘按钮的常态），q 的 w、x 分量同时为 0，q 与 −q 双双塌到圆心，
+ * 一旦 q = j 或 k（右乘按钮的常态），q 的 w、x 分量同时为 0，q 与 −q 双双塌到圆心，
  * 剖面失去信息。改成「1 与 q 张成的平面」后，任何 q 都落在圆周上：
  * 横轴恒为 +1/−1，纵轴是 q 的虚部方向，q 的极角就是**半角 θ**（物理转角的一半）——
  * 「纬度 = 半角」这句话因此在图上直接可见。
@@ -2596,7 +2592,7 @@ function projAnimateTo(target: Quat, isReset = false): void {
  * 连按的叠加基准：动画进行中取「目标链尾」（anim.to）而非 projState.q——
  * 后者只在动画完成时更新，快速连按（0.7s 内）会让第二次的目标仍基于旧值，
  * 导致「连按两次 = −q」落空、累计读数与实际姿态脱节。链尾叠加后每次按键
- * 恰好等于左乘一次基向量，presses 计数与 q 的实际累计严格一致。
+ * 恰好等于右乘一次基四元数，presses 计数与按键累计转角一致。
  */
 function projChainBase(): Quat {
   return projState.anim ? projState.anim.to : projState.q;
@@ -2946,14 +2942,14 @@ function updateChartTables(): void {
     "att-table",
     ["系列", `当前通道「${attTab}」当前值（°）`],
     [
-      ["真实姿态", fmt(att[0])],
+      [truthSeries.label, fmt(att[0])],
       ...ests.map((e, i) => [e.label, fmt(att[i + 1])]),
     ],
   );
   // 误差：五算法 + 可选 B 组
   put(
     "err-table",
-    ["算法", "总误差（°）"],
+    ["算法", `相对${truthSeries.label}（°）`],
     [
       ...ests.map((e, i) => [e.label, fmt(err[i])]),
       ...(abState.on ? AB_TARGETS().map((e, i) => [`${e.label} ·B`, fmt(err[err.length - AB_TARGETS().length + i])]) : []),
@@ -2974,7 +2970,7 @@ function updateChartSummaries(): void {
     if (el) el.textContent = text;
   };
   const att = attChart.latest();
-  const names = ["真实", ...ests.map((e) => e.label)];
+  const names = [truthSeries.label, ...ests.map((e) => e.label)];
   const idx = state.channel;
   const wrap = (v: number): string => {
     if (!Number.isFinite(v)) return "--";
@@ -3048,7 +3044,7 @@ function updatePanelSummaries(): void {
     if (el) el.textContent = text;
   };
   const scenarioName = scenarioSelect.selectedOptions[0]?.textContent ?? "—";
-  set("scenario", `${scenarioName}${!hasGroundTruth() ? ` · ${dataSourceLabel()}` : ""}`);
+  set("scenario", state.real ? dataSourceLabel() : scenarioName);
   const presets = $<HTMLSelectElement>("imu-preset").selectedOptions[0]?.textContent ?? "";
   const extras = [
     imuParams.gyroRangeDps > 0 ? `量程 ${imuParams.gyroRangeDps}°/s` : "",
@@ -3166,7 +3162,7 @@ function cursorText(t: number): string {
   const attText = att
     ? att.values
         .slice(0, 3)
-        .map((v, i) => `${["真实", ...ests.map((e) => e.label)][i] ?? `#${i}`} ${fmt(v)}°`)
+        .map((v, i) => `${[truthSeries.label, ...ests.map((e) => e.label)][i] ?? `#${i}`} ${fmt(v)}°`)
         .join(" · ")
     : "—";
   const errText = err
@@ -3339,21 +3335,22 @@ function selectedQ(): Quat {
   return sourceEstimator()?.q ?? ests[0]?.q ?? world.q;
 }
 
-function eulerText(e: ReturnType<typeof qToEuler>, separator = " "): string {
-  return `φ ${fmtSigned(e.roll * DEG)}°${separator}θ ${fmtSigned(e.pitch * DEG)}°${separator}ψ ${fmtSigned(e.yaw * DEG)}°`;
+function showAngles(id: string, label: string, q: Quat | null): void {
+  const cells = $<HTMLTableRowElement>(id).cells;
+  const e = q && qToEuler(q);
+  [label, ...[e?.roll, e?.pitch, e?.yaw].map(v => v == null ? "—" : fmtSigned(v * DEG))].forEach((text, i) => {
+    if (cells[i].textContent !== text) cells[i].textContent = text;
+  });
 }
 
 function updateReadouts(): void {
-  const q = selectedQ();
-  const eu = qToEuler(q);
-  // 真实模式无真值：这一行显示 Mahony 参照基准（图例里的「真实」即基准）
-  const refQ = referenceQ();
-  const te = qToEuler(refQ);
-  $("readout-quat").textContent = `q = ${quatText(q, 4)}`;
-  $("readout-euler").innerHTML = eulerText(eu, " &nbsp; ");
-  $("readout-true").innerHTML = (!hasGroundTruth()
-    ? `<span style="color:#e6edf3">基准(${currentReferenceKind() === "external" ? "外部" : "Mahony"})</span> `
-    : "真实 ") + eulerText(te);
+  const kind = currentReferenceKind();
+  const ref = kind === "external" ? state.externalTruth : referenceQ();
+  const showingTruth = state.source === "truth";
+  const q = showingTruth ? ref : selectedQ();
+  $("readout-quat").textContent = `模型 q = ${q ? quatText(q, 4) : "—"}`;
+  showAngles("readout-euler", showingTruth ? "Mahony 估计" : "估计", showingTruth ? mahony.q : q);
+  showAngles("readout-true", (kind === "mahony" ? "无真值 · " : "") + truthSeries.label, ref);
   const imu = state.lastImu;
   if (imu) {
     const gyroDps: [number, number, number] = [imu.gyro[0] * DEG, imu.gyro[1] * DEG, imu.gyro[2] * DEG];
@@ -4881,6 +4878,10 @@ function docModuleOf(page: string): string {
 let activeDocPage = "manual";
 /** 每个页面各自的滚动位置；退出/切页时保存，回来时恢复 */
 const docScrollMemory = new Map<string, number>();
+// 窄屏由覆盖层滚动，桌面由正文栏滚动。来源链只在本次阅读中有效，不占用仿真 URL。
+const docScroller = (): HTMLElement => docsNarrow() ? docsOverlay : docPagesEl;
+const docBack = $<HTMLButtonElement>("btn-docs-back");
+const docTrail: Array<{ page: string; link: HTMLAnchorElement; y: number; left: number }> = [];
 
 /** 右侧「本页目录」：由当前页的 section[id]（章）与 h3[id]（推导步骤）生成 */
 function buildChapterToc(page: HTMLElement): void {
@@ -4908,7 +4909,7 @@ function buildChapterToc(page: HTMLElement): void {
 function showDocPage(id: string, restore = false): void {
   const page = docPageEls.find((p) => p.dataset.docPage === id);
   if (!page) return;
-  if (activeDocPage !== id) docScrollMemory.set(activeDocPage, docPagesEl.scrollTop);
+  if (activeDocPage !== id) docScrollMemory.set(activeDocPage, docScroller().scrollTop);
   activeDocPage = id;
   for (const p of docPageEls) p.hidden = p !== page;
   let activeBtn: HTMLButtonElement | null = null;
@@ -4920,13 +4921,18 @@ function showDocPage(id: string, restore = false): void {
   // 窄屏折叠条上要能读出现在在哪一页（只显示"文档模块"等于把导航藏起来又不说在哪）
   if (activeBtn && tocCurrent) tocCurrent.textContent = activeBtn.querySelector(".mod-name")?.textContent?.trim() ?? "";
   buildChapterToc(page);
-  docPagesEl.scrollTop = restore ? (docScrollMemory.get(id) ?? 0) : 0;
+  docScroller().scrollTo({ top: restore ? (docScrollMemory.get(id) ?? 0) : 0, behavior: "instant" });
   void ensureDocDemos().then(() => docDemos?.refresh());
 }
 
 let docsPrevFocus: HTMLElement | null = null;
 function setDocsOpen(open: boolean): void {
   if (open === !docsOverlay.hidden) return;
+  if (!open) {
+    docScrollMemory.set(activeDocPage, docScroller().scrollTop);
+    docTrail.length = 0;
+    docBack.hidden = true;
+  }
   docsOverlay.hidden = !open;
   if (open) {
     docsPrevFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -4935,7 +4941,6 @@ function setDocsOpen(open: boolean): void {
     // 对话框焦点入口：读屏用户不会在打开后仍停在背景按钮上
     $("btn-docs-close").focus();
   } else {
-    docScrollMemory.set(activeDocPage, docPagesEl.scrollTop);
     document.body.style.overflow = "";
     // 焦点回到打开文档前的控件；若是程序化打开（activeElement=body）则回到「文档」按钮
     const back = docsPrevFocus && docsPrevFocus !== document.body ? docsPrevFocus : $<HTMLButtonElement>("btn-docs");
@@ -5108,11 +5113,16 @@ function initFormulaCopy(): void {
 }
 initFormulaCopy();
 
-/** 统一的文档内锚点跳转：目标在当前页 → 平滑滚动；在别的页 → 先切页再滚 */
-function jumpToHash(target: HTMLElement): void {
-  const page = target.closest(".doc-page") as HTMLElement | null;
+/** 搜索和目录沿用原跳转；正文链接还把焦点交给标题或词条，不向 Tab 序列添加停靠点。 */
+function jumpToHash(target: HTMLElement, focus = false): void {
+  const page = target.closest<HTMLElement>(".doc-page");
   if (page && page.dataset.docPage !== activeDocPage) showDocPage(page.dataset.docPage!);
-  target.scrollIntoView({ behavior: "smooth", block: "start" });
+  if (focus) {
+    target = target.querySelector<HTMLElement>(":scope > :is(h1, h2, h3, td)") ?? target;
+    if (target.tabIndex < 0) target.tabIndex = -1;
+    target.focus({ preventScroll: true });
+  }
+  target.scrollIntoView({ behavior: focus ? "instant" : "smooth", block: "start", inline: "nearest" });
 }
 
 /* ==========================================================================
@@ -5199,14 +5209,29 @@ searchInput?.addEventListener("keydown", (e) => {
 searchInput?.addEventListener("focus", () => renderSearchHits(searchInput.value));
 for (const container of [docPagesEl, chapterToc]) {
   container.addEventListener("click", (e) => {
-    const a = (e.target as HTMLElement).closest("a");
-    if (!a || !a.hash) return;
+    const a = (e.target as Element).closest<HTMLAnchorElement>('a[href^="#"]');
+    if (!a) return;
+    e.preventDefault(); // 即使有断链，也不能覆盖仿真 #s=
     const target = document.getElementById(a.hash.slice(1));
-    if (!target) return;
-    e.preventDefault();
-    jumpToHash(target);
+    if (!target || !docPagesEl.contains(target)) return;
+    const fromText = container === docPagesEl;
+    if (fromText) {
+      docTrail.push({ page: activeDocPage, link: a, y: a.getBoundingClientRect().top, left: a.closest(".tscroll")?.scrollLeft ?? 0 });
+      docBack.hidden = false;
+    }
+    jumpToHash(target, fromText);
   });
 }
+docBack.addEventListener("click", () => {
+  const source = docTrail.pop();
+  if (!source) return;
+  docBack.hidden = !docTrail.length;
+  if (source.page !== activeDocPage) showDocPage(source.page);
+  const table = source.link.closest(".tscroll");
+  if (table) table.scrollLeft = source.left;
+  docScroller().scrollBy({ top: source.link.getBoundingClientRect().top - source.y, behavior: "instant" });
+  source.link.focus({ preventScroll: true });
+});
 
 /**
  * 应用界面里的「见文档·…」链接（a[data-doc-open]）。
@@ -6759,6 +6784,7 @@ function startReplay(res: ReplayParseResult, fileName: string): void {
       : "日志按原始读数处理：勾选则用当前磁/加计校准后的输入解算（与录制时一致）";
   }
   state.externalTruth = null;
+  $<HTMLDetailsElement>("replay-options").open = true;
   document.getElementById("btn-replay-stop")?.classList.remove("hidden");
   applyDataSourceSemantics();
   resetSim(); // 与串口连接同一套流程：数据源切换 = 新的一轮实验，曲线/统计/时钟全部归零
@@ -6796,6 +6822,7 @@ function stopReplayData(): void {
   replayState.acc = 0;
   replayState.announcedEnd = false;
   replayPlayer.clear();
+  $<HTMLDetailsElement>("replay-options").open = false;
   document.getElementById("btn-replay-stop")?.classList.add("hidden");
   updateReplayStatus();
 }
