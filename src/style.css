@@ -269,6 +269,12 @@ button:disabled { cursor: default; }
   width: fit-content;
   line-height: 1.55;
 }
+.angle-pair { border-spacing: 0; }
+.angle-pair :is(th, td) { padding: 2px 5px; text-align: right; }
+.angle-pair th { font-family: var(--font-sans); font-weight: 500; }
+.angle-pair th:first-child { text-align: left; }
+.angle-pair thead { color: var(--text-dim); }
+.angle-pair td { min-width: 6.5ch; }
 .ov-chip.mono { font-size: 0.8214rem; letter-spacing: 0.01em; }
 
 /* 浏览器能力提示（Firefox / Safari 没有 Web Serial 与 Web Bluetooth）。
@@ -464,6 +470,12 @@ button:disabled { cursor: default; }
   gap: 6px;
 }
 #sec-algo .row.check-row:has(#btn-ab-snapshot) .btn { align-self: flex-start; }
+
+#body-scenario summary { width: fit-content; padding: 3px 0; cursor: pointer; color: var(--text-dim); }
+#replay-options[open] .row { margin: 6px 0; }
+#replay-status { max-width: 100%; overflow-wrap: anywhere; }
+.model-choice { flex: none; flex-wrap: wrap; gap: 5px 8px; margin: 0; }
+.model-choice a { color: var(--accent); font-size: 0.8214rem; }
 
 .sub-group {
   border-top: 1px dashed var(--border-strong);
@@ -1764,6 +1776,22 @@ body[data-imu-mode="real"] .section-experiments .hint::before {
 /* ==========================================================================
    响应式
    ========================================================================== */
+@media (min-width: 961px) {
+  body[data-view="attitude"] #app-main {
+    grid-template-columns: minmax(0, 1fr) clamp(352px, 29vw, 448px);
+    grid-template-rows: minmax(0, 1fr) auto;
+  }
+  body[data-view="attitude"] #panel { grid-area: 1 / 2 / 3 / 3; }
+  body[data-view="attitude"] #scenario-select { min-width: 0; max-width: none; }
+  body[data-view="attitude"] #readout-overlay { max-width: min(45%, 26rem); gap: 3px; }
+  body[data-view="attitude"] #viewport-hint { left: auto; right: 14px; max-width: 42%; }
+  body[data-view="attitude"] #charts {
+    grid-area: 2 / 1; max-height: 43vh; overflow: auto; align-content: start;
+  }
+  body[data-view="attitude"] .chart-block:not(.collapsed) { flex-basis: 40%; }
+  body[data-view="attitude"] .chart-header { flex-wrap: wrap; }
+  body[data-view="attitude"] .chart-legend { gap: 2px 8px; margin-left: 0; justify-content: flex-start; }
+}
 @media (min-width: 1800px) {
   /* 大屏给控制台更多宽度：滑块 + 数值 + 步距三列不再挤在一起 */
   #app-main { grid-template-columns: minmax(0, 1fr) 400px; }
@@ -1925,6 +1953,15 @@ body[data-imu-mode="real"] .section-experiments .hint::before {
 }
 .doc-page[hidden] { display: none; }
 .doc-page section { scroll-margin-top: 20px; }
+@media screen {
+  .doc-page > p, .doc-page section > :is(p, ul, ol) { max-inline-size: 42em; }
+  .doc-page :is(h1, h2, h3, td)[tabindex="-1"] { scroll-margin-block-start: 1rem; }
+  .doc-page pre.formula { white-space: pre; padding-block-start: 2em; }
+  #btn-docs-back { position: sticky; top: 0; z-index: 1; color: var(--accent); }
+}
+@media screen and (max-width: 860px) {
+  #btn-docs-back { position: fixed; inset: auto 12px 12px auto; box-shadow: var(--shadow-float); }
+}
 .doc-page h1 {
   margin: 0 0 10px;
   font-size: 1.9286rem;

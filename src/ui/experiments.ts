@@ -156,7 +156,7 @@ export const EXPERIMENTS: ExperimentSpec[] = [
     tag: "四元数",
     observe:
       "q 是 S³ 上的点，从这里投影到日常三维空间：青色 q 在球内、品红 −q 在球外。" +
-      "连按两次「左乘 i」：3D 姿态复原、q 却走到 −q（内外互换）——转 360° ≠ 没转；" +
+      "先重置，连按两次「右乘 i」：3D 姿态复原，q 却由 +1 变为 −1；" +
       "按四次（720°）才真正回到 +1。",
     selects: { "quat-mode": "proj" },
     view: "quat",

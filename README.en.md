@@ -17,8 +17,7 @@ Change any IMU parameter (bias, noise, cross-axis, latency, sample rate, magneti
 between the five curves changes immediately — "why does this one diverge while that one converges" needs no guessing,
 because the device ships with reproducible scenarios, exportable data, and frame-level comparison tools.
 
-The in-app textbook runs from "why exactly four numbers" to "why the position error grows as t³", and every claim in it
-can be reproduced on the spot.
+The in-app manual is designed for self-study on a desktop. Follow the attitude readout to the quaternion matrix derivation, look up a term and return to the same passage, or use a single roll observation to compare the Kalman gain with the resulting attitude correction.
 
 ## Features
 

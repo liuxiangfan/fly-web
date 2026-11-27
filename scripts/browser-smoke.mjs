@@ -5280,7 +5280,7 @@ try {
   //    而面板里的链接不在那个容器里，事件不会冒泡过去，点了完全没反应（改字体时实测抓到）。
   const docJump = await page.evaluate(async () => {
     document.getElementById("sec-imu").classList.remove("collapsed");
-    const a = document.querySelector("a[data-doc-open]");
+    const a = document.querySelector('a[data-doc-open="magcal"]');
     if (!a) return { found: false };
     const wanted = a.dataset.docOpen;
     a.click();
